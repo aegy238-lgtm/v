@@ -1,0 +1,6 @@
+{
+  "name": "AuraVoice VIP - Social Audio Room & Agency Platform",
+  "description": "منصة الدردشة الصوتية الاجتماعية المتكاملة، الغرف الصوتية، نظام VIP، المحفظة والحقيبة، الهدايا التفاعلية، نظام الوكالات وشحن الرصيد، ولوحة تحكم الإدارة الشاملة.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
