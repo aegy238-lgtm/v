@@ -1,0 +1,358 @@
+{
+  "entities": {
+    "AuraVoiceUser": {
+      "title": "AuraVoiceUser",
+      "description": "AuraVoice VIP user profile, wallet balances, VIP tier, and equipped cosmetics",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userCode": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "username": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "avatar": { "type": "string", "maxLength": 1024 },
+        "coverImage": { "type": "string", "maxLength": 1024 },
+        "bio": { "type": "string", "maxLength": 500 },
+        "level": { "type": "number" },
+        "vipLevel": { "type": "number" },
+        "coins": { "type": "number" },
+        "diamonds": { "type": "number" },
+        "country": { "type": "string", "maxLength": 64 },
+        "countryFlag": { "type": "string", "maxLength": 16 },
+        "age": { "type": "number" },
+        "gender": { "type": "string", "enum": ["male", "female"] },
+        "followersCount": { "type": "number" },
+        "followingCount": { "type": "number" },
+        "friendsCount": { "type": "number" },
+        "activeFrameId": { "type": "string", "maxLength": 128 },
+        "activeEntranceId": { "type": "string", "maxLength": 128 },
+        "activeBadgeId": { "type": "string", "maxLength": 128 },
+        "activeBubbleId": { "type": "string", "maxLength": 128 },
+        "isMuted": { "type": "boolean" },
+        "isBanned": { "type": "boolean" },
+        "online": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "ownerUid": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "userCode", "username", "displayName", "level", "vipLevel", "coins", "diamonds", "isMuted", "isBanned", "online", "createdAt"]
+    },
+    "VoiceRoom": {
+      "title": "VoiceRoom",
+      "description": "AuraVoice VIP live voice chat room with 8 mic seats",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "roomNo": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "coverImage": { "type": "string", "maxLength": 1024 },
+        "category": { "type": "string", "enum": ["all", "chat", "music", "games", "vip", "official", "agency", "celebrity"] },
+        "type": { "type": "string", "enum": ["public", "password", "vip", "official"] },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerName": { "type": "string", "maxLength": 80 },
+        "ownerAvatar": { "type": "string", "maxLength": 1024 },
+        "seatCount": { "type": "number" },
+        "seats": { "type": "array" },
+        "moderators": { "type": "array" },
+        "bannedUserIds": { "type": "array" },
+        "onlineViewersCount": { "type": "number" },
+        "totalDiamondsEarned": { "type": "number" },
+        "tags": { "type": "array" }
+      },
+      "required": ["id", "roomNo", "title", "category", "type", "ownerId", "seatCount", "seats", "onlineViewersCount", "totalDiamondsEarned"]
+    },
+    "RoomChatMessage": {
+      "title": "RoomChatMessage",
+      "description": "Chat or gift message inside a voice room",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "roomId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "senderAvatar": { "type": "string", "maxLength": 1024 },
+        "vipLevel": { "type": "number" },
+        "level": { "type": "number" },
+        "text": { "type": "string", "maxLength": 500 },
+        "isSystem": { "type": "boolean" },
+        "timestamp": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "roomId", "senderId", "senderName", "vipLevel", "level", "timestamp"]
+    },
+    "GiftItem": {
+      "title": "GiftItem",
+      "description": "Virtual gift definition including lucky gifts and MP4 animations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 80 },
+        "nameAr": { "type": "string", "maxLength": 80 },
+        "category": { "type": "string", "enum": ["classic", "luxury", "romantic", "magic", "vip", "lucky", "cp", "celebrity"] },
+        "coinPrice": { "type": "number" },
+        "diamondReward": { "type": "number" },
+        "icon": { "type": "string", "maxLength": 32 },
+        "imageUrl": { "type": "string", "maxLength": 2048 },
+        "videoUrl": { "type": "string", "maxLength": 2048 },
+        "soundUrl": { "type": "string", "maxLength": 2048 },
+        "effectDurationSec": { "type": "number" },
+        "accentColor": { "type": "string", "maxLength": 32 },
+        "animationType": { "type": "string", "enum": ["particle", "svga", "luxury_banner", "explosion", "lollipop_matrix"] },
+        "soundEffect": { "type": "string", "enum": ["chime", "fanfare", "roar", "magic", "laser", "applause", "slot", "dice"] },
+        "isLucky": { "type": "boolean" },
+        "descriptionAr": { "type": "string", "maxLength": 300 }
+      },
+      "required": ["id", "name", "nameAr", "category", "coinPrice", "diamondReward", "icon", "accentColor", "animationType", "soundEffect"]
+    },
+    "StoreItem": {
+      "title": "StoreItem",
+      "description": "Cosmetic store item (avatar frame, entrance effect, badge, bubble)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["frame", "entrance", "badge", "bubble"] },
+        "nameAr": { "type": "string", "maxLength": 80 },
+        "nameEn": { "type": "string", "maxLength": 80 },
+        "priceCoins": { "type": "number" },
+        "durationDays": { "type": "number" },
+        "previewUrl": { "type": "string", "maxLength": 2048 },
+        "videoUrl": { "type": "string", "maxLength": 2048 },
+        "effectDurationSec": { "type": "number" },
+        "previewGradient": { "type": "string", "maxLength": 200 },
+        "icon": { "type": "string", "maxLength": 32 },
+        "descriptionAr": { "type": "string", "maxLength": 300 }
+      },
+      "required": ["id", "type", "nameAr", "nameEn", "priceCoins", "durationDays", "icon"]
+    },
+    "Agency": {
+      "title": "Agency",
+      "description": "Host agency profile and revenue metrics",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "agencyNo": { "type": "string", "maxLength": 32 },
+        "name": { "type": "string", "maxLength": 100 },
+        "logo": { "type": "string", "maxLength": 1024 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "ownerName": { "type": "string", "maxLength": 80 },
+        "hostCount": { "type": "number" },
+        "activeHostsCount": { "type": "number" },
+        "totalDiamondsEarned": { "type": "number" },
+        "netProfitsUSD": { "type": "number" },
+        "commissionRate": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "pending", "suspended"] },
+        "targetDiamondsMonthly": { "type": "number" },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "agencyNo", "name", "ownerId", "status", "commissionRate", "createdAt"]
+    },
+    "RechargeAgent": {
+      "title": "RechargeAgent",
+      "description": "Authorized coin recharge agent",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "agentCode": { "type": "string", "maxLength": 32 },
+        "name": { "type": "string", "maxLength": 80 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "avatar": { "type": "string", "maxLength": 1024 },
+        "balanceCoins": { "type": "number" },
+        "totalRechargedCoins": { "type": "number" },
+        "totalOperations": { "type": "number" },
+        "commissionEarnedCoins": { "type": "number" },
+        "commissionRate": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "paused"] }
+      },
+      "required": ["id", "agentCode", "name", "balanceCoins", "commissionRate", "status"]
+    },
+    "StaffMember": {
+      "title": "StaffMember",
+      "description": "Platform staff member and administrative permissions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 80 },
+        "avatar": { "type": "string", "maxLength": 1024 },
+        "role": { "type": "string", "maxLength": 64 },
+        "department": { "type": "string", "maxLength": 64 },
+        "permissions": { "type": "array" },
+        "assignedAt": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["active", "inactive"] }
+      },
+      "required": ["id", "userId", "name", "role", "status"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Financial ledger record for coins and diamonds",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128 },
+        "userName": { "type": "string", "maxLength": 80 },
+        "type": {
+          "type": "string",
+          "enum": [
+            "recharge",
+            "gift_sent",
+            "gift_received",
+            "lucky_win",
+            "vip_purchase",
+            "item_purchase",
+            "exchange_diamonds",
+            "withdrawal",
+            "agent_recharge_payout",
+            "agency_commission",
+            "admin_adjustment"
+          ]
+        },
+        "coinsDelta": { "type": "number" },
+        "diamondsDelta": { "type": "number" },
+        "details": { "type": "string", "maxLength": 500 },
+        "timestamp": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["completed", "pending", "rejected"] }
+      },
+      "required": ["id", "userId", "userName", "type", "coinsDelta", "diamondsDelta", "details", "timestamp", "status"]
+    },
+    "AuraConfig": {
+      "title": "AuraConfig",
+      "description": "Platform configuration document (lucky gifts, jackpot banner, bag gifts)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "winRatePercent": { "type": "number" },
+        "lowMultiplierWeight": { "type": "number" },
+        "midMultiplierWeight": { "type": "number" },
+        "highMultiplierWeight": { "type": "number" },
+        "megaComboThreshold": { "type": "number" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      }
+    },
+    "PlatformUser": {
+      "title": "PlatformUser",
+      "description": "SVGA studio & platform user account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 120 },
+        "email": { "type": "string", "format": "email", "maxLength": 180 },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "isAdmin": { "type": "boolean" },
+        "isSuperAdmin": { "type": "boolean" },
+        "isPro": { "type": "boolean" },
+        "isBanned": { "type": "boolean" },
+        "networkBanned": { "type": "boolean" }
+      },
+      "required": ["id", "name", "email"]
+    },
+    "PlatformSetting": {
+      "title": "PlatformSetting",
+      "description": "SVGA studio platform settings and branding",
+      "type": "object",
+      "properties": {
+        "siteName": { "type": "string", "maxLength": 120 },
+        "siteLogoUrl": { "type": "string", "maxLength": 200000 },
+        "whatsappNumber": { "type": "string", "maxLength": 32 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      }
+    },
+    "BroadcastNotification": {
+      "title": "BroadcastNotification",
+      "description": "Platform-wide broadcast notification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 200 },
+        "message": { "type": "string", "maxLength": 2000 }
+      },
+      "required": ["id", "title"]
+    },
+    "ActivityLogEntry": {
+      "title": "ActivityLogEntry",
+      "description": "SVGA studio upload and export log",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "fileName": { "type": "string", "maxLength": 256 },
+        "userId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "fileName"]
+    },
+    "GiftCertificate": {
+      "title": "GiftCertificate",
+      "description": "Issued gift design authentication certificate",
+      "type": "object",
+      "properties": {
+        "certificateId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "giftName": { "type": "string", "maxLength": 200 },
+        "designerName": { "type": "string", "maxLength": 120 },
+        "checksumCode": { "type": "string", "maxLength": 16 }
+      },
+      "required": ["certificateId", "giftName", "designerName", "checksumCode"]
+    }
+  },
+  "firestore": {
+    "/auravoice_users/{userId}": {
+      "schema": "AuraVoiceUser",
+      "description": "AuraVoice VIP user accounts and wallets"
+    },
+    "/auravoice_rooms/{roomId}": {
+      "schema": "VoiceRoom",
+      "description": "Active voice chat rooms and seat allocations"
+    },
+    "/auravoice_rooms/{roomId}/messages/{messageId}": {
+      "schema": "RoomChatMessage",
+      "description": "In-room chat and gift messages"
+    },
+    "/auravoice_gifts/{giftId}": {
+      "schema": "GiftItem",
+      "description": "Gift catalog including lucky and MP4 gifts"
+    },
+    "/auravoice_store_items/{itemId}": {
+      "schema": "StoreItem",
+      "description": "Cosmetic store frames, entrances, and badges"
+    },
+    "/auravoice_agencies/{agencyId}": {
+      "schema": "Agency",
+      "description": "Registered host agencies"
+    },
+    "/auravoice_agents/{agentId}": {
+      "schema": "RechargeAgent",
+      "description": "Authorized coin recharge agents"
+    },
+    "/auravoice_staff/{staffId}": {
+      "schema": "StaffMember",
+      "description": "Platform staff members"
+    },
+    "/auravoice_transactions/{txId}": {
+      "schema": "Transaction",
+      "description": "Coins and diamonds financial ledger"
+    },
+    "/auravoice_config/{configId}": {
+      "schema": "AuraConfig",
+      "description": "Global AuraVoice configuration (lucky gift rates, jackpot banner, bag gifts)"
+    },
+    "/users/{userId}": {
+      "schema": "PlatformUser",
+      "description": "Platform user accounts"
+    },
+    "/platform_settings/{settingId}": {
+      "schema": "PlatformSetting",
+      "description": "Platform branding and settings"
+    },
+    "/broadcast_notifications/{notifId}": {
+      "schema": "BroadcastNotification",
+      "description": "Broadcast notifications"
+    },
+    "/activity_logs/{logId}": {
+      "schema": "ActivityLogEntry",
+      "description": "SVGA studio activity logs"
+    },
+    "/gift_certificates/{certId}": {
+      "schema": "GiftCertificate",
+      "description": "Gift design authentication certificates"
+    },
+    "/test/{docId}": {
+      "schema": "AuraConfig",
+      "description": "Connection health check document"
+    }
+  }
+}

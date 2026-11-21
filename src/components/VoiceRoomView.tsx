@@ -30,25 +30,35 @@ import {
 } from 'lucide-react';
 import { RoomSeat, GiftItem } from '../types';
 import { InteractiveGamesHub } from './InteractiveGamesHub';
+import { SmartMediaView } from './SmartMediaView';
+import {
+  getMediaFormatLabel,
+  resolveEntranceStageMedia,
+  resolveGiftStageMedia,
+} from '../utils/mediaFormats';
+import { sound } from '../utils/audio';
+import midnightLoungeBg from '../assets/images/room_bg_midnight_lounge_1795294231147.jpg';
+import royalMajlisBg from '../assets/images/room_bg_royal_majlis_1795294234181.jpg';
+import starlightSkyBg from '../assets/images/room_bg_starlight_sky_1795294232054.jpg';
 
 // Bespoke generated room wallpapers (Zero external URL dependencies)
 const ROOM_THEMES = [
   {
     id: 'midnight',
     name: 'الصالة الليلية',
-    image: '/src/assets/images/room_bg_midnight_lounge_1795294231147.jpg',
+    image: midnightLoungeBg,
     fallbackGradient: 'from-[#0b1021] via-[#10182f] to-[#080b14]',
   },
   {
     id: 'majlis',
     name: 'المجلس الملكي',
-    image: '/src/assets/images/room_bg_royal_majlis_1795294234181.jpg',
+    image: royalMajlisBg,
     fallbackGradient: 'from-[#17120c] via-[#1c150e] to-[#0c0907]',
   },
   {
     id: 'starlight',
     name: 'سماء الليل',
-    image: '/src/assets/images/room_bg_starlight_sky_1795294232054.jpg',
+    image: starlightSkyBg,
     fallbackGradient: 'from-[#0a1026] via-[#141c3a] to-[#080c18]',
   },
 ] as const;
@@ -61,6 +71,7 @@ interface GiftComboTrackItem {
   targetNames: string;
   giftName: string;
   giftIcon: string;
+  giftImageUrl?: string;
   countPerHit: number;
   comboHits: number;
   isLucky?: boolean;
@@ -73,6 +84,7 @@ interface SubtleGiftGlide {
   id: string;
   seatIndex: number;
   giftIcon: string;
+  giftImageUrl?: string;
   targetX: number;
   targetY: number;
   phase: 'start' | 'flying';
@@ -84,6 +96,7 @@ interface LuxuryTopNotice {
   targetNames: string;
   giftName: string;
   giftIcon: string;
+  giftImageUrl?: string;
   count: number;
 }
 
@@ -93,8 +106,20 @@ interface ComboState {
   count: number;
   targetSeats: number[];
   comboHits: number;
+  cumulativeCoins: number;
   timeLeftMs: number; // 2000ms down to 0
   fromBag?: boolean;
+}
+
+interface ActiveStageGift {
+  id: string;
+  mediaUrl: string;
+  fallbackUrl?: string;
+  preferVideo: boolean;
+  durationMs: number;
+  comboPulseKey: number;
+  giftName: string;
+  senderName: string;
 }
 
 interface ActiveLuckyBagState {
@@ -215,9 +240,17 @@ export const VoiceRoomView: React.FC = () => {
     sendGift,
     rechargeCoins,
     gifts,
+    storeItems,
     users,
     setActiveModal,
     setViewingProfileUser,
+    bagGifts,
+    addBagGifts,
+    consumeBagGift,
+    evaluateLuckyGiftWin,
+    flyingGift,
+    entranceBanner,
+    clearEntranceBanner,
   } = useApp();
 
   // Bottom Drawers & Sheets
@@ -327,8 +360,10 @@ export const VoiceRoomView: React.FC = () => {
     giftsWon: { nameAr: string; icon: string; count: number }[];
   } | null>(null);
 
-  // User's Bag Gifts inside Gift Drawer ("الحقيبة")
-  const [bagGifts, setBagGifts] = useState<Record<string, number>>({});
+  // Active Full-Room Gift Overlay (MP4, WebM, GIF, WebP, PNG)
+  const [activeStageGift, setActiveStageGift] = useState<ActiveStageGift | null>(null);
+  const lastLocalGiftThrowTsRef = useRef<number>(0);
+  const lastHandledFlyingIdRef = useRef<string | null>(null);
 
   // Room Event Logs
   const [roomEventLogs, setRoomEventLogs] = useState<RoomEventLog[]>([]);
@@ -370,6 +405,28 @@ export const VoiceRoomView: React.FC = () => {
     }, 300);
     return () => clearInterval(timer);
   }, [giftComboTrack.length]);
+
+  // Sync external gift throws (e.g. GiftModal / BackpackModal) to full-room stage overlay
+  useEffect(() => {
+    if (!flyingGift || flyingGift.id === lastHandledFlyingIdRef.current) return;
+    lastHandledFlyingIdRef.current = flyingGift.id;
+    // Skip if executeGiftThrow just triggered this exact gift locally (< 300ms ago)
+    if (Date.now() - lastLocalGiftThrowTsRef.current < 300) return;
+
+    const stageMedia = resolveGiftStageMedia(flyingGift.gift);
+    if (!stageMedia.mediaUrl) return;
+    const now = Date.now();
+    setActiveStageGift({
+      id: `ext_${now}_${flyingGift.gift.id}`,
+      mediaUrl: stageMedia.mediaUrl,
+      fallbackUrl: stageMedia.fallbackUrl,
+      preferVideo: stageMedia.preferVideo,
+      durationMs: stageMedia.durationMs,
+      comboPulseKey: now,
+      giftName: flyingGift.gift.nameAr,
+      senderName: flyingGift.senderName,
+    });
+  }, [flyingGift]);
 
   // 10-Second Lucky Bag Countdown Timer
   useEffect(() => {
@@ -598,13 +655,7 @@ export const VoiceRoomView: React.FC = () => {
     setActiveLuckyBag(null);
     rechargeCoins(wonCoins, `استلام ${activeLuckyBag.tierName}`);
 
-    setBagGifts((prev) => {
-      const next = { ...prev };
-      wonGifts.forEach((g) => {
-        next[g.giftId] = (next[g.giftId] || 0) + g.count;
-      });
-      return next;
-    });
+    addBagGifts(wonGifts.map((g) => ({ giftId: g.giftId, count: g.count })));
 
     setLuckyBagRewardToast({
       coinsWon: wonCoins,
@@ -638,20 +689,16 @@ export const VoiceRoomView: React.FC = () => {
     rechargeCoins(tierToComplete.rewardCoins, `مكافأة ${tierToComplete.nameAr}`);
 
     const wonGiftsSummary: { nameAr: string; icon: string; count: number }[] = [];
-    setBagGifts((prevBag) => {
-      const nextBag = { ...prevBag };
-      tierToComplete.rewardBagGifts.forEach((rg) => {
-        nextBag[rg.giftId] = (nextBag[rg.giftId] || 0) + rg.count;
-        const giftMeta = gifts.find((g) => g.id === rg.giftId);
-        if (giftMeta) {
-          wonGiftsSummary.push({
-            nameAr: giftMeta.nameAr,
-            icon: giftMeta.icon,
-            count: rg.count,
-          });
-        }
-      });
-      return nextBag;
+    addBagGifts(tierToComplete.rewardBagGifts);
+    tierToComplete.rewardBagGifts.forEach((rg) => {
+      const giftMeta = gifts.find((g) => g.id === rg.giftId);
+      if (giftMeta) {
+        wonGiftsSummary.push({
+          nameAr: giftMeta.nameAr,
+          icon: giftMeta.icon,
+          count: rg.count,
+        });
+      }
     });
 
     setRocketRewardPopup({
@@ -723,6 +770,7 @@ export const VoiceRoomView: React.FC = () => {
         id: `${batchId}_${seatIdx}`,
         seatIndex: seatIdx,
         giftIcon: gift.icon,
+        giftImageUrl: gift.imageUrl,
         targetX,
         targetY,
         phase: 'start',
@@ -764,33 +812,31 @@ export const VoiceRoomView: React.FC = () => {
   };
 
   // =========================================================================
-  // AUTHENTIC GIFT THROW HANDLER (Side Stacked Combo Track + Subtle Glide)
+  // AUTHENTIC GIFT THROW HANDLER (Side Stacked Combo Track + Lucky Engine + MP4)
   // =========================================================================
   const executeGiftThrow = (
     gift: GiftItem,
     count: number,
     targetSeats: number[],
     comboHits: number,
-    fromBag = false
-  ) => {
+    fromBag = false,
+    comboCumulativeCoins = 0
+  ): boolean => {
     const finalTargets = targetSeats.filter((i) => i >= 0 && i < 8 && Boolean(seats8[i]?.userId));
-    if (finalTargets.length === 0) return;
+    if (finalTargets.length === 0) return false;
     const targetLabel = getTargetNamesLabel(finalTargets);
     const totalNeededCount = count * finalTargets.length;
+    lastLocalGiftThrowTsRef.current = Date.now();
 
     if (fromBag) {
       const ownedCount = bagGifts[gift.id] || 0;
-      if (ownedCount <= 0) return;
+      if (ownedCount <= 0) return false;
       const deductCount = Math.min(ownedCount, totalNeededCount);
-      setBagGifts((prev) => {
-        const next = { ...prev };
-        if (next[gift.id] <= deductCount) delete next[gift.id];
-        else next[gift.id] -= deductCount;
-        return next;
-      });
+      const consumed = consumeBagGift(gift.id, deductCount);
+      if (!consumed) return false;
     } else {
       const sentOk = sendGift(gift.id, count, 'seat', finalTargets[0], finalTargets);
-      if (!sentOk) return;
+      if (!sentOk) return false;
     }
 
     // Clear any manual heart reset on targeted seats
@@ -799,6 +845,9 @@ export const VoiceRoomView: React.FC = () => {
       finalTargets.forEach((idx) => delete next[idx]);
       return next;
     });
+
+    // Play gift custom audio URL (if attached) or fallback synthesized gift sound
+    sound.playGiftHitAudio(gift.soundEffect, gift.soundUrl, isRoomSoundMuted);
 
     // Charge room rocket ONLY from coins spent on gifts
     const totalGiftValue = gift.coinPrice * count * finalTargets.length;
@@ -809,22 +858,51 @@ export const VoiceRoomView: React.FC = () => {
     // 1. Subtle single gift glide to target mic(s)
     triggerSubtleGiftGlide(gift, finalTargets, count);
 
+    // 1b. Play full-room stage gift overlay seamlessly (MP4, WebM, GIF, WebP, PNG — any format URL)
+    const now = Date.now();
+    const stageMedia = resolveGiftStageMedia(gift);
+    if (stageMedia.mediaUrl) {
+      const mediaUrl = stageMedia.mediaUrl;
+      setActiveStageGift((prev) => {
+        if (prev && prev.mediaUrl === mediaUrl) {
+          return { ...prev, comboPulseKey: now };
+        }
+        return {
+          id: `stage_${now}_${gift.id}`,
+          mediaUrl,
+          fallbackUrl: stageMedia.fallbackUrl,
+          preferVideo: stageMedia.preferVideo,
+          durationMs: stageMedia.durationMs,
+          comboPulseKey: now,
+          giftName: gift.nameAr,
+          senderName: currentUser.displayName,
+        };
+      });
+    }
+
+    // 2. Evaluate Lucky Gift Win via Dashboard-controlled probability & 1M+ global jackpot ticker
     const isLuckyGift =
       gift.isLucky || gift.category === 'lucky' || gift.animationType === 'lollipop_matrix';
     let luckyMult: number | undefined;
     let luckyWinCoins: number | undefined;
 
     if (isLuckyGift) {
-      const multPool = comboHits >= 5 ? [10, 25, 66, 188] : [5, 10, 25, 66];
-      luckyMult = multPool[Math.floor(Math.random() * multPool.length)];
-      const rawWin = gift.coinPrice * luckyMult * count;
-      luckyWinCoins = rawWin > 500000 ? 188000 : rawWin;
-      rechargeCoins(luckyWinCoins, 'ربح هدية الحظ');
+      const effectiveCumulative = comboCumulativeCoins > 0 ? comboCumulativeCoins : totalGiftValue;
+      const res = evaluateLuckyGiftWin(
+        gift,
+        count * finalTargets.length,
+        comboHits,
+        effectiveCumulative,
+        activeRoom.title
+      );
+      if (res.won) {
+        luckyMult = res.multiplier;
+        luckyWinCoins = res.winCoins;
+      }
     }
 
-    // 2. Push/Merge into Side Stacked Gift Combo Track (Max 2 clean banners, just like Yalla/TikTok Live)
+    // 3. Push/Merge into Side Stacked Gift Combo Track (Max 2 clean banners)
     const trackKey = `${currentUser.id}_${gift.id}_${targetLabel}`;
-    const now = Date.now();
     setGiftComboTrack((prev) => {
       const existingIdx = prev.findIndex((item) => item.key === trackKey);
       const updatedItem: GiftComboTrackItem = {
@@ -835,6 +913,7 @@ export const VoiceRoomView: React.FC = () => {
         targetNames: targetLabel,
         giftName: gift.nameAr,
         giftIcon: gift.icon,
+        giftImageUrl: gift.imageUrl,
         countPerHit: count,
         comboHits: existingIdx >= 0 ? prev[existingIdx].comboHits + 1 : comboHits,
         isLucky: isLuckyGift,
@@ -850,7 +929,7 @@ export const VoiceRoomView: React.FC = () => {
       return [...prev.slice(-1), updatedItem];
     });
 
-    // 3. Only ultra-luxury gifts (>= 50,000 coins) get a sleek top marquee strip
+    // 4. Only ultra-luxury gifts (>= 50,000 coins) get a sleek top marquee strip
     if (gift.coinPrice >= 50000) {
       setLuxuryNotice({
         id: `lux_${now}`,
@@ -858,19 +937,20 @@ export const VoiceRoomView: React.FC = () => {
         targetNames: targetLabel,
         giftName: gift.nameAr,
         giftIcon: gift.icon,
+        giftImageUrl: gift.imageUrl,
         count,
       });
       if (luxuryTimeoutRef.current) window.clearTimeout(luxuryTimeoutRef.current);
       luxuryTimeoutRef.current = window.setTimeout(() => setLuxuryNotice(null), 2800);
     }
 
-    // 4. Clean Room Chat Log entry
+    // 5. Clean Room Chat Log entry
     const nowTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
     setRoomEventLogs((prev) => [
       ...prev.slice(-30),
       {
         id: `log_gift_${now}_${Math.random()}`,
-        type: isLuckyGift ? 'lucky_win' : 'gift_throw',
+        type: isLuckyGift && luckyWinCoins ? 'lucky_win' : 'gift_throw',
         senderName: currentUser.displayName,
         vipLevel: currentUser.vipLevel,
         level: currentUser.level,
@@ -884,6 +964,8 @@ export const VoiceRoomView: React.FC = () => {
         time: nowTime,
       },
     ]);
+
+    return true;
   };
 
   const handleSendSelectedGift = () => {
@@ -894,8 +976,10 @@ export const VoiceRoomView: React.FC = () => {
     const isFromBag = giftDrawerTab === 'bag' && (bagGifts[giftObj.id] || 0) > 0;
     if (giftDrawerTab === 'bag' && !isFromBag) return;
 
+    const hitCoins = giftObj.coinPrice * giftCount * targets.length;
     setActiveBottomDrawer('none');
-    executeGiftThrow(giftObj, giftCount, targets, 1, isFromBag);
+    const ok = executeGiftThrow(giftObj, giftCount, targets, 1, isFromBag, hitCoins);
+    if (!ok) return;
 
     setComboState({
       active: true,
@@ -903,6 +987,7 @@ export const VoiceRoomView: React.FC = () => {
       count: giftCount,
       targetSeats: targets,
       comboHits: 1,
+      cumulativeCoins: hitCoins,
       timeLeftMs: 2000,
       fromBag: isFromBag,
     });
@@ -911,20 +996,29 @@ export const VoiceRoomView: React.FC = () => {
   const handleComboClick = () => {
     if (!comboState) return;
     const nextCombo = comboState.comboHits + 1;
+    const hitCoins = comboState.gift.coinPrice * comboState.count * comboState.targetSeats.length;
+    const nextCumulative = comboState.cumulativeCoins + hitCoins;
 
-    setComboState({
-      ...comboState,
-      comboHits: nextCombo,
-      timeLeftMs: 2000,
-    });
-
-    executeGiftThrow(
+    const ok = executeGiftThrow(
       comboState.gift,
       comboState.count,
       comboState.targetSeats,
       nextCombo,
-      comboState.fromBag
+      comboState.fromBag,
+      nextCumulative
     );
+
+    if (!ok) {
+      setComboState(null);
+      return;
+    }
+
+    setComboState({
+      ...comboState,
+      comboHits: nextCombo,
+      cumulativeCoins: nextCumulative,
+      timeLeftMs: 2000,
+    });
   };
 
   const filteredDrawerGifts = gifts.filter((g) => {
@@ -1039,6 +1133,96 @@ export const VoiceRoomView: React.FC = () => {
         <div className="absolute inset-0 bg-gradient-to-b from-[#070a13]/75 via-[#090d18]/45 to-[#060810]/92 pointer-events-none" />
 
         {/* ================================================================= */}
+        {/* FULL-ROOM STAGE GIFT OVERLAY (MP4 / WebM / GIF / WebP / PNG)       */}
+        {/* ================================================================= */}
+        {activeStageGift && (
+          <SmartMediaView
+            key={activeStageGift.id}
+            mode="stage"
+            url={activeStageGift.mediaUrl}
+            fallbackUrl={activeStageGift.fallbackUrl}
+            preferVideo={activeStageGift.preferVideo}
+            alt={activeStageGift.giftName}
+            muted={isRoomSoundMuted}
+            durationMs={activeStageGift.durationMs}
+            resetKey={activeStageGift.comboPulseKey}
+            onEnded={() => setActiveStageGift(null)}
+          />
+        )}
+
+        {/* ================================================================= */}
+        {/* FULL-ROOM ENTRANCE EFFECT OVERLAY (MP4 / WebM / GIF / WebP / PNG) */}
+        {/* ================================================================= */}
+        {entranceBanner && (() => {
+          const fallbackResolved = resolveEntranceStageMedia({
+            videoUrl: entranceBanner.entranceVideoUrl,
+            previewUrl: entranceBanner.entrancePreviewUrl,
+          });
+          const stageUrl = entranceBanner.entranceMediaUrl || fallbackResolved.primaryUrl;
+          const stagePreferVideo =
+            entranceBanner.preferVideo !== undefined
+              ? entranceBanner.preferVideo
+              : fallbackResolved.preferVideo;
+          const stageDurationMs = entranceBanner.durationMs || fallbackResolved.durationMs;
+
+          return (
+            <>
+              {stageUrl && (
+                <SmartMediaView
+                  key={entranceBanner.id}
+                  mode="stage"
+                  url={stageUrl}
+                  fallbackUrl={entranceBanner.entrancePreviewUrl}
+                  preferVideo={stagePreferVideo}
+                  alt={entranceBanner.entranceName}
+                  muted={isRoomSoundMuted}
+                  durationMs={stageDurationMs}
+                  resetKey={entranceBanner.id}
+                  onEnded={clearEntranceBanner}
+                />
+              )}
+
+              <div className="absolute top-[104px] inset-x-3.5 z-[45] pointer-events-none flex justify-center">
+                <div className="px-4 py-2 rounded-2xl bg-gradient-to-r from-[#1d1408]/95 via-[#31210d]/95 to-[#1d1408]/95 border border-amber-400/60 backdrop-blur-md shadow-2xl flex items-center gap-2.5 animate-gift-banner">
+                  {entranceBanner.userAvatar && (
+                    <img
+                      src={entranceBanner.userAvatar}
+                      alt={entranceBanner.userName}
+                      referrerPolicy="no-referrer"
+                      className="w-8 h-8 rounded-full object-cover border border-amber-400 shrink-0"
+                    />
+                  )}
+                  {entranceBanner.entrancePreviewUrl ? (
+                    <SmartMediaView
+                      mode="thumbnail"
+                      url={entranceBanner.entrancePreviewUrl}
+                      alt={entranceBanner.entranceName}
+                      className="w-8 h-8 rounded-lg object-contain shrink-0"
+                      fallback={<span className="text-xl shrink-0">{entranceBanner.entranceIcon}</span>}
+                    />
+                  ) : (
+                    <span className="text-xl shrink-0">{entranceBanner.entranceIcon}</span>
+                  )}
+                  <div className="text-xs text-right leading-snug">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-black text-amber-300">{entranceBanner.userName}</span>
+                      {entranceBanner.vipLevel > 0 && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 font-black text-[9px]">
+                          VIP {entranceBanner.vipLevel}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-200">
+                      دخل بـ <span className="font-bold text-amber-200">{entranceBanner.entranceName}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          );
+        })()}
+
+        {/* ================================================================= */}
         {/* SUBTLE GIFT GLIDE LAYER (Clean Single Icon Moving to Target Mic)  */}
         {/* ================================================================= */}
         <div className="absolute inset-0 z-30 pointer-events-none overflow-hidden">
@@ -1057,9 +1241,18 @@ export const VoiceRoomView: React.FC = () => {
                 transition:
                   'left 440ms cubic-bezier(0.16, 1, 0.3, 1), top 440ms cubic-bezier(0.16, 1, 0.3, 1), transform 440ms ease-out',
               }}
-              className="w-10 h-10 rounded-full bg-slate-950/70 backdrop-blur-sm border border-amber-400/50 flex items-center justify-center text-xl shadow-lg"
+              className="w-10 h-10 rounded-full bg-slate-950/70 backdrop-blur-sm border border-amber-400/50 flex items-center justify-center text-xl shadow-lg overflow-hidden"
             >
-              {glide.giftIcon}
+              {glide.giftImageUrl ? (
+                <img
+                  src={glide.giftImageUrl}
+                  alt=""
+                  referrerPolicy="no-referrer"
+                  className="w-7 h-7 object-contain"
+                />
+              ) : (
+                glide.giftIcon
+              )}
             </div>
           ))}
         </div>
@@ -1070,7 +1263,16 @@ export const VoiceRoomView: React.FC = () => {
         {luxuryNotice && (
           <div className="absolute top-[108px] inset-x-3 z-40 pointer-events-none flex justify-center">
             <div className="px-4 py-2 rounded-2xl bg-gradient-to-r from-[#1c1308]/95 via-[#2e1f0c]/95 to-[#1c1308]/95 border border-amber-400/50 backdrop-blur-md shadow-xl flex items-center gap-2.5 animate-gift-banner">
-              <span className="text-xl">{luxuryNotice.giftIcon}</span>
+              {luxuryNotice.giftImageUrl ? (
+                <img
+                  src={luxuryNotice.giftImageUrl}
+                  alt={luxuryNotice.giftName}
+                  referrerPolicy="no-referrer"
+                  className="w-7 h-7 rounded-lg object-contain shrink-0"
+                />
+              ) : (
+                <span className="text-xl">{luxuryNotice.giftIcon}</span>
+              )}
               <div className="text-xs text-right leading-snug">
                 <span className="font-bold text-amber-300">{luxuryNotice.senderName}</span>
                 <span className="text-slate-300 mx-1">أهدى</span>
@@ -1243,10 +1445,10 @@ export const VoiceRoomView: React.FC = () => {
         </header>
 
         {/* ================================================================= */}
-        {/* 2. SPACIOUS 8-MIC VOICE STAGE (2 Rows × 4 Mics — Yalla/SoulChill) */}
+        {/* 2. SPACIOUS 8-MIC VOICE STAGE (2 Rows × 4 Mics — Clean Frames)    */}
         {/* ================================================================= */}
-        <section className="relative z-20 shrink-0 px-4 pt-3 pb-1.5">
-          <div className="grid grid-cols-4 gap-x-3 gap-y-4">
+        <section className="relative z-20 shrink-0 px-3.5 pt-4 pb-2">
+          <div className="grid grid-cols-4 gap-x-2 gap-y-5">
             {seats8.map((seat, idx) => {
               const isHostSeat = idx === 0;
               const heartVal =
@@ -1257,6 +1459,19 @@ export const VoiceRoomView: React.FC = () => {
               const seatPulse = seatPulseMap[idx];
               const isOccupied = Boolean(seat.userId);
               const isSpeaking = isOccupied && seat.isSpeaking && !seat.isMuted;
+              const seatUserProfile = seat.userId
+                ? users.find((u) => u.id === seat.userId)
+                : undefined;
+              const resolvedAvatar =
+                seat.userId === currentUser.id
+                  ? currentUser.avatar
+                  : seat.userAvatar || seatUserProfile?.avatar || '';
+              const activeSeatFrameId =
+                seat.userId === currentUser.id ? currentUser.activeFrameId : seat.activeFrameId;
+              const seatFrame = activeSeatFrameId
+                ? storeItems.find((i) => i.type === 'frame' && i.id === activeSeatFrameId)
+                : undefined;
+              const hasUploadedFrame = isOccupied && Boolean(seatFrame?.previewUrl);
 
               return (
                 <button
@@ -1282,14 +1497,14 @@ export const VoiceRoomView: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Circular 64px Seat Pod */}
-                  <div className="relative w-16 h-16 flex items-center justify-center">
-                    {/* Real Speaking Audio Ring */}
-                    {isSpeaking && (
+                  {/* Circular Seat Pod — Large clean stage when wearing frame, no mic/rim peeking behind */}
+                  <div className="relative w-[74px] h-[74px] flex items-center justify-center">
+                    {/* Speaking Ring: kept cleanly behind non-framed seats; subtle tight halo on framed avatars */}
+                    {isSpeaking && !hasUploadedFrame && (
                       <>
-                        <span className="absolute inset-0 rounded-full border border-amber-400/75 animate-mic-wave pointer-events-none" />
+                        <span className="absolute inset-1 rounded-full border border-amber-400/75 animate-mic-wave pointer-events-none" />
                         <span
-                          className="absolute inset-0 rounded-full border border-emerald-400/50 animate-mic-wave pointer-events-none"
+                          className="absolute inset-1 rounded-full border border-emerald-400/50 animate-mic-wave pointer-events-none"
                           style={{ animationDelay: '0.55s' }}
                         />
                       </>
@@ -1297,29 +1512,71 @@ export const VoiceRoomView: React.FC = () => {
 
                     {/* Subtle Gift Receive Ring */}
                     {seatPulse && (
-                      <span className="absolute -inset-1 rounded-full border-2 border-amber-400/80 transition-opacity pointer-events-none" />
+                      <span className="absolute inset-0 rounded-full border-2 border-amber-400/80 transition-opacity pointer-events-none z-10" />
                     )}
 
-                    {/* Outer Metallic/Glass Frame */}
-                    <div
-                      className={`w-15 h-15 rounded-full p-[2px] transition-transform duration-150 group-active:scale-95 ${
-                        isOccupied
-                          ? isHostSeat
-                            ? 'bg-gradient-to-b from-amber-300 via-amber-500 to-amber-700 shadow-[0_6px_20px_rgba(245,158,11,0.35)]'
-                            : 'bg-gradient-to-b from-slate-200/80 via-slate-400/50 to-slate-700/70 shadow-lg'
-                          : isHostSeat
-                          ? 'bg-gradient-to-b from-amber-400/50 to-amber-700/20'
-                          : 'bg-white/12 group-hover:bg-white/20'
-                      }`}
-                    >
-                      {seat.userAvatar ? (
-                        <img
-                          src={seat.userAvatar}
-                          alt={seat.userName || `مايك ${idx + 1}`}
-                          referrerPolicy="no-referrer"
-                          className="w-full h-full rounded-full object-cover bg-slate-900"
-                        />
+                    {isOccupied ? (
+                      hasUploadedFrame ? (
+                        /* Occupied Seat WITH Uploaded Frame: Clean borderless avatar centered inside large frame */
+                        <>
+                          <div
+                            className={`relative z-10 w-[52px] h-[52px] rounded-full overflow-hidden transition-transform duration-150 group-active:scale-95 ${
+                              isSpeaking ? 'ring-2 ring-amber-400/70' : ''
+                            }`}
+                          >
+                            {resolvedAvatar ? (
+                              <img
+                                src={resolvedAvatar}
+                                alt={seat.userName || `مايك ${idx + 1}`}
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full rounded-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full rounded-full bg-slate-800 flex items-center justify-center text-sm font-black text-amber-300">
+                                {(seat.userName || 'U').slice(0, 1)}
+                              </div>
+                            )}
+                          </div>
+
+                          <img
+                            src={seatFrame!.previewUrl}
+                            alt={seatFrame!.nameAr}
+                            referrerPolicy="no-referrer"
+                            className="pointer-events-none absolute -inset-2.5 w-[calc(100%+20px)] h-[calc(100%+20px)] object-contain z-20 drop-shadow-[0_6px_14px_rgba(0,0,0,0.45)]"
+                          />
+                        </>
                       ) : (
+                        /* Occupied Seat WITHOUT Uploaded Frame: Crisp circular avatar rim (never shows empty mic) */
+                        <div
+                          className={`w-[58px] h-[58px] rounded-full p-[2px] transition-transform duration-150 group-active:scale-95 ${
+                            isHostSeat
+                              ? 'bg-gradient-to-b from-amber-300 via-amber-500 to-amber-700 shadow-[0_6px_20px_rgba(245,158,11,0.35)]'
+                              : 'bg-gradient-to-b from-slate-200/80 via-slate-400/50 to-slate-700/70 shadow-lg'
+                          }`}
+                        >
+                          {resolvedAvatar ? (
+                            <img
+                              src={resolvedAvatar}
+                              alt={seat.userName || `مايك ${idx + 1}`}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full rounded-full object-cover bg-slate-900"
+                            />
+                          ) : (
+                            <div className="w-full h-full rounded-full bg-slate-900 flex items-center justify-center text-sm font-black text-amber-300">
+                              {(seat.userName || 'U').slice(0, 1)}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    ) : (
+                      /* Empty / Locked Mic Seat */
+                      <div
+                        className={`w-[58px] h-[58px] rounded-full p-[2px] transition-transform duration-150 group-active:scale-95 ${
+                          isHostSeat
+                            ? 'bg-gradient-to-b from-amber-400/50 to-amber-700/20'
+                            : 'bg-white/12 group-hover:bg-white/20'
+                        }`}
+                      >
                         <div className="w-full h-full rounded-full bg-[#0e1322]/80 backdrop-blur-md flex items-center justify-center text-slate-300/80 group-hover:text-amber-300 transition-colors">
                           {seat.isLocked ? (
                             <Lock className="w-5 h-5 text-amber-400/80" />
@@ -1331,33 +1588,33 @@ export const VoiceRoomView: React.FC = () => {
                             />
                           )}
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
 
-                    {/* Host Seat #1 Minimal Crown Marker */}
-                    {isHostSeat && (
-                      <span className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full bg-amber-400 text-slate-950 flex items-center justify-center shadow">
+                    {/* Host Seat #1 Crown Marker (Hidden when wearing large custom frame so it stays clean) */}
+                    {isHostSeat && !hasUploadedFrame && (
+                      <span className="absolute -top-0.5 left-1/2 -translate-x-1/2 z-30 w-5 h-5 rounded-full bg-amber-400 text-slate-950 flex items-center justify-center shadow">
                         <Crown className="w-3 h-3" />
                       </span>
                     )}
 
-                    {/* Seat Index Number Badge (Bottom-Left) */}
+                    {/* Seat Index Number Badge (Only when empty & unlocked) */}
                     {!isOccupied && !seat.isLocked && (
-                      <span className="absolute -bottom-0.5 right-0.5 w-4 h-4 rounded-full bg-[#121829] border border-white/15 text-[9px] font-mono tabular-nums font-bold text-slate-300 flex items-center justify-center">
+                      <span className="absolute bottom-1 right-1 z-20 w-4 h-4 rounded-full bg-[#121829] border border-white/15 text-[9px] font-mono tabular-nums font-bold text-slate-300 flex items-center justify-center">
                         {idx + 1}
                       </span>
                     )}
 
                     {/* Muted Mic Badge */}
                     {isOccupied && seat.isMuted && (
-                      <span className="absolute -bottom-0.5 right-0 w-5 h-5 rounded-full bg-rose-600 border-2 border-[#0e1322] flex items-center justify-center shadow">
+                      <span className="absolute bottom-1 right-1 z-30 w-5 h-5 rounded-full bg-rose-600 border-2 border-[#0e1322] flex items-center justify-center shadow">
                         <MicOff className="w-2.5 h-2.5 text-white" />
                       </span>
                     )}
 
                     {/* Locked Overlay on Occupied Seat */}
                     {isOccupied && seat.isLocked && (
-                      <span className="absolute inset-0 rounded-full bg-black/55 flex items-center justify-center">
+                      <span className="absolute inset-2 z-30 rounded-full bg-black/55 flex items-center justify-center">
                         <Lock className="w-4 h-4 text-amber-400" />
                       </span>
                     )}
@@ -1365,7 +1622,7 @@ export const VoiceRoomView: React.FC = () => {
 
                   {/* Seat Name / Label */}
                   <span
-                    className={`mt-1.5 text-[11px] font-medium truncate max-w-[74px] leading-tight ${
+                    className={`mt-2 text-[11px] font-medium truncate max-w-[78px] leading-tight ${
                       isOccupied
                         ? 'text-white font-semibold'
                         : isHostSeat
@@ -1414,9 +1671,18 @@ export const VoiceRoomView: React.FC = () => {
                 </span>
               </div>
 
-              {/* Gift Icon */}
-              <div className="w-9 h-9 rounded-full bg-white/8 border border-white/10 flex items-center justify-center text-2xl shrink-0">
-                {item.giftIcon}
+              {/* Gift Icon / Custom URL */}
+              <div className="w-9 h-9 rounded-full bg-white/8 border border-white/10 flex items-center justify-center text-2xl shrink-0 overflow-hidden">
+                {item.giftImageUrl ? (
+                  <img
+                    src={item.giftImageUrl}
+                    alt={item.giftName}
+                    referrerPolicy="no-referrer"
+                    className="w-7 h-7 object-contain"
+                  />
+                ) : (
+                  item.giftIcon
+                )}
               </div>
 
               {/* Sender -> Target Details */}
@@ -1590,7 +1856,16 @@ export const VoiceRoomView: React.FC = () => {
                 />
               </svg>
               <div className="relative z-10 flex flex-col items-center leading-none">
-                <span className="text-lg">{comboState.gift.icon}</span>
+                {comboState.gift.imageUrl ? (
+                  <img
+                    src={comboState.gift.imageUrl}
+                    alt={comboState.gift.nameAr}
+                    referrerPolicy="no-referrer"
+                    className="w-6 h-6 object-contain"
+                  />
+                ) : (
+                  <span className="text-lg">{comboState.gift.icon}</span>
+                )}
                 <span className="text-[10px] font-mono tabular-nums font-bold text-amber-300 mt-0.5">
                   ×{comboState.comboHits}
                 </span>
@@ -1675,7 +1950,13 @@ export const VoiceRoomView: React.FC = () => {
 
                 {/* Room Audio Mute */}
                 <button
-                  onClick={() => setIsRoomSoundMuted(!isRoomSoundMuted)}
+                  onClick={() => {
+                    const nextMuted = !isRoomSoundMuted;
+                    setIsRoomSoundMuted(nextMuted);
+                    if (nextMuted) {
+                      sound.stopAllCustomAudio();
+                    }
+                  }}
                   className="w-11 h-11 rounded-xl bg-white/8 hover:bg-white/12 border border-white/10 flex items-center justify-center text-slate-200 transition-colors"
                   title={isRoomSoundMuted ? 'تشغيل الصوت' : 'كتم صوت الغرفة'}
                 >
@@ -1885,7 +2166,24 @@ export const VoiceRoomView: React.FC = () => {
                           </span>
                         ) : null}
 
-                        <div className="text-3xl my-1">{g.icon}</div>
+                        {(g.videoUrl || g.imageUrl) && (
+                          <span className="absolute top-1.5 left-1.5 text-[8px] font-mono font-bold px-1 py-0.5 rounded bg-purple-500/30 text-purple-200">
+                            {getMediaFormatLabel(g.videoUrl || g.imageUrl)}
+                          </span>
+                        )}
+
+                        {g.imageUrl || g.videoUrl ? (
+                          <SmartMediaView
+                            mode="thumbnail"
+                            url={g.imageUrl || g.videoUrl}
+                            preferVideo={!g.imageUrl && Boolean(g.videoUrl)}
+                            alt={g.nameAr}
+                            className="w-10 h-10 object-contain my-1 rounded-lg"
+                            fallback={<div className="text-3xl my-1">{g.icon}</div>}
+                          />
+                        ) : (
+                          <div className="text-3xl my-1">{g.icon}</div>
+                        )}
                         <span className="text-[11px] font-medium text-white truncate w-full text-center">
                           {g.nameAr}
                         </span>

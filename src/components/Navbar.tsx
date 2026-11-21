@@ -30,6 +30,10 @@ export const Navbar: React.FC = () => {
     setCurrentView,
     setActiveModal,
     setViewingProfileUser,
+    firebaseUser,
+    firebaseStatus,
+    signOutCloud,
+    returnToAuthScreen,
   } = useApp();
 
   const [isAudioMuted, setIsAudioMuted] = useState(sound.getIsMuted());
@@ -51,37 +55,37 @@ export const Navbar: React.FC = () => {
   ];
 
   return (
-    <header className="sticky top-0 z-40 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 text-slate-100">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+    <header className="sticky top-0 z-40 bg-[#0b101d]/95 backdrop-blur-md border-b border-white/10 text-slate-100">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 min-h-14 py-2 flex flex-wrap items-center justify-between gap-2.5">
         
-        {/* Left: Brand & View Mode Switcher */}
-        <div className="flex items-center gap-3">
+        {/* Right/Start: Brand & View Mode Switcher */}
+        <div className="flex items-center gap-2.5">
           <div 
             onClick={() => setCurrentView('user_app')}
             className="flex items-center gap-2 cursor-pointer group"
           >
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 via-rose-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-amber-500/20 group-hover:scale-105 transition-transform">
-              <Radio className="w-5 h-5 text-white animate-pulse" />
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 via-rose-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-amber-500/20">
+              <Radio className="w-4 h-4 text-white" />
             </div>
             <div>
               <div className="flex items-center gap-1.5">
-                <span className="font-bold text-lg tracking-tight bg-gradient-to-r from-amber-400 via-rose-300 to-amber-200 bg-clip-text text-transparent">
+                <span className="font-bold text-base sm:text-lg tracking-tight bg-gradient-to-r from-amber-300 via-amber-100 to-amber-300 bg-clip-text text-transparent">
                   {t.appName}
                 </span>
-                <span className="text-[10px] uppercase font-mono font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                  VIP LIVE
+                <span className="text-[10px] uppercase font-mono font-bold text-amber-300 hidden sm:inline">
+                  VIP
                 </span>
               </div>
             </div>
           </div>
 
-          {/* View Mode Tabs (User App / Recharge Agent / Admin Dashboard) */}
-          <div className="hidden lg:flex items-center p-1 bg-slate-950/80 rounded-xl border border-slate-800 text-xs font-medium">
+          {/* View Mode Tabs (Desktop) */}
+          <div className="hidden lg:flex items-center p-1 bg-slate-950/80 rounded-xl border border-white/10 text-xs font-medium">
             <button
               onClick={() => setCurrentView('user_app')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
                 currentView === 'user_app'
-                  ? 'bg-gradient-to-r from-amber-500 to-rose-500 text-white shadow-sm font-bold'
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 shadow-sm font-bold'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
@@ -113,6 +117,45 @@ export const Navbar: React.FC = () => {
               <span>{t.adminDashboard}</span>
             </button>
           </div>
+        </div>
+
+        {/* Mobile View Mode Switcher Row (< lg) */}
+        <div className="flex lg:hidden w-full order-last items-center gap-1.5 pt-1 border-t border-white/8 text-[11px] font-bold">
+          <button
+            onClick={() => setCurrentView('user_app')}
+            className={`flex-1 min-h-[38px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-xl transition-all ${
+              currentView === 'user_app'
+                ? 'bg-amber-400 text-slate-950'
+                : 'bg-white/5 text-slate-300 hover:bg-white/10'
+            }`}
+          >
+            <Radio className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">{t.userApp}</span>
+          </button>
+
+          <button
+            onClick={() => setCurrentView('agent_portal')}
+            className={`flex-1 min-h-[38px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-xl transition-all ${
+              currentView === 'agent_portal'
+                ? 'bg-teal-500 text-slate-950'
+                : 'bg-white/5 text-slate-300 hover:bg-white/10'
+            }`}
+          >
+            <CreditCard className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">{t.rechargeAgent}</span>
+          </button>
+
+          <button
+            onClick={() => setCurrentView('admin_dashboard')}
+            className={`flex-1 min-h-[38px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-xl transition-all ${
+              currentView === 'admin_dashboard'
+                ? 'bg-indigo-500 text-white'
+                : 'bg-white/5 text-slate-300 hover:bg-white/10'
+            }`}
+          >
+            <Shield className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">{t.adminDashboard}</span>
+          </button>
         </div>
 
         {/* Center: Currency Pills (Coins & Diamonds) */}
@@ -289,6 +332,26 @@ export const Navbar: React.FC = () => {
                   >
                     <Crown className="w-3.5 h-3.5 text-purple-400" />
                     <span>الحقيبة والإطارات المملوكة</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (firebaseUser) {
+                        void signOutCloud();
+                      } else {
+                        returnToAuthScreen();
+                      }
+                      setShowIdentityMenu(false);
+                    }}
+                    className="w-full text-right px-3 py-1.5 rounded-lg text-xs text-emerald-300 hover:bg-slate-800 flex items-center justify-between gap-2"
+                  >
+                    <span>
+                      {firebaseUser
+                        ? `تسجيل الخروج (${firebaseUser.email?.split('@')[0] || 'حسابك'})`
+                        : 'صفحة تسجيل الدخول / إنشاء حساب'}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {firebaseStatus.projectId}
+                    </span>
                   </button>
                 </div>
 

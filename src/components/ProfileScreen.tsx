@@ -4,22 +4,21 @@ import {
   Copy,
   Check,
   Edit3,
-  ChevronLeft,
   ShieldAlert,
   CreditCard,
   X,
-  Sparkles,
-  Award,
-  Heart,
-  Users,
-  Gift,
   Volume2,
   Bell,
   Lock,
-  Globe,
   Trash2,
   Home,
+  FileText,
+  Sparkles,
+  Crown,
+  LogOut,
+  LogIn,
 } from 'lucide-react';
+import { VOICE_COUNTRIES } from '../utils/voiceProfileOptions';
 
 type ProfileSubModal =
   | 'none'
@@ -30,6 +29,7 @@ type ProfileSubModal =
   | 'cp_space'
   | 'special_id'
   | 'invite'
+  | 'records'
   | 'settings'
   | 'about';
 
@@ -37,28 +37,40 @@ export const ProfileScreen: React.FC = () => {
   const {
     currentUser,
     users,
+    transactions,
+    storeItems,
     joinRoom,
     setActiveModal,
     setViewingProfileUser,
     setCurrentView,
     updateUserProfile,
     rechargeCoins,
+    bagGifts,
+    firebaseUser,
+    signOutCloud,
+    returnToAuthScreen,
   } = useApp();
 
   const [copied, setCopied] = useState(false);
   const [subModal, setSubModal] = useState<ProfileSubModal>('none');
   const [socialTab, setSocialTab] = useState<'friends' | 'following' | 'fans' | 'visitors'>('friends');
+  const [recordsFilter, setRecordsFilter] = useState<'all' | 'lucky_win' | 'recharge' | 'gift'>('all');
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   // Edit profile form state
   const [editName, setEditName] = useState(currentUser.displayName || 'الدبلان');
   const [editBio, setEditBio] = useState(currentUser.bio || 'مرحباً بكم في عالمي الملكي 👑');
-  const [editCountry, setEditCountry] = useState(currentUser.country || '🇩🇿 الجزائر');
+  const [editCountry, setEditCountry] = useState(currentUser.country || 'السعودية');
   const [editAvatar, setEditAvatar] = useState(currentUser.avatar);
-  const [editAge, setEditAge] = useState<number>(60);
+  const [editAge, setEditAge] = useState<number>(currentUser.age || 24);
+  const [editGender, setEditGender] = useState<'male' | 'female'>(currentUser.gender || 'male');
 
   // Badges state
-  const [equippedBadges, setEquippedBadges] = useState<string[]>(['badge_vip5', 'badge_wealth', 'badge_lucky']);
+  const [equippedBadges, setEquippedBadges] = useState<string[]>([
+    'badge_vip5',
+    'badge_wealth',
+    'badge_lucky',
+  ]);
 
   // CP state
   const [cpPartnerId, setCpPartnerId] = useState<string>(users[1]?.id || 'user_2');
@@ -82,16 +94,22 @@ export const ProfileScreen: React.FC = () => {
   const handleCopyId = () => {
     navigator.clipboard?.writeText(currentUser.userCode || '6919142');
     setCopied(true);
-    showToast(`تم نسخ الأيدي بنجاح: ${currentUser.userCode || '6919142'} ✅`);
+    showToast(`تم نسخ الأيدي بنجاح: ${currentUser.userCode || '6919142'}`);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
+    const matchedCountry = VOICE_COUNTRIES.find(
+      (c) => c.name === editCountry || `${c.flag} ${c.name}` === editCountry
+    );
     updateUserProfile({
       displayName: editName.trim() || currentUser.displayName,
       bio: editBio.trim(),
-      country: editCountry,
+      country: matchedCountry?.name || editCountry,
+      countryFlag: matchedCountry?.flag || currentUser.countryFlag || '🌍',
+      age: Math.min(99, Math.max(13, Number(editAge) || 24)),
+      gender: editGender,
       avatar: editAvatar.trim() || currentUser.avatar,
     });
     setSubModal('none');
@@ -125,469 +143,425 @@ export const ProfileScreen: React.FC = () => {
   ];
 
   const cpPartner = users.find((u) => u.id === cpPartnerId) || users[1] || currentUser;
+  const totalBagCount = Object.values(bagGifts).reduce((s, c) => s + c, 0);
+  const equippedFrame = storeItems.find(
+    (i) => i.type === 'frame' && i.id === currentUser.activeFrameId
+  );
+
+  const myRecords = transactions.filter((tx) => {
+    if (tx.userId !== currentUser.id) return false;
+    if (recordsFilter === 'all') return true;
+    return tx.type === recordsFilter;
+  });
 
   return (
-    <div className="relative min-h-screen max-w-md mx-auto bg-gradient-to-b from-[#d8f8f0] via-[#effbf7] to-[#f4f7f9] text-slate-900 pb-24 font-tajawal select-none shadow-2xl overflow-x-hidden">
-      
+    <div className="relative min-h-dvh w-full max-w-5xl mx-auto bg-[#070a12] text-white pb-24 font-tajawal select-none overflow-x-hidden">
       {/* Floating Toast Notification */}
       {toastMsg && (
-        <div className="fixed top-4 inset-x-4 max-w-sm mx-auto z-50 px-4 py-2.5 rounded-2xl bg-slate-900/95 border border-amber-400 text-amber-300 text-xs font-black text-center shadow-2xl animate-in fade-in slide-in-from-top-3 duration-200">
+        <div className="fixed top-4 inset-x-4 max-w-sm mx-auto z-50 px-4 py-2.5 rounded-2xl bg-[#141a2b]/95 border border-amber-400 text-amber-300 text-xs font-black text-center shadow-2xl">
           {toastMsg}
         </div>
       )}
 
-      {/* Decorative Soft Top Pattern */}
-      <div className="absolute top-0 inset-x-0 h-56 bg-[radial-gradient(circle_at_75%_20%,rgba(45,212,191,0.22),transparent_60%)] pointer-events-none" />
+      {/* Compact Sticky Header */}
+      <header className="sticky top-0 z-30 bg-[#070a12]/90 backdrop-blur-xl border-b border-white/10 px-3.5 sm:px-6 py-2 flex items-center justify-between gap-2">
+        <span className="text-sm sm:text-base font-black text-amber-300 flex items-center gap-1.5">
+          <Crown className="w-4 h-4 text-amber-400" />
+          <span>ملفي</span>
+        </span>
 
-      {/* ===================================================================== */}
-      {/* 1. TOP HEADER BAR (Matches Screenshot #2: Edit on Left, ملكي on Right) */}
-      {/* ===================================================================== */}
-      <div className="relative z-10 px-4 pt-3.5 pb-1 flex items-center justify-between">
-        {/* Left: Edit Profile Button */}
-        <button
-          onClick={() => {
-            setEditName(currentUser.displayName);
-            setEditBio(currentUser.bio || 'مرحباً بكم في عالمي الملكي 👑');
-            setEditAvatar(currentUser.avatar);
-            setSubModal('edit_profile');
-          }}
-          className="w-9 h-9 rounded-xl bg-white/80 border border-amber-500/40 flex items-center justify-center text-amber-700 shadow-xs hover:bg-white active:scale-95 transition-transform"
-          title="تعديل الملف الشخصي"
-        >
-          <Edit3 className="w-4 h-4" />
-        </button>
-
-        {/* Center Quick Admin & Agent Portals */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           <button
             onClick={() => setCurrentView('agent_portal')}
-            className="px-2.5 py-1 rounded-full bg-teal-600/15 border border-teal-600/30 text-teal-900 text-[10px] font-black flex items-center gap-1 hover:bg-teal-600/25 transition-colors"
+            className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-xl bg-teal-500/15 border border-teal-400/35 text-teal-300 text-[11px] sm:text-xs font-bold flex items-center gap-1 hover:bg-teal-500/25 transition-colors"
           >
-            <CreditCard className="w-3 h-3" />
-            <span>وكيل الشحن</span>
+            <CreditCard className="w-3.5 h-3.5" />
+            <span>الوكيل</span>
           </button>
           <button
             onClick={() => setCurrentView('admin_dashboard')}
-            className="px-2.5 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-900 text-[10px] font-black flex items-center gap-1 hover:bg-amber-500/30 transition-colors"
+            className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-xl bg-indigo-500/15 border border-indigo-400/35 text-indigo-300 text-[11px] sm:text-xs font-bold flex items-center gap-1 hover:bg-indigo-500/25 transition-colors"
           >
-            <ShieldAlert className="w-3 h-3 text-amber-600" />
+            <ShieldAlert className="w-3.5 h-3.5" />
             <span>الإدارة</span>
           </button>
-        </div>
-
-        {/* Right: "ملكي" Title */}
-        <span className="text-lg font-black text-teal-800 tracking-wide">ملكي</span>
-      </div>
-
-      {/* ===================================================================== */}
-      {/* 2. HERO PROFILE CARD WITH ORNATE GOLDEN VIP FRAME (Screenshot #2)     */}
-      {/* ===================================================================== */}
-      <div className="relative z-10 px-3.5 pt-10">
-        <div className="relative bg-white/95 backdrop-blur-md rounded-3xl pt-14 pb-4 px-4 shadow-[0_8px_30px_rgba(15,23,42,0.06)] border border-white">
-          
-          {/* Overlapping Ornate 3D Golden Tiger/VIP5 Frame Avatar */}
-          <div
-            onClick={() => setSubModal('edit_profile')}
-            className="absolute -top-11 left-1/2 -translate-x-1/2 cursor-pointer group"
-          >
-            <div className="relative w-24 h-24 rounded-2xl p-1 bg-gradient-to-b from-amber-300 via-yellow-500 to-amber-700 shadow-[0_6px_25px_rgba(245,158,11,0.55)] ring-2 ring-amber-200">
-              {/* Ornate Corner Embellishments */}
-              <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-2xl drop-shadow">
-                👑
-              </span>
-              <span className="absolute -bottom-1 -left-2 text-lg drop-shadow">🐆</span>
-              <span className="absolute -bottom-1 -right-2 text-lg drop-shadow">🐆</span>
-
-              <img
-                src={currentUser.avatar}
-                alt={currentUser.displayName}
-                className="w-full h-full rounded-xl object-cover border-2 border-amber-100"
-              />
-
-              {/* Bottom VIP5 Golden Ribbon Plate */}
-              <div className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-gradient-to-r from-amber-700 via-yellow-400 to-amber-700 border border-yellow-100 text-[10px] font-black text-slate-950 shadow-md whitespace-nowrap">
-                VIP {currentUser.vipLevel || 5}
-              </div>
-            </div>
-          </div>
-
-          {/* Name & Blue Gender/Age Badge */}
-          <div className="flex items-center justify-center gap-2 mt-1">
-            <span className="px-2 py-0.5 rounded-full bg-sky-500 text-white font-black text-[10px] flex items-center gap-0.5 shadow-xs">
-              <span>♂</span>
-              <span>{editAge}</span>
-            </span>
-            <h1 className="text-base font-black text-amber-500 drop-shadow-xs">
-              {currentUser.displayName || 'الدبلان'}
-            </h1>
-          </div>
-
-          {/* ID Row with Copy Icon */}
-          <div className="flex items-center justify-center gap-1.5 mt-1">
-            <button
-              onClick={handleCopyId}
-              className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg hover:bg-slate-100 text-slate-600 font-mono font-black text-sm transition-colors"
-            >
-              <span>ID:{currentUser.userCode || '6919142'}</span>
-              {copied ? (
-                <Check className="w-3.5 h-3.5 text-emerald-600" />
-              ) : (
-                <Copy className="w-3.5 h-3.5 text-slate-400" />
-              )}
-            </button>
-          </div>
-
-          {/* 4 Emblem Badges Row: Flame 7 | Shield 7 | Golden VIP5 | Flag */}
-          <div className="flex items-center justify-center gap-2 mt-2 pb-3 border-b border-slate-100">
-            <button
-              onClick={() => setSubModal('levels')}
-              className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-orange-600 to-amber-500 text-white font-black text-[10px] flex items-center gap-1 shadow-xs active:scale-95"
-            >
-              <span>🔥</span>
-              <span>{currentUser.level || 7}</span>
-            </button>
-
-            <button
-              onClick={() => setSubModal('levels')}
-              className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-amber-700 to-yellow-600 text-white font-black text-[10px] flex items-center gap-1 shadow-xs active:scale-95"
-            >
-              <span>🛡️</span>
-              <span>7</span>
-            </button>
-
-            <button
-              onClick={() => setActiveModal('vip')}
-              className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-amber-500 via-yellow-300 to-amber-600 text-slate-950 font-black text-[10px] border border-amber-700/40 shadow-xs active:scale-95"
-            >
-              VIP {currentUser.vipLevel || 5}
-            </button>
-
-            <span className="text-base">{editCountry.split(' ')[0] || '🇩🇿'}</span>
-          </div>
-
-          {/* 4 Interactive Stats Columns: زائر | المعجبون | المتابعون | أصدقاء */}
-          <div className="grid grid-cols-4 pt-3 text-center">
-            <button
-              onClick={() => {
-                setSocialTab('visitors');
-                setSubModal('social_list');
-              }}
-              className="relative flex flex-col items-center hover:bg-slate-50 rounded-xl py-1 transition-colors"
-            >
-              <span className="absolute -top-1 left-3 px-1.5 py-0.1 rounded-full bg-rose-500 text-white font-black text-[9px]">
-                +3
-              </span>
-              <span className="text-base font-black text-slate-900">
-                {currentUser.visitorsCount || 3}
-              </span>
-              <span className="text-[11px] font-bold text-slate-500">زائر</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setSocialTab('fans');
-                setSubModal('social_list');
-              }}
-              className="relative flex flex-col items-center hover:bg-slate-50 rounded-xl py-1 transition-colors"
-            >
-              <span className="absolute -top-1 left-3 px-1.5 py-0.1 rounded-full bg-rose-500 text-white font-black text-[9px]">
-                +1
-              </span>
-              <span className="text-base font-black text-slate-900">
-                {currentUser.followersCount || 2}
-              </span>
-              <span className="text-[11px] font-bold text-slate-500">المعجبون</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setSocialTab('following');
-                setSubModal('social_list');
-              }}
-              className="flex flex-col items-center hover:bg-slate-50 rounded-xl py-1 transition-colors"
-            >
-              <span className="text-base font-black text-slate-900">
-                {currentUser.followingCount || 1}
-              </span>
-              <span className="text-[11px] font-bold text-slate-500">المتابعون</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setSocialTab('friends');
-                setSubModal('social_list');
-              }}
-              className="flex flex-col items-center hover:bg-slate-50 rounded-xl py-1 transition-colors"
-            >
-              <span className="text-base font-black text-slate-900">
-                {Math.max(1, users.length - 1)}
-              </span>
-              <span className="text-[11px] font-bold text-slate-500">أصدقاء</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* ===================================================================== */}
-      {/* 3. MY WALLET SECTION: محفظتي + الكونزة + الماس (Exact Screenshot #2)   */}
-      {/* ===================================================================== */}
-      <div className="px-3.5 mt-3">
-        <div className="rounded-3xl overflow-hidden bg-white shadow-[0_8px_25px_rgba(15,23,42,0.05)] border border-white">
-          {/* Top Golden Brown Header Banner: < | محفظتي 👛 */}
           <button
-            onClick={() => setActiveModal('wallet')}
-            className="w-full px-4 py-2.5 bg-gradient-to-r from-[#593a1e] via-[#85582c] to-[#634121] text-white flex items-center justify-between hover:opacity-95 transition-opacity"
+            onClick={() => {
+              setEditName(currentUser.displayName);
+              setEditBio(currentUser.bio || 'مرحباً بكم في عالمي الملكي 👑');
+              setEditAvatar(currentUser.avatar);
+              setEditCountry(currentUser.country || 'السعودية');
+              setEditAge(currentUser.age || 24);
+              setEditGender(currentUser.gender || 'male');
+              setSubModal('edit_profile');
+            }}
+            className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-amber-400/15 border border-amber-400/40 flex items-center justify-center text-amber-300 hover:bg-amber-400/25 transition-colors"
+            title="تعديل الملف الشخصي"
           >
-            <ChevronLeft className="w-4 h-4 text-amber-200" />
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-black text-white">محفظتي</span>
-              <span className="text-xl drop-shadow">👛</span>
-            </div>
+            <Edit3 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
           </button>
+          <button
+            onClick={() => {
+              if (firebaseUser) {
+                void signOutCloud();
+              } else {
+                returnToAuthScreen();
+              }
+            }}
+            className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-xl bg-rose-500/15 border border-rose-400/35 text-rose-300 text-[11px] sm:text-xs font-bold flex items-center gap-1 hover:bg-rose-500/25 transition-colors"
+            title={firebaseUser ? 'تسجيل الخروج' : 'تسجيل الدخول'}
+          >
+            {firebaseUser ? <LogOut className="w-3.5 h-3.5" /> : <LogIn className="w-3.5 h-3.5" />}
+            <span>{firebaseUser ? 'خروج' : 'دخول'}</span>
+          </button>
+        </div>
+      </header>
 
-          {/* Two Side-by-Side 3D Balance Cards: الماس (Purple) & الكونزة (Gold) */}
-          <div className="p-3 grid grid-cols-2 gap-2.5">
-            {/* Left: الماس (Diamonds) */}
-            <button
-              onClick={() => setActiveModal('wallet')}
-              className="relative h-20 rounded-2xl bg-gradient-to-r from-purple-200 via-fuchsia-100 to-purple-50 border border-purple-200/80 p-3 flex items-center justify-between overflow-hidden active:scale-95 transition-transform"
-            >
-              <div className="text-3xl drop-shadow-md">💎</div>
-              <div className="text-right">
-                <div className="text-xs font-black text-purple-800">الماس</div>
-                <div className="text-sm font-mono font-black text-slate-900 mt-1">
-                  {currentUser.diamonds.toLocaleString('en-US', {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
+      {/* Main Layout: Fits cleanly on 1 mobile viewport without scrolling, expands cleanly to 2 cols on desktop */}
+      <div className="px-3 sm:px-6 pt-2.5 lg:pt-5 grid grid-cols-1 lg:grid-cols-12 gap-2.5 lg:gap-5 items-start">
+        {/* Column 1: Compact Horizontal Hero Identity + Slim 2-Col Wallet */}
+        <div className="lg:col-span-5 space-y-2.5 lg:space-y-4">
+          {/* Compact Hero Profile Card */}
+          <div className="relative rounded-2xl lg:rounded-3xl overflow-hidden bg-gradient-to-b from-[#13192c] to-[#0c101d] border border-amber-400/25 p-3 lg:p-5 shadow-xl">
+            <div className="flex items-center gap-3.5 text-right">
+              {/* Avatar + Uploaded Frame URL Overlay */}
+              <div
+                onClick={() => setSubModal('edit_profile')}
+                className="relative w-20 h-20 lg:w-22 lg:h-22 shrink-0 cursor-pointer flex items-center justify-center"
+              >
+                <div
+                  className={
+                    equippedFrame?.previewUrl
+                      ? 'w-14 h-14 lg:w-16 lg:h-16 rounded-full overflow-hidden'
+                      : 'w-15 h-15 lg:w-18 lg:h-18 rounded-2xl p-[2px] bg-gradient-to-b from-amber-300 via-yellow-500 to-amber-700 shadow-lg'
+                  }
+                >
+                  <img
+                    src={currentUser.avatar}
+                    alt={currentUser.displayName}
+                    referrerPolicy="no-referrer"
+                    className={`w-full h-full object-cover ${
+                      equippedFrame?.previewUrl ? 'rounded-full' : 'rounded-[14px]'
+                    }`}
+                  />
                 </div>
+                {equippedFrame?.previewUrl && (
+                  <img
+                    src={equippedFrame.previewUrl}
+                    alt={equippedFrame.nameAr}
+                    referrerPolicy="no-referrer"
+                    className="pointer-events-none absolute -inset-2 w-[calc(100%+16px)] h-[calc(100%+16px)] object-contain z-20"
+                  />
+                )}
+                <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 z-30 px-2 py-0.5 rounded-md bg-gradient-to-r from-amber-500 to-yellow-400 text-[9px] font-black text-slate-950 shadow whitespace-nowrap">
+                  VIP {currentUser.vipLevel || 5}
+                </span>
               </div>
-            </button>
 
-            {/* Right: الكونزة (Coins) */}
+              {/* Name, ID, Country, Bio */}
+              <div className="min-w-0 flex-1 space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <h1 className="text-base lg:text-lg font-black text-white truncate">
+                      {currentUser.displayName || 'الدبلان'}
+                    </h1>
+                    <span
+                      className={`text-[11px] font-bold shrink-0 tabular-nums ${
+                        currentUser.gender === 'female' ? 'text-rose-300' : 'text-sky-300'
+                      }`}
+                    >
+                      {currentUser.gender === 'female' ? '♀' : '♂'} {currentUser.age ?? 24}
+                    </span>
+                    <span className="text-sm shrink-0" title={currentUser.country}>
+                      {currentUser.countryFlag || '🇸🇦'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <button
+                    onClick={handleCopyId}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-amber-200 font-mono tabular-nums transition-colors"
+                  >
+                    <span>ID:{currentUser.userCode || '6919142'}</span>
+                    {copied ? (
+                      <Check className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3 h-3 text-slate-400" />
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => setSubModal('levels')}
+                    className="px-2 py-0.5 rounded-lg bg-orange-500/20 border border-orange-400/30 text-orange-200 font-mono tabular-nums font-bold"
+                  >
+                    🔥 Lv.{currentUser.level || 7}
+                  </button>
+                </div>
+
+                {currentUser.bio && (
+                  <p className="text-[11px] text-slate-400 truncate">{currentUser.bio}</p>
+                )}
+              </div>
+            </div>
+
+            {/* 4 Interactive Social Columns */}
+            <div className="grid grid-cols-4 pt-2 mt-2.5 border-t border-white/10 w-full text-center gap-1">
+              <button
+                onClick={() => {
+                  setSocialTab('visitors');
+                  setSubModal('social_list');
+                }}
+                className="flex flex-col items-center hover:bg-white/[0.04] rounded-xl py-1 transition-colors"
+              >
+                <span className="text-sm font-black font-mono tabular-nums text-white">
+                  {currentUser.visitorsCount || 3}
+                </span>
+                <span className="text-[10px] text-slate-400">زائر</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setSocialTab('fans');
+                  setSubModal('social_list');
+                }}
+                className="flex flex-col items-center hover:bg-white/[0.04] rounded-xl py-1 transition-colors"
+              >
+                <span className="text-sm font-black font-mono tabular-nums text-white">
+                  {currentUser.followersCount || 2}
+                </span>
+                <span className="text-[10px] text-slate-400">المعجبون</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setSocialTab('following');
+                  setSubModal('social_list');
+                }}
+                className="flex flex-col items-center hover:bg-white/[0.04] rounded-xl py-1 transition-colors"
+              >
+                <span className="text-sm font-black font-mono tabular-nums text-white">
+                  {currentUser.followingCount || 1}
+                </span>
+                <span className="text-[10px] text-slate-400">المتابعون</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setSocialTab('friends');
+                  setSubModal('social_list');
+                }}
+                className="flex flex-col items-center hover:bg-white/[0.04] rounded-xl py-1 transition-colors"
+              >
+                <span className="text-sm font-black font-mono tabular-nums text-white">
+                  {Math.max(1, users.length - 1)}
+                </span>
+                <span className="text-[10px] text-slate-400">أصدقاء</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Slim 2-Column Wallet Card */}
+          <div className="grid grid-cols-2 gap-2">
             <button
               onClick={() => setActiveModal('wallet')}
-              className="relative h-20 rounded-2xl bg-gradient-to-r from-amber-200 via-yellow-100 to-amber-50 border border-amber-300/80 p-3 flex items-center justify-between overflow-hidden active:scale-95 transition-transform"
+              className="rounded-2xl bg-gradient-to-br from-amber-500/18 to-[#0e1320] border border-amber-400/30 px-3 py-2.5 flex items-center justify-between hover:border-amber-400/60 transition-colors"
             >
-              <div className="text-3xl drop-shadow-md">🪙</div>
-              <div className="text-right">
-                <div className="text-xs font-black text-amber-900">الكونزة</div>
-                <div className="text-sm font-mono font-black text-slate-900 mt-1">
+              <div className="text-right min-w-0">
+                <div className="text-[11px] font-bold text-amber-200">الكونزة</div>
+                <div className="text-sm font-mono tabular-nums font-black text-white truncate">
                   {currentUser.coins.toLocaleString('en-US')}
                 </div>
               </div>
+              <span className="text-xl shrink-0">🪙</span>
+            </button>
+
+            <button
+              onClick={() => setActiveModal('wallet')}
+              className="rounded-2xl bg-gradient-to-br from-fuchsia-500/18 to-[#0e1320] border border-fuchsia-400/30 px-3 py-2.5 flex items-center justify-between hover:border-fuchsia-400/60 transition-colors"
+            >
+              <div className="text-right min-w-0">
+                <div className="text-[11px] font-bold text-fuchsia-200">الماس</div>
+                <div className="text-sm font-mono tabular-nums font-black text-white truncate">
+                  {currentUser.diamonds.toLocaleString('en-US')}
+                </div>
+              </div>
+              <span className="text-xl shrink-0">💎</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Column 2: Compact 3-Col VIP/Level/Badges + 4×2 Bento Services + 3-Col Footer Strip */}
+        <div className="lg:col-span-7 space-y-2.5 lg:space-y-4">
+          {/* Compact 3-Column VIP, Wealth Level & Badges */}
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={() => setActiveModal('vip')}
+              className="rounded-2xl bg-gradient-to-br from-[#2a1d0b] to-[#171109] border border-amber-400/40 p-2.5 text-right flex items-center justify-between gap-1 hover:border-amber-300 transition-colors"
+            >
+              <div className="min-w-0">
+                <div className="text-xs font-black text-amber-300">VIP {currentUser.vipLevel || 5}</div>
+                <div className="text-[10px] text-amber-100/75 truncate">الامتيازات</div>
+              </div>
+              <span className="text-lg shrink-0">👑</span>
+            </button>
+
+            <button
+              onClick={() => setSubModal('levels')}
+              className="rounded-2xl bg-[#0e1320] hover:bg-[#141b2e] border border-sky-400/30 p-2.5 text-right flex items-center justify-between gap-1 transition-colors"
+            >
+              <div className="min-w-0">
+                <div className="text-xs font-black text-white">المستوى</div>
+                <div className="text-[10px] text-sky-300 font-mono tabular-nums truncate">
+                  Lv.{currentUser.level || 41}
+                </div>
+              </div>
+              <span className="text-lg shrink-0">🏆</span>
+            </button>
+
+            <button
+              onClick={() => setSubModal('badges')}
+              className="rounded-2xl bg-[#0e1320] hover:bg-[#141b2e] border border-emerald-400/30 p-2.5 text-right flex items-center justify-between gap-1 transition-colors"
+            >
+              <div className="min-w-0">
+                <div className="text-xs font-black text-white">الأوسمة</div>
+                <div className="text-[10px] text-emerald-300 truncate">
+                  {equippedBadges.length} مفعلة
+                </div>
+              </div>
+              <span className="text-lg shrink-0">🎖️</span>
+            </button>
+          </div>
+
+          {/* Compact 4×2 Bento Services Grid (All 8 visible together without scroll) */}
+          <div className="rounded-2xl lg:rounded-3xl bg-[#0e1320] border border-white/10 p-2.5 sm:p-4 grid grid-cols-4 gap-2 sm:gap-3 text-center shadow-xl">
+            <button
+              onClick={() => setSubModal('special_id')}
+              className="py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/6 flex flex-col items-center gap-1 transition-colors"
+            >
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-b from-purple-500 to-fuchsia-600 text-white flex items-center justify-center shadow text-[11px] font-black">
+                ID
+              </div>
+              <span className="text-[11px] font-bold text-slate-200 truncate w-full">ايدي مميز</span>
+            </button>
+
+            <button
+              onClick={() => setActiveModal('backpack')}
+              className="relative py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/6 flex flex-col items-center gap-1 transition-colors"
+            >
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-b from-indigo-500 to-purple-600 text-white flex items-center justify-center text-base shadow">
+                🎒
+              </div>
+              <span className="text-[11px] font-bold text-slate-200 truncate w-full">الحقيبة</span>
+              {totalBagCount > 0 && (
+                <span className="absolute top-1 left-1 min-w-[16px] h-[16px] px-1 rounded-full bg-emerald-500 text-slate-950 font-mono tabular-nums font-black text-[9px] flex items-center justify-center">
+                  {totalBagCount}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setSubModal('cp_space')}
+              className="py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/6 flex flex-col items-center gap-1 transition-colors"
+            >
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-b from-pink-500 to-rose-600 text-white flex items-center justify-center text-base shadow">
+                💞
+              </div>
+              <span className="text-[11px] font-bold text-slate-200 truncate w-full">CP</span>
+            </button>
+
+            <button
+              onClick={() => setActiveModal('store')}
+              className="py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/6 flex flex-col items-center gap-1 transition-colors"
+            >
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-b from-sky-500 to-blue-600 text-white flex items-center justify-center text-base shadow">
+                🏪
+              </div>
+              <span className="text-[11px] font-bold text-slate-200 truncate w-full">المتجر</span>
+            </button>
+
+            <button
+              onClick={() => joinRoom('room_tyy')}
+              className="py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/6 flex flex-col items-center gap-1 transition-colors"
+            >
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-b from-amber-400 to-orange-500 text-slate-950 flex items-center justify-center shadow">
+                <Home className="w-4 h-4" />
+              </div>
+              <span className="text-[11px] font-bold text-slate-200 truncate w-full">غرفتي</span>
+            </button>
+
+            <button
+              onClick={() => setActiveModal('messages')}
+              className="py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/6 flex flex-col items-center gap-1 transition-colors"
+            >
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-b from-cyan-500 to-teal-600 text-white flex items-center justify-center text-base shadow">
+                💬
+              </div>
+              <span className="text-[11px] font-bold text-slate-200 truncate w-full">رسائلي</span>
+            </button>
+
+            <button
+              onClick={() => setActiveModal('agency')}
+              className="py-2 px-1 rounded-xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/6 flex flex-col items-center gap-1 transition-colors"
+            >
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-b from-emerald-500 to-teal-600 text-white flex items-center justify-center text-base shadow">
+                🏛️
+              </div>
+              <span className="text-[11px] font-bold text-slate-200 truncate w-full">وكالة</span>
+            </button>
+
+            <button
+              onClick={() => setSubModal('records')}
+              className="py-2 px-1 rounded-xl bg-amber-400/10 hover:bg-amber-400/20 border border-amber-400/30 flex flex-col items-center gap-1 transition-colors"
+            >
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-b from-amber-500 to-yellow-600 text-slate-950 flex items-center justify-center shadow">
+                <FileText className="w-4 h-4" />
+              </div>
+              <span className="text-[11px] font-bold text-amber-300 truncate w-full">السجلات</span>
+            </button>
+          </div>
+
+          {/* Compact 3-Column Bottom Strip: Invite / Settings / About */}
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={() => setSubModal('invite')}
+              className="min-h-[44px] px-2.5 rounded-2xl bg-[#0e1320] hover:bg-[#141b2e] border border-white/10 flex items-center justify-center gap-1.5 text-xs font-bold text-white transition-colors"
+            >
+              <span>🎁</span>
+              <span>دعوة</span>
+            </button>
+
+            <button
+              onClick={() => setSubModal('settings')}
+              className="min-h-[44px] px-2.5 rounded-2xl bg-[#0e1320] hover:bg-[#141b2e] border border-white/10 flex items-center justify-center gap-1.5 text-xs font-bold text-white transition-colors"
+            >
+              <span>⚙️</span>
+              <span>الإعدادات</span>
+            </button>
+
+            <button
+              onClick={() => setSubModal('about')}
+              className="min-h-[44px] px-2.5 rounded-2xl bg-[#0e1320] hover:bg-[#141b2e] border border-white/10 flex items-center justify-center gap-1.5 text-xs font-bold text-white transition-colors"
+            >
+              <span>ℹ️</span>
+              <span>حول</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* ===================================================================== */}
-      {/* 4. THREE 3D GRAPHIC CARDS: VIP (Left) + مستوى & الشارة (Right)         */}
-      {/* ===================================================================== */}
-      <div className="px-3.5 mt-3 grid grid-cols-2 gap-2.5">
-        {/* Left Tall Orange 3D Card: VIP */}
-        <button
-          onClick={() => setActiveModal('vip')}
-          className="relative h-38 rounded-3xl bg-gradient-to-br from-amber-300 via-orange-400 to-amber-500 p-3.5 text-right flex flex-col justify-between overflow-hidden shadow-md border border-amber-200 active:scale-95 transition-transform"
-        >
-          <div className="flex items-start justify-between">
-            <div className="w-14 h-14 rounded-2xl bg-white/25 backdrop-blur-xs border border-white/40 flex items-center justify-center text-3xl shadow-inner">
-              💎
-            </div>
-            <span className="text-2xl font-black italic text-white drop-shadow">VIP</span>
-          </div>
-          <div>
-            <div className="text-xs font-black text-amber-950/80">شرف ملكي خاص</div>
-            <div className="text-sm font-black text-amber-950 mt-0.5">
-              المستوى: VIP{currentUser.vipLevel || 5}
-            </div>
-          </div>
-        </button>
-
-        {/* Right Stacked Cards: مستوى (Blue) & الشارة (Emerald Green) */}
-        <div className="flex flex-col gap-2.5 h-38">
-          {/* Top-Right: مستوى (Level) */}
-          <button
-            onClick={() => setSubModal('levels')}
-            className="flex-1 rounded-2xl bg-gradient-to-r from-sky-400 via-cyan-400 to-blue-500 px-3.5 py-2 flex items-center justify-between shadow-md border border-sky-200 active:scale-95 transition-transform"
-          >
-            <div className="w-11 h-11 rounded-xl bg-white/25 border border-white/40 flex items-center justify-center text-2xl shadow">
-              🏆
-            </div>
-            <div className="text-right">
-              <div className="text-base font-black text-white drop-shadow">مستوى</div>
-              <div className="text-[10px] font-bold text-sky-100">
-                Lv.{currentUser.level || 41} الثروة والجاذبية
-              </div>
-            </div>
-          </button>
-
-          {/* Bottom-Right: الشارة (Badges) */}
-          <button
-            onClick={() => setSubModal('badges')}
-            className="flex-1 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-800 px-3.5 py-2 flex items-center justify-between shadow-md border border-emerald-400/50 active:scale-95 transition-transform"
-          >
-            <div className="w-11 h-11 rounded-xl bg-amber-400/20 border border-amber-300/60 flex items-center justify-center text-2xl shadow">
-              👑
-            </div>
-            <div className="text-right">
-              <div className="text-base font-black text-white drop-shadow">الشارة</div>
-              <div className="text-[10px] font-bold text-emerald-200">
-                {equippedBadges.length} أوسمة مفعلة
-              </div>
-            </div>
-          </button>
-        </div>
-      </div>
-
-      {/* ===================================================================== */}
-      {/* 5. SIX 3D ACTION GRID ICONS (المتجر | CP | حقيبة | ايدي مميز | دعوة | وكالة) */}
-      {/* ===================================================================== */}
-      <div className="px-3.5 mt-3">
-        <div className="bg-white rounded-3xl p-4 shadow-[0_8px_25px_rgba(15,23,42,0.05)] border border-white grid grid-cols-4 gap-y-4 gap-x-2 text-center">
-          {/* ايدي مميز */}
-          <button
-            onClick={() => setSubModal('special_id')}
-            className="flex flex-col items-center gap-1.5 active:scale-90 transition-transform"
-          >
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-b from-purple-400 to-fuchsia-600 text-white flex items-center justify-center shadow-md border border-purple-200">
-              <span className="text-xs font-black px-1.5 py-0.5 rounded bg-white/20">ID</span>
-            </div>
-            <span className="text-xs font-bold text-slate-700">ايدي مميز</span>
-          </button>
-
-          {/* حقيبة */}
-          <button
-            onClick={() => setActiveModal('backpack')}
-            className="flex flex-col items-center gap-1.5 active:scale-90 transition-transform"
-          >
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-b from-indigo-400 to-purple-600 text-white flex items-center justify-center text-xl shadow-md border border-indigo-200">
-              🎒
-            </div>
-            <span className="text-xs font-bold text-slate-700">حقيبة</span>
-          </button>
-
-          {/* CP */}
-          <button
-            onClick={() => setSubModal('cp_space')}
-            className="flex flex-col items-center gap-1.5 active:scale-90 transition-transform"
-          >
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-b from-pink-400 to-rose-500 text-white flex items-center justify-center text-xl shadow-md border border-pink-200">
-              💞
-            </div>
-            <span className="text-xs font-bold text-slate-700">CP</span>
-          </button>
-
-          {/* المتجر */}
-          <button
-            onClick={() => setActiveModal('store')}
-            className="flex flex-col items-center gap-1.5 active:scale-90 transition-transform"
-          >
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-b from-sky-400 to-blue-600 text-white flex items-center justify-center text-xl shadow-md border border-sky-200">
-              🏪
-            </div>
-            <span className="text-xs font-bold text-slate-700">المتجر</span>
-          </button>
-
-          {/* غرفتي الصوتية */}
-          <button
-            onClick={() => joinRoom('room_tyy')}
-            className="flex flex-col items-center gap-1.5 active:scale-90 transition-transform"
-          >
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-b from-amber-400 to-orange-500 text-white flex items-center justify-center shadow-md border border-amber-200">
-              <Home className="w-6 h-6" />
-            </div>
-            <span className="text-xs font-bold text-slate-700">غرفتي</span>
-          </button>
-
-          {/* الرسائل */}
-          <button
-            onClick={() => setActiveModal('messages')}
-            className="flex flex-col items-center gap-1.5 active:scale-90 transition-transform"
-          >
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-b from-cyan-400 to-teal-600 text-white flex items-center justify-center text-xl shadow-md border border-cyan-200">
-              💬
-            </div>
-            <span className="text-xs font-bold text-slate-700">رسائلي</span>
-          </button>
-
-          {/* وكالة */}
-          <button
-            onClick={() => setActiveModal('agency')}
-            className="flex flex-col items-center gap-1.5 active:scale-90 transition-transform"
-          >
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-b from-emerald-400 to-teal-600 text-white flex items-center justify-center text-xl shadow-md border border-emerald-200">
-              🏛️
-            </div>
-            <span className="text-xs font-bold text-slate-700">وكالة</span>
-          </button>
-
-          {/* دعوة */}
-          <button
-            onClick={() => setSubModal('invite')}
-            className="flex flex-col items-center gap-1.5 active:scale-90 transition-transform"
-          >
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-b from-orange-400 to-rose-500 text-white flex items-center justify-center text-xl shadow-md border border-orange-200">
-              🎁
-            </div>
-            <span className="text-xs font-bold text-slate-700">دعوة</span>
-          </button>
-        </div>
-      </div>
-
-      {/* ===================================================================== */}
-      {/* 6. BOTTOM SETTINGS & ABOUT LIST (Matches Screenshot #2)               */}
-      {/* ===================================================================== */}
-      <div className="px-3.5 mt-3">
-        <div className="bg-white rounded-3xl shadow-[0_8px_25px_rgba(15,23,42,0.05)] border border-white divide-y divide-slate-100 overflow-hidden">
-          <button
-            onClick={() => setSubModal('settings')}
-            className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-slate-50 transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4 text-slate-400" />
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-black text-slate-800">إعدادات</span>
-              <div className="w-8 h-8 rounded-xl bg-teal-500/15 text-teal-600 flex items-center justify-center text-lg">
-                ⚙️
-              </div>
-            </div>
-          </button>
-
-          <button
-            onClick={() => setSubModal('about')}
-            className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-slate-50 transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4 text-slate-400" />
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-black text-slate-800">حول ooyuni chat</span>
-              <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-600 flex items-center justify-center text-lg">
-                ℹ️
-              </div>
-            </div>
-          </button>
-        </div>
-      </div>
-
-      {/* ===================================================================== */}
-      {/* INTERACTIVE SUB-MODALS FOR EVERY FEATURE ON THE "أنا" SCREEN          */}
-      {/* ===================================================================== */}
+      {/* INTERACTIVE SUB-MODALS FOR EVERY FEATURE ON PROFILE SCREEN */}
       {subModal !== 'none' && (
         <div
-          className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
           onClick={() => setSubModal('none')}
         >
           <div
-            className="w-full max-w-md bg-slate-950 text-white border-t-2 border-amber-400 rounded-t-3xl sm:rounded-3xl p-5 space-y-4 max-h-[85vh] overflow-y-auto shadow-2xl animate-in slide-in-from-bottom duration-200"
+            className="w-full max-w-lg bg-[#0d1220] text-white border-t-2 sm:border border-amber-400/40 rounded-t-3xl sm:rounded-3xl p-5 space-y-4 max-h-[86vh] overflow-y-auto shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <button
-                onClick={() => setSubModal('none')}
-                className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-slate-300 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
               <h3 className="text-base font-black text-amber-300">
                 {subModal === 'edit_profile' && '✏️ تعديل الملف الشخصي'}
                 {subModal === 'social_list' && '👥 القائمة الاجتماعية'}
@@ -596,19 +570,26 @@ export const ProfileScreen: React.FC = () => {
                 {subModal === 'cp_space' && '💞 مساحة CP وشريك الروح'}
                 {subModal === 'special_id' && '🆔 متجر الأيدي المميز'}
                 {subModal === 'invite' && '🎁 دعوة الأصدقاء ومكافآت الكوينز'}
+                {subModal === 'records' && '📋 سجلات الحساب والربح'}
                 {subModal === 'settings' && '⚙️ إعدادات الحساب والتطبيق'}
                 {subModal === 'about' && 'ℹ️ حول ooyuni chat والدعم الفني'}
               </h3>
+              <button
+                onClick={() => setSubModal('none')}
+                className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-slate-300 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
-            {/* 1. EDIT PROFILE MODAL */}
+            {/* 1. EDIT PROFILE */}
             {subModal === 'edit_profile' && (
               <form onSubmit={handleSaveProfile} className="space-y-3.5 text-right">
                 <div>
                   <label className="block text-xs font-bold text-slate-300 mb-1.5">
                     اختر صورة رمزية أو ضع رابط صورة:
                   </label>
-                  <div className="flex items-center justify-end gap-2 pb-2">
+                  <div className="flex items-center justify-start gap-2 pb-2">
                     {avatarPresets.map((av, i) => (
                       <button
                         type="button"
@@ -618,7 +599,12 @@ export const ProfileScreen: React.FC = () => {
                           editAvatar === av ? 'border-amber-400 scale-110' : 'border-white/20 opacity-70'
                         }`}
                       >
-                        <img src={av} alt="" className="w-full h-full object-cover" />
+                        <img
+                          src={av}
+                          alt=""
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
                       </button>
                     ))}
                   </div>
@@ -639,26 +625,54 @@ export const ProfileScreen: React.FC = () => {
                     <label className="block text-xs font-bold text-slate-300 mb-1">العمر:</label>
                     <input
                       type="number"
+                      min={13}
+                      max={99}
                       value={editAge}
-                      onChange={(e) => setEditAge(Number(e.target.value) || 25)}
-                      className="w-full rounded-xl bg-slate-900 border border-white/15 px-3 py-2 text-sm text-white text-right focus:border-amber-400 focus:outline-none"
+                      onChange={(e) => setEditAge(Number(e.target.value) || 24)}
+                      className="w-full rounded-xl bg-slate-900 border border-white/15 px-3 py-2 text-sm text-white text-right font-mono tabular-nums focus:border-amber-400 focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">الدولة:</label>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">البلد:</label>
                     <select
                       value={editCountry}
                       onChange={(e) => setEditCountry(e.target.value)}
                       className="w-full rounded-xl bg-slate-900 border border-white/15 px-3 py-2 text-sm text-white text-right focus:border-amber-400 focus:outline-none"
                     >
-                      <option value="🇩🇿 الجزائر">🇩🇿 الجزائر</option>
-                      <option value="🇪🇬 مصر">🇪🇬 مصر</option>
-                      <option value="🇸🇦 السعودية">🇸🇦 السعودية</option>
-                      <option value="🇦🇪 الإمارات">🇦🇪 الإمارات</option>
-                      <option value="🇮🇶 العراق">🇮🇶 العراق</option>
-                      <option value="🇲🇦 المغرب">🇲🇦 المغرب</option>
-                      <option value="🇰🇼 الكويت">🇰🇼 الكويت</option>
+                      {VOICE_COUNTRIES.map((c) => (
+                        <option key={c.name} value={c.name}>
+                          {c.flag} {c.name}
+                        </option>
+                      ))}
                     </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">الجنس:</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditGender('female')}
+                      className={`py-2 rounded-xl border text-xs font-black transition-colors ${
+                        editGender === 'female'
+                          ? 'bg-rose-500/20 border-rose-400 text-rose-200'
+                          : 'bg-slate-900 border-white/15 text-slate-300'
+                      }`}
+                    >
+                      ♀ أنثى
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditGender('male')}
+                      className={`py-2 rounded-xl border text-xs font-black transition-colors ${
+                        editGender === 'male'
+                          ? 'bg-sky-500/20 border-sky-400 text-sky-200'
+                          : 'bg-slate-900 border-white/15 text-slate-300'
+                      }`}
+                    >
+                      ♂ ذكر
+                    </button>
                   </div>
                 </div>
 
@@ -681,7 +695,7 @@ export const ProfileScreen: React.FC = () => {
               </form>
             )}
 
-            {/* 2. SOCIAL LIST MODAL (Friends / Following / Fans / Visitors) */}
+            {/* 2. SOCIAL LIST */}
             {subModal === 'social_list' && (
               <div className="space-y-3">
                 <div className="grid grid-cols-4 gap-1.5 bg-slate-900 p-1 rounded-2xl">
@@ -711,7 +725,28 @@ export const ProfileScreen: React.FC = () => {
                       key={u.id}
                       className="p-2.5 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between"
                     >
+                      <div className="flex items-center gap-2.5 text-right">
+                        <img
+                          src={u.avatar}
+                          alt={u.displayName}
+                          referrerPolicy="no-referrer"
+                          className="w-10 h-10 rounded-full object-cover ring-2 ring-amber-400/60"
+                        />
+                        <div>
+                          <div className="text-xs font-black text-white">{u.displayName}</div>
+                          <div className="text-[10px] text-amber-400 font-mono">
+                            ID:{u.userCode} • VIP{u.vipLevel}
+                          </div>
+                        </div>
+                      </div>
+
                       <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => showToast(`تم إرسال تحية إلى ${u.displayName} 👋`)}
+                          className="px-2.5 py-1.5 rounded-xl bg-teal-500/20 text-teal-300 font-black text-[11px]"
+                        >
+                          مراسلة 💬
+                        </button>
                         <button
                           onClick={() => {
                             setSubModal('none');
@@ -722,26 +757,6 @@ export const ProfileScreen: React.FC = () => {
                         >
                           عرض الملف
                         </button>
-                        <button
-                          onClick={() => showToast(`تم إرسال تحية إلى ${u.displayName} 👋`)}
-                          className="px-2.5 py-1.5 rounded-xl bg-teal-500/20 text-teal-300 font-black text-[11px]"
-                        >
-                          مراسلة 💬
-                        </button>
-                      </div>
-
-                      <div className="flex items-center gap-2.5 text-right">
-                        <div>
-                          <div className="text-xs font-black text-white">{u.displayName}</div>
-                          <div className="text-[10px] text-amber-400 font-mono">
-                            ID:{u.userCode} • VIP{u.vipLevel}
-                          </div>
-                        </div>
-                        <img
-                          src={u.avatar}
-                          alt={u.displayName}
-                          className="w-10 h-10 rounded-full object-cover ring-2 ring-amber-400/60"
-                        />
                       </div>
                     </div>
                   ))}
@@ -749,14 +764,16 @@ export const ProfileScreen: React.FC = () => {
               </div>
             )}
 
-            {/* 3. LEVELS (WEALTH & CHARM) MODAL */}
+            {/* 3. LEVELS */}
             {subModal === 'levels' && (
               <div className="space-y-4 text-right">
                 <div className="p-4 rounded-2xl bg-gradient-to-r from-sky-900/60 to-indigo-900/60 border border-sky-400/40 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-mono font-black text-sky-300">172,670 / 263,990 XP</span>
                     <span className="text-sm font-black text-white">
                       🏆 مستوى الثروة: Lv.{currentUser.level || 41}
+                    </span>
+                    <span className="text-xs font-mono font-black text-sky-300">
+                      172,670 / 263,990 XP
                     </span>
                   </div>
                   <div className="w-full h-3 rounded-full bg-slate-900 overflow-hidden border border-sky-400/30">
@@ -769,15 +786,14 @@ export const ProfileScreen: React.FC = () => {
 
                 <div className="p-4 rounded-2xl bg-gradient-to-r from-pink-900/60 to-purple-900/60 border border-pink-400/40 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-mono font-black text-pink-300">84,500 / 120,000 XP</span>
                     <span className="text-sm font-black text-white">🔥 مستوى الجاذبية (السحر): Lv.7</span>
+                    <span className="text-xs font-mono font-black text-pink-300">
+                      84,500 / 120,000 XP
+                    </span>
                   </div>
                   <div className="w-full h-3 rounded-full bg-slate-900 overflow-hidden border border-pink-400/30">
                     <div className="h-full w-3/4 bg-gradient-to-r from-pink-500 to-amber-400" />
                   </div>
-                  <p className="text-[11px] text-slate-300">
-                    استلام الهدايا والقلوب على المايك يرفع مستوى الجاذبية الخاص بك!
-                  </p>
                 </div>
 
                 <button
@@ -800,7 +816,7 @@ export const ProfileScreen: React.FC = () => {
               </div>
             )}
 
-            {/* 4. BADGES MODAL */}
+            {/* 4. BADGES */}
             {subModal === 'badges' && (
               <div className="space-y-3 text-right">
                 <p className="text-xs text-slate-300">
@@ -847,7 +863,7 @@ export const ProfileScreen: React.FC = () => {
               </div>
             )}
 
-            {/* 5. CP COUPLE SPACE MODAL */}
+            {/* 5. CP COUPLE SPACE */}
             {subModal === 'cp_space' && (
               <div className="space-y-4 text-center">
                 <div className="p-4 rounded-3xl bg-gradient-to-b from-pink-900/50 via-rose-950/60 to-slate-950 border border-pink-400/50 space-y-3">
@@ -857,6 +873,7 @@ export const ProfileScreen: React.FC = () => {
                       <img
                         src={currentUser.avatar}
                         alt={currentUser.displayName}
+                        referrerPolicy="no-referrer"
                         className="w-16 h-16 rounded-full object-cover ring-2 ring-amber-400"
                       />
                       <span className="text-xs font-black text-white mt-1">
@@ -865,7 +882,7 @@ export const ProfileScreen: React.FC = () => {
                     </div>
 
                     <div className="flex flex-col items-center">
-                      <span className="text-3xl animate-pulse">💞</span>
+                      <span className="text-3xl">💞</span>
                       <span className="text-[10px] font-mono font-black text-pink-300 mt-1">
                         {cpLovePoints.toLocaleString()} نقطة حب
                       </span>
@@ -875,6 +892,7 @@ export const ProfileScreen: React.FC = () => {
                       <img
                         src={cpPartner.avatar}
                         alt={cpPartner.displayName}
+                        referrerPolicy="no-referrer"
                         className="w-16 h-16 rounded-full object-cover ring-2 ring-pink-400"
                       />
                       <span className="text-xs font-black text-white mt-1">
@@ -930,7 +948,7 @@ export const ProfileScreen: React.FC = () => {
               </div>
             )}
 
-            {/* 6. SPECIAL ID STORE MODAL (ايدي مميز) */}
+            {/* 6. SPECIAL ID STORE */}
             {subModal === 'special_id' && (
               <div className="space-y-3 text-right">
                 <p className="text-xs text-slate-300">
@@ -988,7 +1006,7 @@ export const ProfileScreen: React.FC = () => {
               </div>
             )}
 
-            {/* 7. INVITE FRIENDS MODAL */}
+            {/* 7. INVITE */}
             {subModal === 'invite' && (
               <div className="space-y-4 text-center">
                 <div className="p-4 rounded-3xl bg-gradient-to-b from-amber-500/20 to-slate-900 border border-amber-400/50 space-y-2">
@@ -997,7 +1015,8 @@ export const ProfileScreen: React.FC = () => {
                     ادعُ أصدقاءك واربح 5,000 كوينز عن كل صديق!
                   </h4>
                   <p className="text-xs text-slate-300">
-                    كود الدعوة الخاص بك: <span className="font-mono font-black text-white">OOYUNI-{currentUser.userCode}</span>
+                    كود الدعوة الخاص بك:{' '}
+                    <span className="font-mono font-black text-white">OOYUNI-{currentUser.userCode}</span>
                   </p>
                   <button
                     onClick={() => {
@@ -1032,10 +1051,86 @@ export const ProfileScreen: React.FC = () => {
               </div>
             )}
 
-            {/* 8. SETTINGS MODAL */}
+            {/* 8. RECORDS & ACTIVITY */}
+            {subModal === 'records' && (
+              <div className="space-y-3 text-right">
+                <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-2xl overflow-x-auto no-scrollbar">
+                  {[
+                    { id: 'all', label: 'الكل' },
+                    { id: 'lucky_win', label: 'هدايا الحظ 🍀' },
+                    { id: 'recharge', label: 'الشحن 🪙' },
+                    { id: 'gift', label: 'الهدايا 🎁' },
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      onClick={() => setRecordsFilter(f.id as typeof recordsFilter)}
+                      className={`flex-1 py-1.5 px-2.5 rounded-xl text-xs font-bold whitespace-nowrap transition-colors ${
+                        recordsFilter === f.id
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                  {myRecords.length === 0 ? (
+                    <div className="py-10 text-center text-xs text-slate-400">
+                      لا توجد سجلات مطابقة في هذا القسم حالياً.
+                    </div>
+                  ) : (
+                    myRecords.slice(0, 30).map((tx) => (
+                      <div
+                        key={tx.id}
+                        className="p-3 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-between gap-2 text-xs"
+                      >
+                        <div className="text-right min-w-0">
+                          <div className="font-bold text-white flex items-center gap-1.5">
+                            {tx.type === 'lucky_win' && (
+                              <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                            )}
+                            <span className="truncate">{tx.details}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                            {tx.timestamp}
+                          </div>
+                        </div>
+
+                        <div className="text-left shrink-0 font-mono tabular-nums font-black">
+                          {tx.coinsDelta !== 0 && (
+                            <div className={tx.coinsDelta > 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                              {tx.coinsDelta > 0
+                                ? `+${tx.coinsDelta.toLocaleString('en-US')}`
+                                : tx.coinsDelta.toLocaleString('en-US')}{' '}
+                              🪙
+                            </div>
+                          )}
+                          {tx.diamondsDelta !== 0 && (
+                            <div className="text-fuchsia-400">
+                              {tx.diamondsDelta > 0
+                                ? `+${tx.diamondsDelta.toLocaleString('en-US')}`
+                                : tx.diamondsDelta.toLocaleString('en-US')}{' '}
+                              💎
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 9. SETTINGS */}
             {subModal === 'settings' && (
               <div className="space-y-3 text-right">
                 <div className="p-3 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-bold">
+                    <Volume2 className="w-4 h-4 text-amber-400" />
+                    <span>المؤثرات الصوتية داخل التطبيق</span>
+                  </div>
                   <input
                     type="checkbox"
                     checked={soundEnabled}
@@ -1045,13 +1140,13 @@ export const ProfileScreen: React.FC = () => {
                     }}
                     className="w-4 h-4 accent-amber-400"
                   />
-                  <div className="flex items-center gap-2 text-xs font-bold">
-                    <span>المؤثرات الصوتية داخل التطبيق</span>
-                    <Volume2 className="w-4 h-4 text-amber-400" />
-                  </div>
                 </div>
 
                 <div className="p-3 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-bold">
+                    <Bell className="w-4 h-4 text-teal-400" />
+                    <span>إشعارات الهدايا والرسائل الخاصة</span>
+                  </div>
                   <input
                     type="checkbox"
                     checked={notifEnabled}
@@ -1061,13 +1156,13 @@ export const ProfileScreen: React.FC = () => {
                     }}
                     className="w-4 h-4 accent-amber-400"
                   />
-                  <div className="flex items-center gap-2 text-xs font-bold">
-                    <span>إشعارات الهدايا والرسائل الخاصة</span>
-                    <Bell className="w-4 h-4 text-teal-400" />
-                  </div>
                 </div>
 
                 <div className="p-3 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-bold">
+                    <Lock className="w-4 h-4 text-purple-400" />
+                    <span>إخفاء هويتي عند زيارة ملفات الآخرين (ميزة VIP)</span>
+                  </div>
                   <input
                     type="checkbox"
                     checked={hideVisitorStatus}
@@ -1077,10 +1172,6 @@ export const ProfileScreen: React.FC = () => {
                     }}
                     className="w-4 h-4 accent-amber-400"
                   />
-                  <div className="flex items-center gap-2 text-xs font-bold">
-                    <span>إخفاء هويتي عند زيارة ملفات الآخرين (ميزة VIP)</span>
-                    <Lock className="w-4 h-4 text-purple-400" />
-                  </div>
                 </div>
 
                 <button
@@ -1089,23 +1180,38 @@ export const ProfileScreen: React.FC = () => {
                   }}
                   className="w-full p-3 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between hover:bg-white/10"
                 >
-                  <span className="text-xs text-emerald-400 font-mono">12.4 MB</span>
                   <div className="flex items-center gap-2 text-xs font-bold text-rose-300">
-                    <span>مسح التخزين المؤقت (Clear Cache)</span>
                     <Trash2 className="w-4 h-4" />
+                    <span>مسح التخزين المؤقت (Clear Cache)</span>
                   </div>
+                  <span className="text-xs text-emerald-400 font-mono">12.4 MB</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setSubModal('none');
+                    if (firebaseUser) {
+                      void signOutCloud();
+                    } else {
+                      returnToAuthScreen();
+                    }
+                  }}
+                  className="w-full p-3 rounded-2xl bg-rose-500/15 border border-rose-400/35 flex items-center justify-center gap-2 text-xs font-black text-rose-200 hover:bg-rose-500/25 transition-colors"
+                >
+                  {firebaseUser ? <LogOut className="w-4 h-4" /> : <LogIn className="w-4 h-4" />}
+                  <span>{firebaseUser ? 'تسجيل الخروج والعودة لصفحة الدخول' : 'الانتقال لصفحة تسجيل الدخول'}</span>
                 </button>
               </div>
             )}
 
-            {/* 9. ABOUT MODAL */}
+            {/* 10. ABOUT */}
             {subModal === 'about' && (
               <div className="space-y-3 text-center">
-                <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-tr from-teal-400 to-emerald-600 flex items-center justify-center text-3xl shadow-lg">
+                <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-tr from-amber-400 to-orange-600 flex items-center justify-center text-3xl shadow-lg">
                   🎙️
                 </div>
                 <h4 className="text-base font-black text-white">ooyuni chat • عيوني شات</h4>
-                <p className="text-xs text-slate-400">الإصدار الملكي v4.8.0 (3D Pro Edition)</p>
+                <p className="text-xs text-slate-400">الإصدار الملكي v4.8.0 VIP</p>
                 <p className="text-xs text-slate-300 leading-relaxed">
                   منصة الدردشة الصوتية الاجتماعية الأولى للغرف الصوتية التفاعلية، هدايا الحظ، الصواريخ، الألعاب الحية، ونظام الوكالات وVIP.
                 </p>
@@ -1115,7 +1221,7 @@ export const ProfileScreen: React.FC = () => {
                       setSubModal('none');
                       setActiveModal('messages');
                     }}
-                    className="px-4 py-2 rounded-xl bg-teal-500 text-slate-950 font-black text-xs"
+                    className="px-4 py-2 rounded-xl bg-amber-400 text-slate-950 font-black text-xs"
                   >
                     التواصل مع خدمة العملاء 💬
                   </button>

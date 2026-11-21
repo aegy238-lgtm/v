@@ -3,6 +3,8 @@
 class SoundEngine {
   private ctx: AudioContext | null = null;
   private isMuted: boolean = false;
+  private activeAudioSet: Set<HTMLAudioElement> = new Set();
+  private previewAudioEl: HTMLAudioElement | null = null;
 
   private getContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -20,11 +22,120 @@ class SoundEngine {
 
   public toggleMute(): boolean {
     this.isMuted = !this.isMuted;
+    if (this.isMuted) {
+      this.stopAllCustomAudio();
+    }
     return this.isMuted;
   }
 
   public getIsMuted(): boolean {
     return this.isMuted;
+  }
+
+  public stopAllCustomAudio(): void {
+    this.activeAudioSet.forEach((audioEl) => {
+      try {
+        audioEl.pause();
+        audioEl.currentTime = 0;
+      } catch {
+        // ignore audio cleanup errors
+      }
+    });
+    this.activeAudioSet.clear();
+    this.stopPreviewAudio();
+  }
+
+  public stopPreviewAudio(): void {
+    if (this.previewAudioEl) {
+      try {
+        this.previewAudioEl.pause();
+        this.previewAudioEl.currentTime = 0;
+      } catch {
+        // ignore preview cleanup errors
+      }
+      this.previewAudioEl = null;
+    }
+  }
+
+  public previewAudioUrl(url: string, onEnded?: () => void): boolean {
+    const clean = url.trim();
+    if (!clean || typeof Audio === 'undefined') return false;
+    this.stopPreviewAudio();
+    try {
+      const el = new Audio(clean);
+      el.volume = 0.9;
+      el.preload = 'auto';
+      el.onended = () => {
+        if (this.previewAudioEl === el) this.previewAudioEl = null;
+        onEnded?.();
+      };
+      el.onerror = () => {
+        if (this.previewAudioEl === el) this.previewAudioEl = null;
+        onEnded?.();
+      };
+      this.previewAudioEl = el;
+      void el.play().catch(() => {
+        onEnded?.();
+      });
+      return true;
+    } catch {
+      onEnded?.();
+      return false;
+    }
+  }
+
+  public playGiftHitAudio(
+    fallbackType: 'chime' | 'fanfare' | 'roar' | 'magic' | 'laser' | 'applause' | 'slot' | 'dice',
+    customSoundUrl?: string,
+    forceMuted = false
+  ): void {
+    if (this.isMuted || forceMuted) return;
+
+    const cleanUrl = customSoundUrl?.trim();
+    if (cleanUrl && typeof Audio !== 'undefined') {
+      try {
+        // Cap simultaneous overlapping custom gift audio tracks cleanly
+        if (this.activeAudioSet.size >= 4) {
+          const oldest = this.activeAudioSet.values().next().value;
+          if (oldest) {
+            oldest.pause();
+            this.activeAudioSet.delete(oldest);
+          }
+        }
+
+        const audio = new Audio(cleanUrl);
+        audio.volume = 0.92;
+        audio.preload = 'auto';
+        this.activeAudioSet.add(audio);
+
+        let fellBack = false;
+        const triggerFallback = () => {
+          this.activeAudioSet.delete(audio);
+          if (!fellBack) {
+            fellBack = true;
+            this.playGiftSound(fallbackType);
+          }
+        };
+
+        audio.onended = () => {
+          this.activeAudioSet.delete(audio);
+        };
+        audio.onerror = triggerFallback;
+
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+          playPromise.catch(() => {
+            triggerFallback();
+          });
+        }
+        return;
+      } catch {
+        this.playGiftSound(fallbackType);
+        return;
+      }
+    }
+
+    this.playGiftSound(fallbackType);
   }
 
   // Mic click toggle
@@ -304,6 +415,79 @@ class SoundEngine {
 
       osc.start(now);
       osc.stop(now + 0.45);
+    });
+  }
+
+  // Celebratory Lucky Jackpot Splash Sound ("صوت طشة") + Royal Coin Cascade
+  public playLuckySplashJackpot() {
+    if (this.isMuted) return;
+    const ctx = this.getContext();
+    if (!ctx) return;
+
+    const now = ctx.currentTime;
+
+    // 1. Crisp Splash Burst (Filtered white noise sweep for "طشة")
+    const splashDuration = 0.75;
+    const bufferSize = Math.floor(ctx.sampleRate * splashDuration);
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      const t = i / bufferSize;
+      // Fast attack, bubbly tail decay
+      const env = Math.sin(Math.min(1, t * 8) * Math.PI * 0.5) * Math.exp(-t * 3.8);
+      data[i] = (Math.random() * 2 - 1) * env;
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const splashFilter = ctx.createBiquadFilter();
+    splashFilter.type = 'bandpass';
+    splashFilter.frequency.setValueAtTime(420, now);
+    splashFilter.frequency.exponentialRampToValueAtTime(2800, now + 0.14);
+    splashFilter.frequency.exponentialRampToValueAtTime(950, now + 0.65);
+    splashFilter.Q.value = 1.6;
+
+    const splashGain = ctx.createGain();
+    splashGain.gain.setValueAtTime(0.42, now);
+    splashGain.gain.exponentialRampToValueAtTime(0.01, now + splashDuration);
+
+    noise.connect(splashFilter);
+    splashFilter.connect(splashGain);
+    splashGain.connect(ctx.destination);
+    noise.start(now);
+
+    // 2. Impact Boom (Sub punch)
+    const boomOsc = ctx.createOscillator();
+    const boomGain = ctx.createGain();
+    boomOsc.type = 'sine';
+    boomOsc.frequency.setValueAtTime(140, now);
+    boomOsc.frequency.exponentialRampToValueAtTime(45, now + 0.35);
+    boomGain.gain.setValueAtTime(0.32, now);
+    boomGain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+    boomOsc.connect(boomGain);
+    boomGain.connect(ctx.destination);
+    boomOsc.start(now);
+    boomOsc.stop(now + 0.4);
+
+    // 3. Sparkling Golden Coin Cascade Chimes
+    const coinNotes = [1046.5, 1318.51, 1567.98, 2093.0, 2637.02, 3135.96, 2093.0];
+    coinNotes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const noteStart = now + 0.06 + idx * 0.055;
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, noteStart);
+
+      gain.gain.setValueAtTime(0.16, noteStart);
+      gain.gain.exponentialRampToValueAtTime(0.001, noteStart + 0.48);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(noteStart);
+      osc.stop(noteStart + 0.52);
     });
   }
 }

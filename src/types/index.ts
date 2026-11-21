@@ -41,6 +41,7 @@ export interface User {
   activeFrameId?: string;
   activeEntranceId?: string;
   activeBadgeId?: string;
+  activeBubbleId?: string;
   isMuted: boolean;
   isBanned: boolean;
   online: boolean;
@@ -111,12 +112,38 @@ export interface GiftItem {
   coinPrice: number;
   diamondReward: number;
   icon: string; // Emoji / SVG / Visual representation
+  imageUrl?: string; // Optional external/uploaded gift image/GIF/WebP URL
+  videoUrl?: string; // Optional MP4/WebM/animated gift URL
+  soundUrl?: string; // Optional custom audio URL played when gift is thrown
+  effectDurationSec?: number; // Custom full-room display duration in seconds for GIF/WebP/image gifts
   accentColor: string;
   animationType: 'particle' | 'svga' | 'luxury_banner' | 'explosion' | 'lollipop_matrix';
   soundEffect: SoundEffectType;
   vipMinLevel?: number;
   isLucky?: boolean;
   descriptionAr: string;
+}
+
+export interface LuckyGiftConfig {
+  winRatePercent: number; // Overall probability 0-100 of winning coins on a lucky gift
+  lowMultiplierWeight: number; // Weight % for 8X-25X
+  midMultiplierWeight: number; // Weight % for 66X
+  highMultiplierWeight: number; // Weight % for 188X-250X
+  megaComboThreshold: number; // Default 1,000,000 coins
+}
+
+export interface GlobalJackpotBannerState {
+  id: string;
+  winnerName: string;
+  winnerAvatar: string;
+  roomTitle: string;
+  giftName: string;
+  giftIcon: string;
+  giftImageUrl?: string;
+  amountWon: number;
+  comboTotalCoins: number;
+  multiplier: number;
+  createdAt: number;
 }
 
 export interface VipTier {
@@ -140,6 +167,8 @@ export interface StoreItem {
   priceCoins: number;
   durationDays: number;
   previewUrl: string;
+  videoUrl?: string;
+  effectDurationSec?: number; // Custom entrance duration in seconds for GIF/WebP/image entrances
   previewGradient: string;
   icon: string;
   vipLevelReq?: number;
@@ -166,6 +195,7 @@ export interface Transaction {
     | 'recharge'
     | 'gift_sent'
     | 'gift_received'
+    | 'lucky_win'
     | 'vip_purchase'
     | 'item_purchase'
     | 'exchange_diamonds'

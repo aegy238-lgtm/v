@@ -1,70 +1,61 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
+import { Home, Gamepad2, MessageSquare, User as UserIcon } from 'lucide-react';
 
 export const BottomNavBar: React.FC = () => {
-  const { activeTab, setActiveTab } = useApp();
+  const { activeTab, setActiveTab, transactions, currentUser } = useApp();
+
+  const recentAlertCount = Math.min(
+    99,
+    transactions.filter((tx) => tx.userId === currentUser.id).length
+  );
+
+  const navItems = [
+    { id: 'room' as const, label: 'الغرف', icon: Home },
+    { id: 'game' as const, label: 'الألعاب', icon: Gamepad2 },
+    {
+      id: 'chat' as const,
+      label: 'المحادثات',
+      icon: MessageSquare,
+      badge: recentAlertCount > 0 ? recentAlertCount : undefined,
+    },
+    { id: 'me' as const, label: 'ملفي', icon: UserIcon },
+  ];
 
   return (
-    <div className="fixed bottom-0 inset-x-0 z-40 max-w-md mx-auto bg-white/95 backdrop-blur-md border-t border-slate-100 px-6 py-2.5 flex items-center justify-between shadow-[0_-4px_20px_rgba(0,0,0,0.04)]">
-      
-      {/* 1. Profile (Leftmost in RTL layout as shown in video 00:34-00:47) */}
-      <button
-        onClick={() => setActiveTab('me')}
-        className={`relative p-1.5 transition-transform active:scale-90 ${
-          activeTab === 'me' ? 'text-teal-500 scale-110' : 'text-slate-400 hover:text-slate-600'
-        }`}
-        title="ملفي"
-      >
-        <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-          <circle cx="12" cy="7" r="4" />
-        </svg>
-      </button>
+    <nav
+      aria-label="التنقل الرئيسي"
+      className="fixed bottom-0 inset-x-0 md:bottom-4 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-full md:max-w-lg z-40 bg-[#0d1220]/95 backdrop-blur-xl border-t md:border border-white/12 md:rounded-2xl px-4 py-2 flex items-center justify-around shadow-[0_-8px_30px_rgba(0,0,0,0.55)] md:shadow-[0_18px_50px_rgba(0,0,0,0.7)] font-tajawal"
+    >
+      {navItems.map((item) => {
+        const Icon = item.icon;
+        const isActive = activeTab === item.id;
 
-      {/* 2. Chat / Messages (With red badge "3" as shown in video 00:35-00:47) */}
-      <button
-        onClick={() => setActiveTab('chat')}
-        className={`relative p-1.5 transition-transform active:scale-90 ${
-          activeTab === 'chat' ? 'text-teal-500 scale-110' : 'text-slate-400 hover:text-slate-600'
-        }`}
-        title="محادثة"
-      >
-        <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-          <line x1="9" y1="10" x2="15" y2="10" />
-        </svg>
-        <span className="absolute -top-0.5 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white font-black text-[10px] flex items-center justify-center shadow-xs">
-          3
-        </span>
-      </button>
+        return (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setActiveTab(item.id)}
+            className={`relative min-w-[64px] min-h-[46px] px-3 py-1.5 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all active:scale-95 ${
+              isActive
+                ? 'text-amber-300 bg-amber-400/12 border border-amber-400/30 shadow-[0_0_20px_rgba(245,158,11,0.16)]'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent'
+            }`}
+            title={item.label}
+          >
+            <Icon className={`w-5 h-5 ${isActive ? 'stroke-[2.4]' : 'stroke-[1.9]'}`} />
+            <span className={`text-[11px] leading-tight ${isActive ? 'font-bold' : 'font-medium'}`}>
+              {item.label}
+            </span>
 
-      {/* 3. Moments / Games Circle Icon */}
-      <button
-        onClick={() => setActiveTab('game')}
-        className={`relative p-1.5 transition-transform active:scale-90 ${
-          activeTab === 'game' ? 'text-teal-500 scale-110' : 'text-slate-400 hover:text-slate-600'
-        }`}
-        title="لحظات وألعاب"
-      >
-        <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-          <circle cx="12" cy="12" r="9" />
-          <circle cx="12" cy="12" r="3.5" fill={activeTab === 'game' ? 'currentColor' : 'none'} />
-        </svg>
-      </button>
-
-      {/* 4. Home / Rooms (Rightmost in RTL layout as shown in video 00:42-00:47) */}
-      <button
-        onClick={() => setActiveTab('room')}
-        className={`relative p-1.5 transition-transform active:scale-90 ${
-          activeTab === 'room' ? 'text-teal-500 scale-110' : 'text-slate-400 hover:text-slate-600'
-        }`}
-        title="الرئيسية"
-      >
-        <svg className="w-6 h-6" viewBox="0 0 24 24" fill={activeTab === 'room' ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5z" />
-        </svg>
-      </button>
-
-    </div>
+            {item.badge !== undefined && (
+              <span className="absolute top-1 left-2 min-w-[17px] h-[17px] px-1 rounded-full bg-rose-500 text-white font-mono tabular-nums font-bold text-[10px] flex items-center justify-center shadow">
+                {item.badge}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </nav>
   );
 };

@@ -548,21 +548,33 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => 
           {/* TAB 4: TRANSACTIONS HISTORY                                     */}
           {/* =============================================================== */}
           {activeTab === 'history' && (
-            <div className="space-y-2">
+            <div className="space-y-3">
               {transactions.length === 0 ? (
                 <div className="text-center py-8 text-stone-400 text-xs">
                   لا توجد عمليات مسجلة بعد
                 </div>
               ) : (
-                transactions.slice(0, 25).map((tx) => (
+                transactions.slice(0, 35).map((tx) => (
                   <div
                     key={tx.id}
                     className="p-3 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between gap-2 text-xs"
                   >
+                    <div className="text-right min-w-0">
+                      <div className="font-bold text-white flex items-center gap-1.5">
+                        {tx.type === 'lucky_win' && (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 text-[9px] font-bold">
+                            حظ
+                          </span>
+                        )}
+                        <span className="truncate">{tx.details}</span>
+                      </div>
+                      <div className="text-[10px] text-stone-400 font-mono mt-0.5">{tx.timestamp}</div>
+                    </div>
+
                     <div className="text-left shrink-0">
                       {tx.coinsDelta !== 0 && (
                         <div
-                          className={`font-mono font-black ${
+                          className={`font-mono tabular-nums font-black ${
                             tx.coinsDelta > 0 ? 'text-emerald-400' : 'text-rose-400'
                           }`}
                         >
@@ -571,18 +583,13 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => 
                       )}
                       {tx.diamondsDelta !== 0 && (
                         <div
-                          className={`font-mono font-black ${
+                          className={`font-mono tabular-nums font-black ${
                             tx.diamondsDelta > 0 ? 'text-fuchsia-400' : 'text-purple-400'
                           }`}
                         >
                           {tx.diamondsDelta > 0 ? `+${tx.diamondsDelta.toLocaleString()}` : tx.diamondsDelta.toLocaleString()} 💎
                         </div>
                       )}
-                    </div>
-
-                    <div className="text-right">
-                      <div className="font-bold text-white">{tx.details}</div>
-                      <div className="text-[10px] text-stone-400 font-mono">{tx.timestamp}</div>
                     </div>
                   </div>
                 ))

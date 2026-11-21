@@ -7,6 +7,7 @@ import {
   Gamepad2,
   Plus,
   X,
+  Wallet,
 } from 'lucide-react';
 import { InteractiveGamesHub } from './InteractiveGamesHub';
 
@@ -120,10 +121,10 @@ export const GameCenterScreen: React.FC = () => {
   };
 
   return (
-    <div className="min-h-dvh max-w-md mx-auto bg-[#0b101d] text-white pb-24 font-tajawal select-none shadow-2xl relative">
+    <div className="min-h-dvh w-full max-w-6xl mx-auto bg-[#070a12] text-white pb-28 font-tajawal select-none relative">
       {/* Header */}
-      <header className="sticky top-0 z-30 bg-[#0b101d]/95 backdrop-blur-md border-b border-white/8 px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <header className="sticky top-0 z-30 bg-[#070a12]/90 backdrop-blur-xl border-b border-white/10 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-5">
           <button
             onClick={() => setSubTab('games')}
             className={`relative pb-1 text-sm flex items-center gap-1.5 transition-colors ${
@@ -148,26 +149,38 @@ export const GameCenterScreen: React.FC = () => {
           </button>
         </div>
 
-        <button
-          onClick={() => setShowNewPostModal(true)}
-          className="h-9 px-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center gap-1 transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          <span>نشر لحظة</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveModal('wallet')}
+            className="h-9 px-3 rounded-xl bg-[#0e1320] border border-amber-400/25 flex items-center gap-1.5 text-xs font-mono tabular-nums text-amber-300"
+          >
+            <Wallet className="w-3.5 h-3.5" />
+            <span>{currentUser.coins.toLocaleString('en-US')} 🪙</span>
+          </button>
+
+          <button
+            onClick={() => setShowNewPostModal(true)}
+            className="h-9 px-3.5 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 font-black text-xs flex items-center gap-1.5 transition-transform active:scale-95"
+          >
+            <Plus className="w-4 h-4" />
+            <span>نشر لحظة</span>
+          </button>
+        </div>
       </header>
 
       {/* Main Content */}
       {subTab === 'games' ? (
-        <div className="p-4 space-y-4">
-          <div className="rounded-2xl p-3.5 bg-white/[0.04] border border-white/10 flex items-center justify-between gap-3">
-            <div className="text-right">
-              <h2 className="text-sm font-bold text-amber-300">مركز الألعاب التفاعلية</h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                6 أنظمة لعب مختلفة: صاروخ الانفجار، الأسد الجشع، ركلات الترجيح، التنين والنمر، صيد القروش، وبرق زيوس.
+        <div className="p-4 sm:p-6 space-y-5">
+          <div className="rounded-3xl p-4 sm:p-5 bg-gradient-to-l from-[#12182b] to-[#0e1320] border border-amber-400/20 flex items-center justify-between gap-4 shadow-xl">
+            <div className="text-right space-y-1">
+              <h2 className="text-base sm:text-lg font-black text-amber-300">
+                مركز الألعاب التفاعلية الملكي
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-300">
+                6 أنظمة لعب متكاملة: صاروخ الانفجار، الأسد الجشع، ركلات الترجيح، التنين والنمر، صيد القروش، وبرق زيوس.
               </p>
             </div>
-            <span className="text-3xl shrink-0">🎮</span>
+            <span className="text-4xl shrink-0">🎮</span>
           </div>
 
           <InteractiveGamesHub
@@ -176,106 +189,104 @@ export const GameCenterScreen: React.FC = () => {
           />
         </div>
       ) : (
-        <div className="p-4 space-y-3">
+        <div className="p-4 sm:p-6 space-y-4">
           {posts.length === 0 ? (
-            <div className="rounded-2xl bg-white/[0.04] border border-white/8 p-8 text-center space-y-3">
-              <div className="text-3xl">✨</div>
-              <p className="text-xs text-slate-300">
+            <div className="rounded-3xl bg-[#0e1320] border border-white/10 p-10 text-center space-y-3">
+              <div className="text-4xl">✨</div>
+              <p className="text-sm text-slate-300">
                 لا توجد لحظات منشورة بعد — شارك أول لحظة لك مع أصدقائك الآن.
               </p>
               <button
                 onClick={() => setShowNewPostModal(true)}
-                className="h-9 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-colors"
+                className="h-10 px-5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-colors"
               >
                 + نشر لحظة جديدة
               </button>
             </div>
           ) : (
-            posts.map((post) => {
-              const isCommenting = activeCommentPostId === post.id;
-              return (
-                <div
-                  key={post.id}
-                  className="p-4 rounded-2xl bg-white/[0.04] border border-white/8 space-y-3"
-                >
-                  {/* Author */}
-                  <div className="flex items-center gap-2.5">
-                    <img
-                      src={post.userAvatar}
-                      alt={post.userName}
-                      referrerPolicy="no-referrer"
-                      className="w-10 h-10 rounded-full object-cover border border-amber-400/40"
-                    />
-                    <div className="text-right">
-                      <h3 className="text-xs font-bold text-white">{post.userName}</h3>
-                      <span className="text-[10px] text-slate-400 font-mono">{post.timeAgo}</span>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {posts.map((post) => {
+                const isCommenting = activeCommentPostId === post.id;
+                return (
+                  <div
+                    key={post.id}
+                    className="p-4 rounded-3xl bg-[#0e1320] border border-white/10 space-y-3 shadow-lg"
+                  >
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={post.userAvatar}
+                        alt={post.userName}
+                        referrerPolicy="no-referrer"
+                        className="w-11 h-11 rounded-full object-cover border border-amber-400/50"
+                      />
+                      <div className="text-right">
+                        <h3 className="text-sm font-bold text-white">{post.userName}</h3>
+                        <span className="text-[11px] text-slate-400 font-mono">{post.timeAgo}</span>
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Body */}
-                  <p className="text-xs text-slate-200 text-right whitespace-pre-line leading-relaxed">
-                    {post.content}
-                  </p>
+                    <p className="text-sm text-slate-200 text-right whitespace-pre-line leading-relaxed">
+                      {post.content}
+                    </p>
 
-                  {/* Actions */}
-                  <div className="flex items-center gap-5 pt-1 border-t border-white/8 text-xs text-slate-400">
-                    <button
-                      onClick={() => handleToggleLike(post.id)}
-                      className={`flex items-center gap-1.5 transition-colors ${
-                        post.isLiked ? 'text-rose-400 font-bold' : 'hover:text-white'
-                      }`}
-                    >
-                      <Heart className={`w-4 h-4 ${post.isLiked ? 'fill-rose-400' : ''}`} />
-                      <span className="font-mono tabular-nums">{post.likes}</span>
-                    </button>
-
-                    <button
-                      onClick={() =>
-                        setActiveCommentPostId(isCommenting ? null : post.id)
-                      }
-                      className="flex items-center gap-1.5 hover:text-white transition-colors"
-                    >
-                      <MessageCircle className="w-4 h-4" />
-                      <span className="font-mono tabular-nums">{post.comments.length}</span>
-                    </button>
-                  </div>
-
-                  {/* Comments Section */}
-                  {isCommenting && (
-                    <div className="pt-2 space-y-2 border-t border-white/8">
-                      {post.comments.map((c) => (
-                        <div
-                          key={c.id}
-                          className="px-3 py-2 rounded-xl bg-white/[0.04] text-right text-xs"
-                        >
-                          <span className="font-bold text-amber-300 ml-1.5">{c.userName}:</span>
-                          <span className="text-slate-200">{c.text}</span>
-                        </div>
-                      ))}
-
-                      <form
-                        onSubmit={(e) => handleAddComment(e, post.id)}
-                        className="flex items-center gap-2"
+                    <div className="flex items-center gap-5 pt-2 border-t border-white/8 text-xs text-slate-400">
+                      <button
+                        onClick={() => handleToggleLike(post.id)}
+                        className={`flex items-center gap-1.5 transition-colors ${
+                          post.isLiked ? 'text-rose-400 font-bold' : 'hover:text-white'
+                        }`}
                       >
-                        <input
-                          type="text"
-                          value={commentInput}
-                          onChange={(e) => setCommentInput(e.target.value)}
-                          placeholder="اكتب تعليقاً..."
-                          className="flex-1 h-9 rounded-xl bg-white/6 border border-white/12 px-3 text-xs text-white focus:outline-none focus:border-amber-400"
-                        />
-                        <button
-                          type="submit"
-                          className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0"
-                        >
-                          <Send className="w-4 h-4" />
-                        </button>
-                      </form>
+                        <Heart className={`w-4 h-4 ${post.isLiked ? 'fill-rose-400' : ''}`} />
+                        <span className="font-mono tabular-nums">{post.likes}</span>
+                      </button>
+
+                      <button
+                        onClick={() =>
+                          setActiveCommentPostId(isCommenting ? null : post.id)
+                        }
+                        className="flex items-center gap-1.5 hover:text-white transition-colors"
+                      >
+                        <MessageCircle className="w-4 h-4" />
+                        <span className="font-mono tabular-nums">{post.comments.length}</span>
+                      </button>
                     </div>
-                  )}
-                </div>
-              );
-            })
+
+                    {isCommenting && (
+                      <div className="pt-2 space-y-2 border-t border-white/8">
+                        {post.comments.map((c) => (
+                          <div
+                            key={c.id}
+                            className="px-3 py-2 rounded-xl bg-white/[0.04] text-right text-xs"
+                          >
+                            <span className="font-bold text-amber-300 ml-1.5">{c.userName}:</span>
+                            <span className="text-slate-200">{c.text}</span>
+                          </div>
+                        ))}
+
+                        <form
+                          onSubmit={(e) => handleAddComment(e, post.id)}
+                          className="flex items-center gap-2"
+                        >
+                          <input
+                            type="text"
+                            value={commentInput}
+                            onChange={(e) => setCommentInput(e.target.value)}
+                            placeholder="اكتب تعليقاً..."
+                            className="flex-1 h-9 rounded-xl bg-white/6 border border-white/12 px-3 text-xs text-white focus:outline-none focus:border-amber-400"
+                          />
+                          <button
+                            type="submit"
+                            className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center shrink-0"
+                          >
+                            <Send className="w-4 h-4" />
+                          </button>
+                        </form>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
       )}
@@ -283,11 +294,11 @@ export const GameCenterScreen: React.FC = () => {
       {/* New Moment Post Modal */}
       {showNewPostModal && (
         <div
-          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={() => setShowNewPostModal(false)}
         >
           <div
-            className="w-full max-w-sm bg-[#111522] border border-white/12 rounded-3xl p-5 shadow-2xl space-y-4"
+            className="w-full max-w-md bg-[#111522] border border-white/12 rounded-3xl p-5 shadow-2xl space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -302,7 +313,7 @@ export const GameCenterScreen: React.FC = () => {
 
             <form onSubmit={handleCreatePost} className="space-y-3">
               <textarea
-                rows={3}
+                rows={4}
                 value={newPostText}
                 onChange={(e) => setNewPostText(e.target.value)}
                 placeholder="شارك أصدقاءك يومياتك أو موعد جلستك الصوتية..."

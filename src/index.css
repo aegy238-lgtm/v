@@ -109,3 +109,40 @@
   scrollbar-width: none;
 }
 
+/* Global Lucky Jackpot Top Marquee (3-Second App-Wide Celebration) */
+@keyframes jackpotBarDrop {
+  0% {
+    opacity: 0;
+    transform: translateY(-100%) scale(0.97);
+  }
+  12% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  88% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-30%) scale(0.98);
+  }
+}
+
+@keyframes jackpotMarqueeSweep {
+  0% {
+    transform: translateX(-25%);
+  }
+  100% {
+    transform: translateX(25%);
+  }
+}
+
+.animate-jackpot-bar {
+  animation: jackpotBarDrop 3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-jackpot-sweep {
+  animation: jackpotMarqueeSweep 2.8s linear forwards;
+}
+

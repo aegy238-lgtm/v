@@ -416,3 +416,16 @@ export const translations: Record<Language, Translations> = {
     close: 'Isara',
   }
 };
+
+export function getTranslation(lang: Language | string): Translations & Record<string, string> {
+  const base = translations[(lang as Language) in translations ? (lang as Language) : 'ar'];
+  return {
+    ...base,
+    aeScriptBtn: lang === 'ar' ? 'سكريبت افتر افكت' : 'After Effects Script',
+    aeScriptBtnTitle:
+      lang === 'ar'
+        ? 'تصدير سكريبت After Effects احترافي'
+        : 'Export After Effects JSX Script',
+  } as Translations & Record<string, string>;
+}
+

@@ -12,6 +12,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
   const {
     viewingProfileUser,
     currentUser,
+    storeItems,
     users,
     setActiveModal,
   } = useApp();
@@ -21,6 +22,10 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
   const [bioText, setBioText] = useState('');
 
   if (!isOpen || !viewingProfileUser) return null;
+
+  const userFrame = viewingProfileUser.activeFrameId
+    ? storeItems.find((i) => i.type === 'frame' && i.id === viewingProfileUser.activeFrameId)
+    : undefined;
 
   const isMe = viewingProfileUser.id === currentUser.id;
 
@@ -54,26 +59,41 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
         <div className="px-6 pb-6 pt-0 relative -mt-12 text-center">
           
           {/* Avatar with Frame */}
-          <div className="relative inline-block mx-auto mb-2">
-            <div className={`w-24 h-24 rounded-full p-1 border-4 ${
-              viewingProfileUser.activeFrameId === 'frame_gold_wings'
-                ? 'border-amber-400 ring-2 ring-yellow-300'
-                : viewingProfileUser.activeFrameId === 'frame_ruby_emperor'
-                ? 'border-rose-500 ring-2 ring-red-400'
-                : 'border-cyan-400'
-            } shadow-2xl`}>
+          <div className="relative inline-flex items-center justify-center w-28 h-28 mx-auto mb-2">
+            <div
+              className={
+                userFrame?.previewUrl
+                  ? 'w-20 h-20 rounded-full overflow-hidden shadow-2xl'
+                  : `w-24 h-24 rounded-full p-1 border-4 ${
+                      viewingProfileUser.activeFrameId === 'frame_gold_wings'
+                        ? 'border-amber-400 ring-2 ring-yellow-300'
+                        : viewingProfileUser.activeFrameId === 'frame_ruby_emperor'
+                        ? 'border-rose-500 ring-2 ring-red-400'
+                        : 'border-cyan-400'
+                    } shadow-2xl`
+              }
+            >
               <img
                 src={viewingProfileUser.avatar}
                 alt=""
+                referrerPolicy="no-referrer"
                 className="w-full h-full rounded-full object-cover"
               />
             </div>
-            {viewingProfileUser.vipLevel > 0 && (
+            {userFrame?.previewUrl && (
+              <img
+                src={userFrame.previewUrl}
+                alt={userFrame.nameAr}
+                referrerPolicy="no-referrer"
+                className="pointer-events-none absolute -inset-2 w-[calc(100%+16px)] h-[calc(100%+16px)] object-contain z-20"
+              />
+            )}
+            {viewingProfileUser.vipLevel > 0 && !userFrame?.previewUrl && (
               <div className="absolute -top-3 inset-x-0 flex justify-center">
                 <span className="text-xl">👑</span>
               </div>
             )}
-            <div className="absolute -bottom-1 -right-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 font-black text-[10px]">
+            <div className="absolute -bottom-1 -right-1 z-30 px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 font-black text-[10px]">
               VIP {viewingProfileUser.vipLevel}
             </div>
           </div>

@@ -1,0 +1,343 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // Primitive Helpers
+    // ===============================================================
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email_verified == true && (
+          request.auth.token.email == 'hhsiggidfhkgogfc@gmail.com' ||
+          request.auth.token.email == 'uhbijnokmpl098900@gmail.com'
+        )) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // ===============================================================
+    // Validation Blueprints
+    // ===============================================================
+    function isValidAuraVoiceUser(data) {
+      return data.keys().hasAll(['id', 'userCode', 'username', 'displayName', 'level', 'vipLevel', 'coins', 'diamonds', 'isMuted', 'isBanned', 'online', 'createdAt']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.userCode is string && data.userCode.size() > 0 && data.userCode.size() <= 32 &&
+        data.username is string && data.username.size() > 0 && data.username.size() <= 64 &&
+        data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 80 &&
+        data.level is number && data.level >= 0 && data.level <= 500 &&
+        data.vipLevel is number && data.vipLevel >= 0 && data.vipLevel <= 20 &&
+        data.coins is number && data.coins >= 0 &&
+        data.diamonds is number && data.diamonds >= 0 &&
+        data.isMuted is bool &&
+        data.isBanned is bool &&
+        data.online is bool &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        (!('age' in data) || (data.age is number && data.age >= 13 && data.age <= 100)) &&
+        (!('gender' in data) || (data.gender in ['male', 'female'])) &&
+        (!('country' in data) || (data.country is string && data.country.size() <= 64)) &&
+        (!('countryFlag' in data) || (data.countryFlag is string && data.countryFlag.size() <= 16));
+    }
+
+    function isValidVoiceRoom(data) {
+      return data.keys().hasAll(['id', 'roomNo', 'title', 'category', 'type', 'ownerId', 'seatCount', 'seats', 'onlineViewersCount', 'totalDiamondsEarned']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.roomNo is string && data.roomNo.size() > 0 && data.roomNo.size() <= 32 &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 120 &&
+        data.category in ['all', 'chat', 'music', 'games', 'vip', 'official', 'agency', 'celebrity'] &&
+        data.type in ['public', 'password', 'vip', 'official'] &&
+        data.ownerId is string && data.ownerId.size() > 0 && data.ownerId.size() <= 128 &&
+        data.seatCount is number && data.seatCount >= 4 && data.seatCount <= 24 &&
+        data.seats is list && data.seats.size() <= 24 &&
+        data.onlineViewersCount is number && data.onlineViewersCount >= 0 &&
+        data.totalDiamondsEarned is number && data.totalDiamondsEarned >= 0;
+    }
+
+    function isValidRoomMessage(data) {
+      return data.keys().hasAll(['id', 'roomId', 'senderId', 'senderName', 'vipLevel', 'level', 'timestamp']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.roomId is string && data.roomId.size() > 0 && data.roomId.size() <= 128 &&
+        data.senderId is string && data.senderId.size() > 0 && data.senderId.size() <= 128 &&
+        data.senderName is string && data.senderName.size() > 0 && data.senderName.size() <= 80 &&
+        data.vipLevel is number && data.vipLevel >= 0 &&
+        data.level is number && data.level >= 0 &&
+        data.timestamp is string && data.timestamp.size() <= 64 &&
+        (!('text' in data) || (data.text is string && data.text.size() <= 500));
+    }
+
+    function isValidGiftItem(data) {
+      return data.keys().hasAll(['id', 'name', 'nameAr', 'category', 'coinPrice', 'diamondReward', 'icon', 'accentColor', 'animationType', 'soundEffect']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.name is string && data.name.size() > 0 && data.name.size() <= 80 &&
+        data.nameAr is string && data.nameAr.size() > 0 && data.nameAr.size() <= 80 &&
+        data.category in ['classic', 'luxury', 'romantic', 'magic', 'vip', 'lucky', 'cp', 'celebrity'] &&
+        data.coinPrice is number && data.coinPrice > 0 &&
+        data.diamondReward is number && data.diamondReward >= 0 &&
+        data.icon is string && data.icon.size() <= 32 &&
+        data.accentColor is string && data.accentColor.size() <= 32 &&
+        data.animationType in ['particle', 'svga', 'luxury_banner', 'explosion', 'lollipop_matrix'] &&
+        data.soundEffect in ['chime', 'fanfare', 'roar', 'magic', 'laser', 'applause', 'slot', 'dice'] &&
+        (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2048)) &&
+        (!('videoUrl' in data) || (data.videoUrl is string && data.videoUrl.size() <= 2048)) &&
+        (!('soundUrl' in data) || (data.soundUrl is string && data.soundUrl.size() <= 2048)) &&
+        (!('effectDurationSec' in data) || (data.effectDurationSec is number && data.effectDurationSec >= 1 && data.effectDurationSec <= 120));
+    }
+
+    function isValidStoreItem(data) {
+      return data.keys().hasAll(['id', 'type', 'nameAr', 'nameEn', 'priceCoins', 'durationDays', 'icon']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.type in ['frame', 'entrance', 'badge', 'bubble'] &&
+        data.nameAr is string && data.nameAr.size() <= 80 &&
+        data.nameEn is string && data.nameEn.size() <= 80 &&
+        data.priceCoins is number && data.priceCoins >= 0 &&
+        data.durationDays is number && data.durationDays > 0 &&
+        data.icon is string && data.icon.size() <= 32 &&
+        (!('previewUrl' in data) || (data.previewUrl is string && data.previewUrl.size() <= 2048)) &&
+        (!('videoUrl' in data) || (data.videoUrl is string && data.videoUrl.size() <= 2048)) &&
+        (!('effectDurationSec' in data) || (data.effectDurationSec is number && data.effectDurationSec >= 1 && data.effectDurationSec <= 120));
+    }
+
+    function isValidAgency(data) {
+      return data.keys().hasAll(['id', 'agencyNo', 'name', 'ownerId', 'status', 'commissionRate', 'createdAt']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.agencyNo is string && data.agencyNo.size() <= 32 &&
+        data.name is string && data.name.size() <= 100 &&
+        data.ownerId is string && data.ownerId.size() <= 128 &&
+        data.status in ['active', 'pending', 'suspended'] &&
+        data.commissionRate is number && data.commissionRate >= 0 && data.commissionRate <= 100 &&
+        data.createdAt is string && data.createdAt.size() <= 64;
+    }
+
+    function isValidAgent(data) {
+      return data.keys().hasAll(['id', 'agentCode', 'name', 'balanceCoins', 'commissionRate', 'status']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.agentCode is string && data.agentCode.size() <= 32 &&
+        data.name is string && data.name.size() <= 80 &&
+        data.balanceCoins is number && data.balanceCoins >= 0 &&
+        data.commissionRate is number && data.commissionRate >= 0 && data.commissionRate <= 100 &&
+        data.status in ['active', 'paused'];
+    }
+
+    function isValidStaffMember(data) {
+      return data.keys().hasAll(['id', 'userId', 'name', 'role', 'status']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.userId is string && data.userId.size() <= 128 &&
+        data.name is string && data.name.size() <= 80 &&
+        data.role is string && data.role.size() <= 64 &&
+        data.status in ['active', 'inactive'];
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['id', 'userId', 'userName', 'type', 'coinsDelta', 'diamondsDelta', 'details', 'timestamp', 'status']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+        data.userName is string && data.userName.size() <= 80 &&
+        data.type in ['recharge', 'gift_sent', 'gift_received', 'lucky_win', 'vip_purchase', 'item_purchase', 'exchange_diamonds', 'withdrawal', 'agent_recharge_payout', 'agency_commission', 'admin_adjustment'] &&
+        data.coinsDelta is number &&
+        data.diamondsDelta is number &&
+        data.details is string && data.details.size() <= 500 &&
+        data.timestamp is string && data.timestamp.size() <= 64 &&
+        data.status in ['completed', 'pending', 'rejected'];
+    }
+
+    function isValidAuraConfig(data) {
+      return data is map &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64)) &&
+        (!('winRatePercent' in data) || (data.winRatePercent is number && data.winRatePercent >= 0 && data.winRatePercent <= 100));
+    }
+
+    function isValidPlatformUser(data) {
+      return data.keys().hasAll(['id', 'name', 'email']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.name is string && data.name.size() <= 120 &&
+        data.email is string && data.email.size() <= 180;
+    }
+
+    function isValidPlatformSetting(data) {
+      return data is map &&
+        (!('siteName' in data) || (data.siteName is string && data.siteName.size() <= 120)) &&
+        (!('siteLogoUrl' in data) || (data.siteLogoUrl is string && data.siteLogoUrl.size() <= 200000));
+    }
+
+    function isValidBroadcastNotification(data) {
+      return data.keys().hasAll(['id', 'title']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.title is string && data.title.size() <= 200;
+    }
+
+    function isValidActivityLogEntry(data) {
+      return data.keys().hasAll(['id', 'fileName']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.fileName is string && data.fileName.size() <= 256;
+    }
+
+    function isValidGiftCertificate(data) {
+      return data.keys().hasAll(['certificateId', 'giftName', 'designerName', 'checksumCode']) &&
+        data.certificateId is string && data.certificateId.size() <= 128 &&
+        data.giftName is string && data.giftName.size() <= 200 &&
+        data.designerName is string && data.designerName.size() <= 120 &&
+        data.checksumCode is string && data.checksumCode.size() <= 16;
+    }
+
+    // ===============================================================
+    // AuraVoice VIP Collections
+    // ===============================================================
+    match /auravoice_users/{userId} {
+      allow get: if isValidId(userId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isValidId(userId) && isSignedIn() && isValidAuraVoiceUser(incoming()) && (isAdmin() || !('isBanned' in incoming() && incoming().isBanned == true));
+      allow update: if isValidId(userId) && isSignedIn() && isValidAuraVoiceUser(incoming()) && (
+        isAdmin() ||
+        (incoming().id == existing().id && incoming().diff(existing()).affectedKeys().hasOnly(['coins', 'diamonds', 'level', 'vipLevel', 'displayName', 'username', 'avatar', 'coverImage', 'bio', 'country', 'countryFlag', 'age', 'gender', 'activeFrameId', 'activeEntranceId', 'activeBadgeId', 'activeBubbleId', 'followersCount', 'followingCount', 'friendsCount', 'likesCount', 'visitorsCount', 'online', 'updatedAt']))
+      );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /auravoice_rooms/{roomId} {
+      allow get: if isValidId(roomId);
+      allow list: if true;
+      allow create: if isValidId(roomId) && isSignedIn() && isValidVoiceRoom(incoming());
+      allow update: if isValidId(roomId) && isSignedIn() && isValidVoiceRoom(incoming()) && (
+        isAdmin() ||
+        (incoming().id == existing().id && incoming().ownerId == existing().ownerId && incoming().diff(existing()).affectedKeys().hasOnly(['seats', 'onlineViewersCount', 'totalDiamondsEarned', 'title', 'description', 'announcement', 'currentMusicTrack', 'isLocked', 'updatedAt']))
+      );
+      allow delete: if isValidId(roomId) && isAdmin();
+
+      match /messages/{messageId} {
+        allow get: if isValidId(roomId) && isValidId(messageId) && isSignedIn();
+        allow list: if isValidId(roomId) && isSignedIn();
+        allow create: if isValidId(roomId) && isValidId(messageId) && isSignedIn() && isValidRoomMessage(incoming()) && exists(/databases/$(database)/documents/auravoice_rooms/$(roomId));
+        allow update, delete: if isValidId(roomId) && isValidId(messageId) && isAdmin();
+      }
+    }
+
+    match /auravoice_gifts/{giftId} {
+      allow get: if isValidId(giftId);
+      allow list: if true;
+      allow create, update: if isValidId(giftId) && isAdmin() && isValidGiftItem(incoming());
+      allow delete: if isValidId(giftId) && isAdmin();
+    }
+
+    match /auravoice_store_items/{itemId} {
+      allow get: if isValidId(itemId);
+      allow list: if true;
+      allow create, update: if isValidId(itemId) && isAdmin() && isValidStoreItem(incoming());
+      allow delete: if isValidId(itemId) && isAdmin();
+    }
+
+    match /auravoice_agencies/{agencyId} {
+      allow get: if isValidId(agencyId);
+      allow list: if true;
+      allow create, update: if isValidId(agencyId) && isAdmin() && isValidAgency(incoming());
+      allow delete: if isValidId(agencyId) && isAdmin();
+    }
+
+    match /auravoice_agents/{agentId} {
+      allow get: if isValidId(agentId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create, update: if isValidId(agentId) && isAdmin() && isValidAgent(incoming());
+      allow delete: if isValidId(agentId) && isAdmin();
+    }
+
+    match /auravoice_staff/{staffId} {
+      allow get: if isValidId(staffId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create, update: if isValidId(staffId) && isAdmin() && isValidStaffMember(incoming());
+      allow delete: if isValidId(staffId) && isAdmin();
+    }
+
+    match /auravoice_transactions/{txId} {
+      allow get: if isValidId(txId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isValidId(txId) && isSignedIn() && isValidTransaction(incoming());
+      allow update: if isValidId(txId) && isAdmin() && isValidTransaction(incoming());
+      allow delete: if isValidId(txId) && isAdmin();
+    }
+
+    match /auravoice_config/{configId} {
+      allow get: if isValidId(configId);
+      allow list: if true;
+      allow create, update: if isValidId(configId) && isSignedIn() && isValidAuraConfig(incoming()) && (
+        isAdmin() ||
+        configId in ['jackpot', 'bag_gifts']
+      );
+      allow delete: if isValidId(configId) && isAdmin();
+    }
+
+    // ===============================================================
+    // Platform & SVGA Studio Collections
+    // ===============================================================
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && isSignedIn();
+      allow create, update: if isValidId(adminId) && isAdmin() && incoming() is map;
+      allow delete: if isValidId(adminId) && isAdmin();
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isSignedIn() && isValidPlatformUser(incoming()) && (isAdmin() || (isOwner(userId) && (!('role' in incoming()) || incoming().role == 'user') && (!('isAdmin' in incoming()) || incoming().isAdmin == false) && (!('isSuperAdmin' in incoming()) || incoming().isSuperAdmin == false)));
+      allow update: if isValidId(userId) && isSignedIn() && isValidPlatformUser(incoming()) && (isAdmin() || (isOwner(userId) && (!('role' in incoming()) || incoming().role == existing().role) && (!('isAdmin' in incoming()) || incoming().isAdmin == existing().isAdmin) && (!('isSuperAdmin' in incoming()) || incoming().isSuperAdmin == existing().isSuperAdmin)));
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /platform_settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if true;
+      allow create, update: if isValidId(settingId) && isAdmin() && isValidPlatformSetting(incoming());
+      allow delete: if isValidId(settingId) && isAdmin();
+    }
+
+    match /broadcast_notifications/{notifId} {
+      allow get: if isValidId(notifId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create, update: if isValidId(notifId) && isAdmin() && isValidBroadcastNotification(incoming());
+      allow delete: if isValidId(notifId) && isAdmin();
+    }
+
+    match /activity_logs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(logId) && isSignedIn() && isValidActivityLogEntry(incoming());
+      allow update: if isValidId(logId) && isAdmin() && isValidActivityLogEntry(incoming());
+      allow delete: if isValidId(logId) && isAdmin();
+    }
+
+    match /gift_certificates/{certId} {
+      allow get: if isValidId(certId);
+      allow list: if isSignedIn();
+      allow create: if isValidId(certId) && isSignedIn() && isValidGiftCertificate(incoming());
+      allow update: if isValidId(certId) && isAdmin() && isValidGiftCertificate(incoming());
+      allow delete: if isValidId(certId) && isAdmin();
+    }
+
+    match /test/{docId} {
+      allow get: if isValidId(docId);
+      allow write: if false;
+    }
+  }
+}

@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { GiftCategory, GiftItem } from '../types';
-import { X, Send, Coins, Users, Sparkles, Crown } from 'lucide-react';
+import { GiftCategory } from '../types';
+import { X, Send, Coins, Users, Sparkles } from 'lucide-react';
+import { SmartMediaView } from './SmartMediaView';
+import { getMediaFormatLabel } from '../utils/mediaFormats';
+import { sound } from '../utils/audio';
 
 interface GiftModalProps {
   isOpen: boolean;
@@ -9,9 +12,10 @@ interface GiftModalProps {
 }
 
 export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
-  const { gifts, activeRoom, currentUser, sendGift, setActiveModal } = useApp();
+  const { gifts, activeRoom, currentUser, sendGift, evaluateLuckyGiftWin, setActiveModal } =
+    useApp();
 
-  const [activeTab, setActiveTab] = useState<GiftCategory>('classic');
+  const [activeTab, setActiveTab] = useState<GiftCategory>('lucky');
   const [selectedGiftId, setSelectedGiftId] = useState<string>(gifts[0]?.id || 'gift_rose');
   const [comboCount, setComboCount] = useState<number>(1);
   const [targetType, setTargetType] = useState<'speaker' | 'seat' | 'all'>('speaker');
@@ -26,13 +30,8 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
 
   const combos = [1, 10, 66, 188, 520, 1314];
 
-  // Calculate target recipient count strictly from occupied mics
   const targetCount =
-    occupiedSeats.length === 0
-      ? 0
-      : targetType === 'all'
-      ? occupiedSeats.length
-      : 1;
+    occupiedSeats.length === 0 ? 0 : targetType === 'all' ? occupiedSeats.length : 1;
 
   const totalCoinsNeeded = selectedGift ? selectedGift.coinPrice * comboCount * targetCount : 0;
   const hasEnoughCoins = targetCount > 0 && currentUser.coins >= totalCoinsNeeded;
@@ -41,40 +40,54 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
     if (!selectedGift) return;
     const success = sendGift(selectedGift.id, comboCount, targetType, selectedSeatIndex);
     if (success) {
+      sound.playGiftHitAudio(selectedGift.soundEffect, selectedGift.soundUrl);
+      const isLucky =
+        selectedGift.isLucky ||
+        selectedGift.category === 'lucky' ||
+        selectedGift.animationType === 'lollipop_matrix';
+      if (isLucky) {
+        evaluateLuckyGiftWin(
+          selectedGift,
+          comboCount,
+          comboCount,
+          totalCoinsNeeded,
+          activeRoom.title
+        );
+      }
       onClose();
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="w-full sm:max-w-2xl bg-slate-900 border border-slate-800 rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200 font-tajawal">
+      <div className="w-full sm:max-w-2xl bg-[#0e1320] border border-white/12 rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Modal Header */}
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 to-rose-500 flex items-center justify-center text-white">
+        <div className="p-4 border-b border-white/10 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-slate-950">
               <Sparkles className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-100 text-sm sm:text-base">مركز إرسال الهدايا</h3>
-              <p className="text-[11px] text-slate-400">ادعم المضيفين واشعل أجواء الغرفة بأقوى المؤثرات</p>
+              <h3 className="font-bold text-white text-sm sm:text-base">مركز إرسال الهدايا</h3>
+              <p className="text-[11px] text-slate-400">
+                اختر هدية فاخرة أو هدية حظ واضغط إرسال
+              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            {/* Quick Balance */}
-            <div 
+          <div className="flex items-center gap-2.5">
+            <button
               onClick={() => setActiveModal('wallet')}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800 border border-amber-500/30 text-amber-300 text-xs font-mono font-bold cursor-pointer hover:bg-slate-700"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/8 border border-amber-400/35 text-amber-300 text-xs font-mono tabular-nums font-bold hover:bg-white/12"
             >
               <Coins className="w-3.5 h-3.5 text-amber-400" />
               <span>{currentUser.coins.toLocaleString()}</span>
-              <span className="text-[10px] text-amber-400/80">شحن +</span>
-            </div>
+              <span className="text-[10px] text-amber-300">+</span>
+            </button>
 
             <button
               onClick={onClose}
-              className="p-1.5 rounded-full bg-slate-800 text-slate-400 hover:text-white transition-colors"
+              className="w-9 h-9 rounded-xl bg-white/8 text-slate-300 hover:text-white flex items-center justify-center"
             >
               <X className="w-5 h-5" />
             </button>
@@ -82,8 +95,9 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
         </div>
 
         {/* Categories Bar */}
-        <div className="flex items-center gap-2 px-4 py-2.5 bg-slate-950/60 border-b border-slate-800/80 overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-[#090d17] border-b border-white/8 overflow-x-auto no-scrollbar">
           {[
+            { id: 'lucky', label: 'هدايا الحظ 🍭' },
             { id: 'classic', label: 'كلاسيكية 🌹' },
             { id: 'luxury', label: 'فاخرة 🏎️' },
             { id: 'romantic', label: 'رومانسية 💖' },
@@ -93,10 +107,10 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
             <button
               key={cat.id}
               onClick={() => setActiveTab(cat.id as GiftCategory)}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+              className={`min-h-[36px] px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
                 activeTab === cat.id
-                  ? 'bg-gradient-to-r from-amber-500 to-rose-500 text-white shadow-md shadow-amber-500/20'
-                  : 'bg-slate-800/60 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  ? 'bg-amber-400 text-slate-950 shadow-md'
+                  : 'bg-white/6 text-slate-400 hover:text-white hover:bg-white/10'
               }`}
             >
               {cat.label}
@@ -111,7 +125,8 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
             const isVipLocked = gift.vipMinLevel && currentUser.vipLevel < gift.vipMinLevel;
 
             return (
-              <div
+              <button
+                type="button"
                 key={gift.id}
                 onClick={() => {
                   if (isVipLocked) {
@@ -121,39 +136,51 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
                   }
                   setSelectedGiftId(gift.id);
                 }}
-                className={`relative p-3 rounded-2xl flex flex-col items-center justify-between text-center cursor-pointer transition-all border ${
+                className={`relative p-3 rounded-2xl flex flex-col items-center justify-between text-center transition-all border ${
                   isSelected
-                    ? 'bg-amber-500/10 border-amber-500 shadow-lg shadow-amber-500/10 scale-[1.02]'
-                    : 'bg-slate-800/40 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
-                } ${isVipLocked ? 'opacity-60 grayscale-[40%]' : ''}`}
+                    ? 'bg-amber-400/15 border-amber-400 shadow-lg'
+                    : 'bg-white/[0.04] border-white/8 hover:bg-white/[0.08]'
+                } ${isVipLocked ? 'opacity-50' : ''}`}
               >
-                {/* VIP badge requirement */}
                 {gift.vipMinLevel && (
-                  <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-amber-500 text-slate-950 font-black text-[9px]">
+                  <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 font-black text-[9px]">
                     VIP {gift.vipMinLevel}
                   </span>
                 )}
+                {(gift.videoUrl || gift.imageUrl) && (
+                  <span className="absolute top-1.5 left-1.5 text-[9px] font-mono text-rose-300 flex items-center gap-0.5">
+                    {getMediaFormatLabel(gift.videoUrl || gift.imageUrl)}
+                  </span>
+                )}
 
-                <div className="text-3xl sm:text-4xl my-1 transform group-hover:scale-110 transition-transform">
-                  {gift.icon}
-                </div>
+                {gift.imageUrl || gift.videoUrl ? (
+                  <SmartMediaView
+                    mode="thumbnail"
+                    url={gift.imageUrl || gift.videoUrl}
+                    preferVideo={!gift.imageUrl && Boolean(gift.videoUrl)}
+                    alt={gift.nameAr}
+                    className="w-11 h-11 rounded-xl object-cover my-1"
+                    fallback={<div className="text-3xl sm:text-4xl my-1">{gift.icon}</div>}
+                  />
+                ) : (
+                  <div className="text-3xl sm:text-4xl my-1">{gift.icon}</div>
+                )}
 
-                <div className="text-xs font-bold text-slate-200 truncate w-full mt-1">
+                <div className="text-xs font-bold text-white truncate w-full mt-1">
                   {gift.nameAr}
                 </div>
 
-                <div className="flex items-center gap-1 text-[11px] font-mono text-amber-400 font-bold mt-1">
+                <div className="flex items-center gap-1 text-[11px] font-mono tabular-nums text-amber-300 font-bold mt-1">
                   <Coins className="w-3 h-3" />
                   <span>{gift.coinPrice.toLocaleString()}</span>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
 
         {/* Recipient & Combo Controls */}
-        <div className="p-4 bg-slate-950/80 border-t border-slate-800 flex flex-col gap-3">
-          
+        <div className="p-4 bg-[#090d17] border-t border-white/10 flex flex-col gap-3">
           {vipNotice && (
             <div className="px-3 py-1.5 rounded-xl bg-amber-500/15 border border-amber-400/40 text-amber-200 text-xs text-right">
               {vipNotice}
@@ -164,15 +191,17 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="text-slate-400 font-medium">المستلم:</span>
             {occupiedSeats.length === 0 ? (
-              <span className="text-amber-300 font-semibold">لا يوجد متحدث على المايك حالياً</span>
+              <span className="text-amber-300 font-semibold">
+                لا يوجد متحدث على المايك حالياً
+              </span>
             ) : (
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   onClick={() => setTargetType('speaker')}
                   className={`px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
                     targetType === 'speaker'
-                      ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold'
-                      : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:text-slate-200'
+                      ? 'bg-amber-400/20 border-amber-400 text-amber-300 font-bold'
+                      : 'bg-white/6 border-white/10 text-slate-300 hover:text-white'
                   }`}
                 >
                   المتحدث الحالي
@@ -182,8 +211,8 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
                   onClick={() => setTargetType('all')}
                   className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1 transition-all ${
                     targetType === 'all'
-                      ? 'bg-rose-500/20 border-rose-500 text-rose-300 font-bold'
-                      : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:text-slate-200'
+                      ? 'bg-rose-500/20 border-rose-400 text-rose-300 font-bold'
+                      : 'bg-white/6 border-white/10 text-slate-300 hover:text-white'
                   }`}
                 >
                   <Users className="w-3 h-3" />
@@ -196,7 +225,7 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
                     setTargetType('seat');
                     setSelectedSeatIndex(Number(e.target.value));
                   }}
-                  className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2 py-1.5 text-xs font-medium focus:outline-none focus:border-amber-500"
+                  className="bg-slate-900 border border-white/12 text-white rounded-lg px-2 py-1.5 text-xs font-medium focus:outline-none focus:border-amber-400"
                 >
                   {occupiedSeats.map((seat) => (
                     <option key={seat.index} value={seat.index}>
@@ -208,18 +237,18 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
             )}
           </div>
 
-          {/* Combos Pill Row */}
+          {/* Combos Row */}
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-slate-400 font-medium">الكمية (كومبو):</span>
-            <div className="flex items-center gap-1.5 overflow-x-auto">
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
               {combos.map((c) => (
                 <button
                   key={c}
                   onClick={() => setComboCount(c)}
                   className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition-all ${
                     comboCount === c
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/30 scale-105'
-                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                      ? 'bg-amber-400 text-slate-950 shadow-md'
+                      : 'bg-white/8 text-slate-300 hover:bg-white/14'
                   }`}
                 >
                   x{c}
@@ -229,10 +258,10 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
           </div>
 
           {/* Total & Send Action */}
-          <div className="flex items-center justify-between gap-4 pt-2 border-t border-slate-800/80">
+          <div className="flex items-center justify-between gap-4 pt-2 border-t border-white/10">
             <div>
               <div className="text-[11px] text-slate-400">إجمالي التكلفة:</div>
-              <div className="flex items-center gap-1.5 text-base sm:text-lg font-mono font-bold text-amber-300">
+              <div className="flex items-center gap-1.5 text-base sm:text-lg font-mono tabular-nums font-bold text-amber-300">
                 <Coins className="w-4 h-4 text-amber-400" />
                 <span>{totalCoinsNeeded.toLocaleString()}</span>
                 <span className="text-xs text-slate-400 font-normal">عملة</span>
@@ -242,19 +271,17 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
             <button
               onClick={handleSend}
               disabled={!hasEnoughCoins}
-              className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold text-sm shadow-xl transition-all ${
+              className={`min-h-[44px] flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm shadow-xl transition-all ${
                 hasEnoughCoins
-                  ? 'bg-gradient-to-r from-amber-500 via-rose-500 to-amber-600 text-white hover:opacity-95 active:scale-95 shadow-amber-500/25'
-                  : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                  ? 'bg-amber-400 hover:bg-amber-300 text-slate-950 active:scale-95'
+                  : 'bg-white/10 text-slate-500 cursor-not-allowed'
               }`}
             >
               <Send className="w-4 h-4 rtl:rotate-180" />
               <span>{hasEnoughCoins ? 'إرسال الهدية الآن' : 'الرصيد غير كافٍ'}</span>
             </button>
           </div>
-
         </div>
-
       </div>
     </div>
   );
