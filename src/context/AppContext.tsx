@@ -131,11 +131,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentUserId, setCurrentUserId] = useState<string>('user_current');
 
   const [rooms, setRooms] = useState<VoiceRoom[]>(() => {
-    const saved = localStorage.getItem('auravoice_rooms_clean_v3');
+    const saved = localStorage.getItem('auravoice_rooms_8mic_v4');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.some((r: VoiceRoom) => r.roomNo === '2026091' && r.seats.length === 24)) {
+        if (Array.isArray(parsed) && parsed.some((r: VoiceRoom) => r.roomNo === '2026091' && r.seats.length === 8)) {
           return parsed;
         }
       } catch (e) {
@@ -198,7 +198,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const activeRoom: VoiceRoom | null = rawActiveRoom
     ? {
         ...rawActiveRoom,
-        seats: Array.from({ length: Math.max(24, rawActiveRoom.seats?.length || 0) }, (_, idx) => {
+        seatCount: 8,
+        seats: Array.from({ length: 8 }, (_, idx) => {
           const existing = rawActiveRoom.seats?.[idx];
           if (existing && (!existing.userId || !existing.userId.startsWith('u_s'))) {
             return {
@@ -227,7 +228,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('auravoice_users', JSON.stringify(users));
   }, [users]);
   useEffect(() => {
-    localStorage.setItem('auravoice_rooms_clean_v3', JSON.stringify(rooms));
+    localStorage.setItem('auravoice_rooms_8mic_v4', JSON.stringify(rooms));
   }, [rooms]);
   useEffect(() => {
     localStorage.setItem('auravoice_gifts', JSON.stringify(gifts));
@@ -341,15 +342,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Take Mic Seat
   const takeSeat = (seatIndex: number) => {
-    if (!activeRoom) return;
+    if (!activeRoom || seatIndex < 0 || seatIndex >= 8) return;
     const currentSeats = activeRoom.seats || [];
     const seat = currentSeats[seatIndex];
     if (seat?.isLocked) {
-      alert('المقعد مقفل من قِبل المشرف');
       return;
     }
     if (seat?.userId && seat.userId !== currentUser.id) {
-      alert('المقعد مشغول بالفعل');
       return;
     }
 
@@ -358,8 +357,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setRooms((prev) =>
       prev.map((r) => {
         if (r.id === activeRoom.id) {
-          const targetLength = Math.max(24, seatIndex + 1, r.seats?.length || 0);
-          const expandedSeats: RoomSeat[] = Array.from({ length: targetLength }, (_, idx) => {
+          const expandedSeats: RoomSeat[] = Array.from({ length: 8 }, (_, idx) => {
             if (r.seats && r.seats[idx]) return r.seats[idx];
             return {
               index: idx,
@@ -492,12 +490,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Toggle Seat Lock (by room owner/moderator)
   const toggleSeatLock = (seatIndex: number) => {
-    if (!activeRoom) return;
+    if (!activeRoom || seatIndex < 0 || seatIndex >= 8) return;
     setRooms((prev) =>
       prev.map((r) => {
         if (r.id === activeRoom.id) {
-          const targetLength = Math.max(24, seatIndex + 1, r.seats?.length || 0);
-          const expandedSeats: RoomSeat[] = Array.from({ length: targetLength }, (_, idx) => {
+          const expandedSeats: RoomSeat[] = Array.from({ length: 8 }, (_, idx) => {
             if (r.seats && r.seats[idx]) return r.seats[idx];
             return {
               index: idx,
