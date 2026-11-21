@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { RotateCcw, Coins, Sparkles, Trophy, Flame, Zap, Target } from 'lucide-react';
-import confetti from 'canvas-confetti';
 
 export type GameEngineType =
   | 'crash_rocket'
@@ -128,7 +127,6 @@ export const InteractiveGamesHub: React.FC<InteractiveGamesHubProps> = ({
     setRocketState('cashed_out');
     const winCoins = Math.round(betAmount * rocketMultiplier);
     rechargeCoins(winCoins, `ربح صاروخ ${rocketMultiplier}X`);
-    confetti({ particleCount: 55, spread: 70, origin: { y: 0.6 } });
     setStatusMessage(`🎉 سحبت في الوقت المناسب! ربحت ${winCoins.toLocaleString()} كوينز (${rocketMultiplier}X)!`);
     onWinAnnouncement?.(
       selectedGame?.nameAr || 'صاروخ الانفجار',
@@ -196,7 +194,6 @@ export const InteractiveGamesHub: React.FC<InteractiveGamesHubProps> = ({
         if (selectedGreedyBets.includes(winner.id)) {
           const winCoins = betAmount * winner.mult;
           rechargeCoins(winCoins, `فوز ${winner.name}`);
-          confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 } });
           setStatusMessage(`🎉 توقف المؤشر على ${winner.icon} ${winner.name}! ربحت ${winCoins.toLocaleString()} كوينز (${winner.mult}X)!`);
           onWinAnnouncement?.(
             selectedGame?.nameAr || 'الأسد الجشع',
@@ -252,7 +249,6 @@ export const InteractiveGamesHub: React.FC<InteractiveGamesHubProps> = ({
       if (doesScore) {
         const winCoins = Math.round(betAmount * mult);
         rechargeCoins(winCoins, 'هدف ركلات الترجيح');
-        confetti({ particleCount: 50, spread: 65, origin: { y: 0.6 } });
         setStatusMessage(`⚽ جوووول عالمي! الحارس قفز للجهة الأخرى وربحت ${winCoins.toLocaleString()} كوينز (${mult}X)!`);
         onWinAnnouncement?.(
           selectedGame?.nameAr || 'ركلات الترجيح',
@@ -299,7 +295,6 @@ export const InteractiveGamesHub: React.FC<InteractiveGamesHubProps> = ({
         const mult = outcome === 'tie' ? 11 : 2;
         const winCoins = betAmount * mult;
         rechargeCoins(winCoins, 'فوز التنين والنمر');
-        confetti({ particleCount: 55, spread: 70, origin: { y: 0.6 } });
         setStatusMessage(`🎉 مبروك! فاز ${outcome === 'dragon' ? 'التنين 🐉' : outcome === 'tiger' ? 'النمر 🐯' : 'التعادل 🤝'} وربحت ${winCoins.toLocaleString()} كوينز!`);
         onWinAnnouncement?.(
           selectedGame?.nameAr || 'التنين والنمر',
@@ -357,9 +352,6 @@ export const InteractiveGamesHub: React.FC<InteractiveGamesHubProps> = ({
     if (picked.mult > 0) {
       const winCoins = betAmount * picked.mult;
       rechargeCoins(winCoins, `صيد ${picked.name}`);
-      if (picked.mult >= 8) {
-        confetti({ particleCount: 55, spread: 70, origin: { y: 0.6 } });
-      }
       setStatusMessage(`🎯 اصطدت ${picked.icon} ${picked.name}! ربحت ${winCoins.toLocaleString()} كوينز (${picked.mult}X)!`);
       if (picked.mult >= 5) {
         onWinAnnouncement?.(
@@ -426,7 +418,6 @@ export const InteractiveGamesHub: React.FC<InteractiveGamesHubProps> = ({
           setZeusGrid(newGrid);
           const winCoins = betAmount * mult;
           rechargeCoins(winCoins, `فوز ${selectedGame?.nameAr || 'زيوس'}`);
-          confetti({ particleCount: 55, spread: 70, origin: { y: 0.6 } });
           setStatusMessage(`⚡ صاعقة زيوس المضاعفة! ربحت ${winCoins.toLocaleString()} كوينز (${mult}X)!`);
           onWinAnnouncement?.(
             selectedGame?.nameAr || 'برق زيوس',

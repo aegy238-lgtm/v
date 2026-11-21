@@ -1,365 +1,302 @@
-import React, { useState } from 'react';
-import {
-  Send,
-  ChevronLeft,
-  Sparkles,
-} from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { useApp } from '../context/AppContext';
+import { Send, ChevronRight, Search, Bell, MessageSquare } from 'lucide-react';
 
-interface ChatThread {
+interface DirectMessage {
   id: string;
-  name: string;
-  lastMessage: string;
+  senderId: string;
+  senderName: string;
+  text: string;
   time: string;
-  avatar: string;
-  vipLevel?: number;
-  charmLevel?: number;
-  wealthLevel?: number;
-  isOfficial?: boolean;
-  frameColor?: string;
-  messages: { sender: string; text: string; time: string; isMe: boolean }[];
+  isMe: boolean;
 }
 
+const DM_STORAGE_KEY = 'auravoice_dm_messages_v1';
+
 export const ChatInboxScreen: React.FC = () => {
-  const [selectedThread, setSelectedThread] = useState<ChatThread | null>(null);
+  const { users, currentUser, transactions, setViewingProfileUser, setActiveModal } = useApp();
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
   const [replyInput, setReplyInput] = useState('');
 
-  const [threads, setThreads] = useState<ChatThread[]>([
-    {
-      id: 'uparty_helper',
-      name: 'UParty Helper',
-      lastMessage: '...You have successfully shippe',
-      time: '٢٠:٢٢',
-      avatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=150&q=80',
-      isOfficial: true,
-      frameColor: 'ring-amber-400',
-      messages: [
-        {
-          sender: 'UParty Helper',
-          text: 'You have successfully shipped 50,000 coins and activated Lucky Lollipop multipliers!',
-          time: '٢٠:٢٢',
-          isMe: false,
-        },
-      ],
-    },
-    {
-      id: 'uparty_mail',
-      name: 'UParty Mail Cat',
-      lastMessage: '.مرحبا، انا مساعد البريد الرسمي لديك',
-      time: 'أمس',
-      avatar: 'https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?auto=format&fit=crop&w=150&q=80',
-      isOfficial: true,
-      frameColor: 'ring-teal-400',
-      messages: [
-        {
-          sender: 'UParty Mail Cat',
-          text: 'مرحبا، انا مساعد البريد الرسمي لديك. تهانينا على ترقية مستوى الغرفة واستلام جوائز الصندوق الملكي!',
-          time: 'أمس',
-          isMe: false,
-        },
-      ],
-    },
-    {
-      id: 'ghazala',
-      name: 'غزالة🌸 🍓',
-      lastMessage: 'سلام عليكم ممكن',
-      time: '٢١:٠٧',
-      avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=200&q=80',
-      charmLevel: 48,
-      messages: [
-        {
-          sender: 'غزالة🌸 🍓',
-          text: 'سلام عليكم ممكن انضم لوكالة بيت العائلة؟',
-          time: '٢١:٠٧',
-          isMe: false,
-        },
-      ],
-    },
-    {
-      id: 'w3d',
-      name: 'W3D 🎀 °',
-      lastMessage: '~ Hi',
-      time: '١٣:١٥',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
-      vipLevel: 5,
-      charmLevel: 62,
-      wealthLevel: 48,
-      frameColor: 'ring-amber-400',
-      messages: [
-        {
-          sender: 'W3D 🎀 °',
-          text: '~ Hi ابو عدي! مبروك مضاعفات الحظ 188X',
-          time: '١٣:١٥',
-          isMe: false,
-        },
-      ],
-    },
-    {
-      id: 'samaka',
-      name: '👑سمكة👑',
-      lastMessage: 'مين دي اصلا',
-      time: 'أمس',
-      avatar: 'https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?auto=format&fit=crop&w=200&q=80',
-      vipLevel: 4,
-      charmLevel: 59,
-      wealthLevel: 38,
-      frameColor: 'ring-yellow-400',
-      messages: [
-        {
-          sender: '👑سمكة👑',
-          text: 'مين دي اصلا؟ يلا نفتح مايك في الغرفة',
-          time: 'أمس',
-          isMe: false,
-        },
-      ],
-    },
-    {
-      id: 'layal',
-      name: 'ليال💜',
-      lastMessage: 'هاي',
-      time: 'أمس',
-      avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&q=80',
-      vipLevel: 3,
-      charmLevel: 45,
-      wealthLevel: 1,
-      messages: [
-        {
-          sender: 'ليال💜',
-          text: 'هاي ابو عدي، الغرفة منورة بيكم',
-          time: 'أمس',
-          isMe: false,
-        },
-      ],
-    },
-    {
-      id: 'lulu',
-      name: 'لؤلؤه.. ✨',
-      lastMessage: '[التذكير]',
-      time: '٢٠/١٠/٢٠٢٦',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=200&q=80',
-      vipLevel: 3,
-      charmLevel: 42,
-      wealthLevel: 28,
-      messages: [
-        {
-          sender: 'لؤلؤه.. ✨',
-          text: '[التذكير] موعد مسابقة الوكالة الساعة 9 مساءً',
-          time: '٢٠/١٠/٢٠٢٦',
-          isMe: false,
-        },
-      ],
-    },
-    {
-      id: 'habiba',
-      name: '✨حبيـ♥ـبة آلمـ♥ـلَك✨',
-      lastMessage: 'تمام',
-      time: '١٨/١٠/٢٠٢٦',
-      avatar: 'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=200&q=80',
-      vipLevel: 4,
-      charmLevel: 65,
-      wealthLevel: 51,
-      messages: [
-        {
-          sender: '✨حبيـ♥ـبة آلمـ♥ـلَك✨',
-          text: 'تمام جاهزين للحفلة الليلة',
-          time: '١٨/١٠/٢٠٢٦',
-          isMe: false,
-        },
-      ],
-    },
-    {
-      id: 'folan',
-      name: 'Folan',
-      lastMessage: 'تمام',
-      time: '١٧/١٠/٢٠٢٦',
-      avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=200&q=80',
-      vipLevel: 6,
-      charmLevel: 99,
-      wealthLevel: 113,
-      frameColor: 'ring-amber-500',
-      messages: [
-        {
-          sender: 'Folan',
-          text: 'تمام يا غالي تم إرسال الدعم',
-          time: '١٧/١٠/٢٠٢٦',
-          isMe: false,
-        },
-      ],
-    },
-  ]);
+  const [messagesByPeer, setMessagesByPeer] = useState<Record<string, DirectMessage[]>>(() => {
+    try {
+      const saved = localStorage.getItem(DM_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // ignore
+    }
+    return {};
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DM_STORAGE_KEY, JSON.stringify(messagesByPeer));
+    } catch {
+      // ignore
+    }
+  }, [messagesByPeer]);
+
+  // Real users in app excluding current user
+  const realPeers = users.filter((u) => u.id !== currentUser.id);
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const filteredPeers = realPeers.filter(
+    (u) =>
+      !normalizedSearch ||
+      u.displayName.toLowerCase().includes(normalizedSearch) ||
+      u.userCode.includes(normalizedSearch)
+  );
+
+  // Real system notifications derived from currentUser's transactions
+  const mySystemAlerts = transactions
+    .filter((tx) => tx.userId === currentUser.id)
+    .slice(0, 20);
+
+  const selectedPeer =
+    selectedUserId && selectedUserId !== 'system'
+      ? realPeers.find((u) => u.id === selectedUserId) || null
+      : null;
+
+  const activeConversationMessages = selectedUserId ? messagesByPeer[selectedUserId] || [] : [];
 
   const handleSendReply = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!replyInput.trim() || !selectedThread) return;
+    if (!replyInput.trim() || !selectedUserId || selectedUserId === 'system') return;
 
-    const newMsg = {
-      sender: '🔥 ابو عدي 🔥',
+    const newMsg: DirectMessage = {
+      id: `dm_${Date.now()}`,
+      senderId: currentUser.id,
+      senderName: currentUser.displayName,
       text: replyInput.trim(),
-      time: 'الآن',
+      time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
       isMe: true,
     };
 
-    setThreads((prev) =>
-      prev.map((t) =>
-        t.id === selectedThread.id
-          ? { ...t, lastMessage: newMsg.text, time: 'الآن', messages: [...t.messages, newMsg] }
-          : t
-      )
-    );
-    setSelectedThread((prev) =>
-      prev ? { ...prev, messages: [...prev.messages, newMsg] } : null
-    );
+    setMessagesByPeer((prev) => ({
+      ...prev,
+      [selectedUserId]: [...(prev[selectedUserId] || []), newMsg],
+    }));
     setReplyInput('');
   };
 
   return (
-    <div className="min-h-screen max-w-md mx-auto bg-gradient-to-b from-[#e8fbf6] via-white to-white text-slate-900 pb-24 font-tajawal select-none shadow-2xl">
-      
-      {/* Top Header (00:37): محادثة on Right */}
-      <div className="sticky top-0 z-30 bg-[#e8fbf6]/95 backdrop-blur-md px-5 py-3.5 flex items-center justify-end border-b border-teal-100/60">
-        <h1 className="text-xl font-black text-slate-900">محادثة</h1>
-      </div>
+    <div className="min-h-dvh max-w-md mx-auto bg-[#0b101d] text-white pb-24 font-tajawal select-none shadow-2xl">
+      {/* Header */}
+      <header className="sticky top-0 z-30 bg-[#0b101d]/95 backdrop-blur-md border-b border-white/8 px-4 py-3.5 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <h1 className="text-base font-bold text-white">المحادثات والرسائل</h1>
+          <span className="text-xs text-slate-400 font-mono tabular-nums">
+            {realPeers.length + 1} محادثة
+          </span>
+        </div>
 
-      {/* Chat List Rows (Exact match to video 00:37) */}
-      <div className="divide-y divide-slate-100">
-        {threads.map((item) => (
-          <div
-            key={item.id}
-            onClick={() => setSelectedThread(item)}
-            className="px-4 py-3 flex items-center justify-between hover:bg-teal-50/40 cursor-pointer transition-colors"
-          >
-            {/* Left: Timestamp */}
-            <div className="text-[11px] text-slate-400 font-medium self-start pt-1">
-              {item.time}
+        <div className="relative">
+          <Search className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 right-3" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="بحث بالاسم أو رقم ID..."
+            className="w-full h-9 bg-white/6 border border-white/10 rounded-xl pr-9 pl-3 text-xs text-white placeholder:text-slate-400 focus:outline-none focus:border-amber-400"
+          />
+        </div>
+      </header>
+
+      {/* Thread List */}
+      <div className="divide-y divide-white/6">
+        {/* Official System & Wallet Activity Thread (100% Real Data) */}
+        <button
+          onClick={() => setSelectedUserId('system')}
+          className="w-full px-4 py-3.5 flex items-center justify-between gap-3 hover:bg-white/[0.04] transition-colors text-right"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-12 h-12 rounded-2xl bg-amber-400/15 border border-amber-400/40 flex items-center justify-center text-amber-300 shrink-0">
+              <Bell className="w-5 h-5" />
             </div>
-
-            {/* Center: Name + Badges + Subtitle */}
-            <div className="flex-1 px-3 text-right">
-              <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                {/* Wealth Badge */}
-                {item.wealthLevel && (
-                  <span className="px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 font-black text-[9px] flex items-center gap-0.5">
-                    <span>🪙</span>
-                    <span>{item.wealthLevel}</span>
-                  </span>
-                )}
-
-                {/* Charm Badge */}
-                {item.charmLevel && (
-                  <span className="px-1.5 py-0.2 rounded-full bg-pink-100 text-pink-700 font-black text-[9px] flex items-center gap-0.5">
-                    <span>🌸</span>
-                    <span>{item.charmLevel}</span>
-                  </span>
-                )}
-
-                {/* VIP Badge */}
-                {item.vipLevel && (
-                  <span
-                    className={`px-1.5 py-0.2 rounded font-black text-[9px] text-white ${
-                      item.vipLevel >= 5
-                        ? 'bg-gradient-to-r from-pink-500 to-rose-600'
-                        : item.vipLevel === 4
-                        ? 'bg-gradient-to-r from-sky-500 to-blue-600'
-                        : 'bg-gradient-to-r from-emerald-500 to-teal-600'
-                    }`}
-                  >
-                    VIP{item.vipLevel}
-                  </span>
-                )}
-
-                <h3 className="text-sm font-black text-slate-900">{item.name}</h3>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <h3 className="text-sm font-bold text-white">إشعارات النظام والمحفظة</h3>
+                <span className="px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 text-[9px] font-bold">
+                  رسمي
+                </span>
               </div>
-
-              <p className="text-xs text-slate-400 truncate mt-0.5">{item.lastMessage}</p>
-            </div>
-
-            {/* Right: Circular Avatar with Frame */}
-            <div className="relative shrink-0">
-              <div
-                className={`w-13 h-13 rounded-full p-0.5 ${
-                  item.frameColor ? `ring-2 ${item.frameColor}` : 'ring-1 ring-slate-200'
-                } overflow-hidden shadow-sm`}
-              >
-                <img
-                  src={item.avatar}
-                  alt={item.name}
-                  className="w-12 h-12 rounded-full object-cover"
-                />
-              </div>
-              {item.vipLevel && item.vipLevel >= 4 && (
-                <span className="absolute -top-1.5 -right-1 text-sm drop-shadow">👑</span>
-              )}
+              <p className="text-xs text-slate-400 truncate mt-0.5">
+                {mySystemAlerts[0]?.details || 'لا توجد إشعارات جديدة حالياً'}
+              </p>
             </div>
           </div>
-        ))}
+
+          <span className="text-[10px] text-slate-400 font-mono tabular-nums shrink-0">
+            {mySystemAlerts[0]?.timestamp?.slice(11, 16) || 'الآن'}
+          </span>
+        </button>
+
+        {/* Real Users Direct Messaging Threads */}
+        {filteredPeers.length === 0 ? (
+          <div className="py-12 px-4 text-center space-y-2 text-slate-400 text-xs">
+            <MessageSquare className="w-7 h-7 mx-auto opacity-50" />
+            <p>لا يوجد مستخدمون مطابقون للبحث.</p>
+          </div>
+        ) : (
+          filteredPeers.map((peer) => {
+            const peerMsgs = messagesByPeer[peer.id] || [];
+            const lastMsg = peerMsgs[peerMsgs.length - 1];
+
+            return (
+              <button
+                key={peer.id}
+                onClick={() => setSelectedUserId(peer.id)}
+                className="w-full px-4 py-3.5 flex items-center justify-between gap-3 hover:bg-white/[0.04] transition-colors text-right"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <img
+                    src={peer.avatar}
+                    alt={peer.displayName}
+                    referrerPolicy="no-referrer"
+                    className="w-12 h-12 rounded-full object-cover border border-white/15 shrink-0"
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <h3 className="text-sm font-bold text-white truncate">{peer.displayName}</h3>
+                      {peer.vipLevel > 0 && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 text-[9px] font-mono font-bold shrink-0">
+                          VIP{peer.vipLevel}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-400 truncate mt-0.5">
+                      {lastMsg ? lastMsg.text : `ID: ${peer.userCode} · اضغط لبدء المحادثة`}
+                    </p>
+                  </div>
+                </div>
+
+                <span className="text-[10px] text-slate-400 font-mono tabular-nums shrink-0">
+                  {lastMsg ? lastMsg.time : ''}
+                </span>
+              </button>
+            );
+          })
+        )}
       </div>
 
-      {/* Interactive Direct Chat Modal */}
-      {selectedThread && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3">
-          <div className="w-full max-w-md h-[540px] bg-white rounded-3xl shadow-2xl border border-teal-100 flex flex-col overflow-hidden animate-in zoom-in-95">
-            
+      {/* Direct Chat or System Notifications Modal */}
+      {selectedUserId && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4">
+          <div className="w-full max-w-md h-[82dvh] sm:h-[600px] bg-[#111522] border border-white/12 rounded-t-3xl sm:rounded-3xl flex flex-col overflow-hidden shadow-2xl">
             {/* Chat Header */}
-            <div className="px-4 py-3 bg-[#e8fbf6] border-b border-teal-100 flex items-center justify-between">
+            <div className="px-4 py-3 bg-[#151b2d] border-b border-white/10 flex items-center justify-between shrink-0">
               <button
-                onClick={() => setSelectedThread(null)}
-                className="p-1.5 rounded-full hover:bg-teal-100 text-slate-700"
+                onClick={() => setSelectedUserId(null)}
+                className="w-9 h-9 rounded-xl bg-white/8 hover:bg-white/14 flex items-center justify-center text-slate-200"
               >
-                <ChevronLeft className="w-5 h-5" />
+                <ChevronRight className="w-5 h-5" />
               </button>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-black text-slate-900">{selectedThread.name}</span>
-                <img
-                  src={selectedThread.avatar}
-                  alt={selectedThread.name}
-                  className="w-8 h-8 rounded-full object-cover ring-1 ring-amber-400"
-                />
-              </div>
-            </div>
 
-            {/* Messages */}
-            <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-slate-50">
-              {selectedThread.messages.map((m, i) => (
-                <div
-                  key={i}
-                  className={`flex flex-col ${m.isMe ? 'items-start' : 'items-end'}`}
-                >
-                  <div
-                    className={`max-w-[80%] px-3.5 py-2.5 rounded-2xl text-xs font-bold shadow-xs ${
-                      m.isMe
-                        ? 'bg-teal-500 text-white rounded-tl-none'
-                        : 'bg-white text-slate-800 border border-slate-200 rounded-tr-none'
-                    }`}
-                  >
-                    {m.text}
-                  </div>
-                  <span className="text-[9px] text-slate-400 mt-1">{m.time}</span>
+              {selectedUserId === 'system' ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-white">إشعارات النظام والمحفظة</span>
+                  <Bell className="w-4 h-4 text-amber-400" />
                 </div>
-              ))}
+              ) : selectedPeer ? (
+                <button
+                  onClick={() => {
+                    setViewingProfileUser(selectedPeer);
+                    setActiveModal('profile');
+                  }}
+                  className="flex items-center gap-2 hover:opacity-90"
+                >
+                  <div className="text-right">
+                    <div className="text-sm font-bold text-white">{selectedPeer.displayName}</div>
+                    <div className="text-[10px] text-slate-400 font-mono">
+                      ID: {selectedPeer.userCode}
+                    </div>
+                  </div>
+                  <img
+                    src={selectedPeer.avatar}
+                    alt={selectedPeer.displayName}
+                    referrerPolicy="no-referrer"
+                    className="w-9 h-9 rounded-full object-cover border border-amber-400/50"
+                  />
+                </button>
+              ) : null}
+
+              <div className="w-9" />
             </div>
 
-            {/* Reply Input */}
-            <form
-              onSubmit={handleSendReply}
-              className="p-3 bg-white border-t border-slate-100 flex items-center gap-2"
-            >
-              <button
-                type="submit"
-                className="p-2.5 rounded-full bg-teal-500 text-white hover:bg-teal-600 shadow"
+            {/* Messages Body */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+              {selectedUserId === 'system' ? (
+                mySystemAlerts.length === 0 ? (
+                  <div className="text-center py-12 text-xs text-slate-400">
+                    لا توجد إشعارات أو عمليات مسجلة بعد.
+                  </div>
+                ) : (
+                  mySystemAlerts.map((tx) => (
+                    <div
+                      key={tx.id}
+                      className="p-3 rounded-2xl bg-white/[0.04] border border-white/8 text-right space-y-1"
+                    >
+                      <div className="text-xs font-semibold text-white">{tx.details}</div>
+                      <div className="flex items-center justify-between text-[10px] font-mono tabular-nums text-slate-400">
+                        <span>{tx.timestamp}</span>
+                        {tx.coinsDelta !== 0 && (
+                          <span className={tx.coinsDelta > 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                            {tx.coinsDelta > 0 ? `+${tx.coinsDelta.toLocaleString()}` : tx.coinsDelta.toLocaleString()} 🪙
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )
+              ) : activeConversationMessages.length === 0 ? (
+                <div className="text-center py-12 text-xs text-slate-400">
+                  ابدأ المحادثة مع {selectedPeer?.displayName} الآن.
+                </div>
+              ) : (
+                activeConversationMessages.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`flex flex-col ${m.isMe ? 'items-start' : 'items-end'}`}
+                  >
+                    <div
+                      className={`max-w-[82%] px-3.5 py-2.5 rounded-2xl text-xs leading-relaxed ${
+                        m.isMe
+                          ? 'bg-amber-400 text-slate-950 font-semibold rounded-tl-none'
+                          : 'bg-white/10 text-white rounded-tr-none'
+                      }`}
+                    >
+                      {m.text}
+                    </div>
+                    <span className="text-[10px] text-slate-400 font-mono mt-1">{m.time}</span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Reply Bar (Only for Peer DMs) */}
+            {selectedUserId !== 'system' && (
+              <form
+                onSubmit={handleSendReply}
+                className="p-3 bg-[#151b2d] border-t border-white/10 flex items-center gap-2 shrink-0"
               >
-                <Send className="w-4 h-4" />
-              </button>
-              <input
-                type="text"
-                value={replyInput}
-                onChange={(e) => setReplyInput(e.target.value)}
-                placeholder="اكتب رسالة خاصة..."
-                className="flex-1 bg-slate-100 rounded-full px-4 py-2 text-xs text-right text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-400"
-              />
-            </form>
+                <input
+                  type="text"
+                  value={replyInput}
+                  onChange={(e) => setReplyInput(e.target.value)}
+                  placeholder="اكتب رسالة خاصة..."
+                  className="flex-1 h-10 bg-white/6 border border-white/12 rounded-xl px-3.5 text-xs text-white placeholder:text-slate-400 focus:outline-none focus:border-amber-400"
+                />
+                <button
+                  type="submit"
+                  className="w-10 h-10 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 flex items-center justify-center shrink-0 transition-colors"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </form>
+            )}
           </div>
         </div>
       )}
-
     </div>
   );
 };

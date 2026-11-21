@@ -16,23 +16,26 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
   const [comboCount, setComboCount] = useState<number>(1);
   const [targetType, setTargetType] = useState<'speaker' | 'seat' | 'all'>('speaker');
   const [selectedSeatIndex, setSelectedSeatIndex] = useState<number>(0);
+  const [vipNotice, setVipNotice] = useState<string | null>(null);
 
   if (!isOpen || !activeRoom) return null;
 
+  const occupiedSeats = activeRoom.seats.filter((s) => Boolean(s.userId));
   const filteredGifts = gifts.filter((g) => g.category === activeTab);
   const selectedGift = gifts.find((g) => g.id === selectedGiftId) || gifts[0];
 
   const combos = [1, 10, 66, 188, 520, 1314];
 
-  // Calculate target recipient count
-  let targetCount = 1;
-  if (targetType === 'all') {
-    const activeSeats = activeRoom.seats.filter((s) => s.userId);
-    targetCount = Math.max(1, activeSeats.length);
-  }
+  // Calculate target recipient count strictly from occupied mics
+  const targetCount =
+    occupiedSeats.length === 0
+      ? 0
+      : targetType === 'all'
+      ? occupiedSeats.length
+      : 1;
 
   const totalCoinsNeeded = selectedGift ? selectedGift.coinPrice * comboCount * targetCount : 0;
-  const hasEnoughCoins = currentUser.coins >= totalCoinsNeeded;
+  const hasEnoughCoins = targetCount > 0 && currentUser.coins >= totalCoinsNeeded;
 
   const handleSend = () => {
     if (!selectedGift) return;
@@ -112,7 +115,8 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
                 key={gift.id}
                 onClick={() => {
                   if (isVipLocked) {
-                    alert(`هذه الهدية تتطلب عضوية VIP ${gift.vipMinLevel} فما فوق! يمكنك الترقية من مركز VIP.`);
+                    setVipNotice(`هذه الهدية تتطلب عضوية VIP ${gift.vipMinLevel} فما فوق.`);
+                    setTimeout(() => setVipNotice(null), 3000);
                     return;
                   }
                   setSelectedGiftId(gift.id);
@@ -150,49 +154,58 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
         {/* Recipient & Combo Controls */}
         <div className="p-4 bg-slate-950/80 border-t border-slate-800 flex flex-col gap-3">
           
-          {/* Target Selector */}
+          {vipNotice && (
+            <div className="px-3 py-1.5 rounded-xl bg-amber-500/15 border border-amber-400/40 text-amber-200 text-xs text-right">
+              {vipNotice}
+            </div>
+          )}
+
+          {/* Target Selector (Occupied Mics Only) */}
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="text-slate-400 font-medium">المستلم:</span>
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => setTargetType('speaker')}
-                className={`px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
-                  targetType === 'speaker'
-                    ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold'
-                    : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                المتحدث الحالي
-              </button>
+            {occupiedSeats.length === 0 ? (
+              <span className="text-amber-300 font-semibold">لا يوجد متحدث على المايك حالياً</span>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setTargetType('speaker')}
+                  className={`px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
+                    targetType === 'speaker'
+                      ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold'
+                      : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  المتحدث الحالي
+                </button>
 
-              <button
-                onClick={() => setTargetType('all')}
-                className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1 transition-all ${
-                  targetType === 'all'
-                    ? 'bg-rose-500/20 border-rose-500 text-rose-300 font-bold'
-                    : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Users className="w-3 h-3" />
-                <span>الكل في المايك ({targetCount})</span>
-              </button>
+                <button
+                  onClick={() => setTargetType('all')}
+                  className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1 transition-all ${
+                    targetType === 'all'
+                      ? 'bg-rose-500/20 border-rose-500 text-rose-300 font-bold'
+                      : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Users className="w-3 h-3" />
+                  <span>الكل على المايك ({occupiedSeats.length})</span>
+                </button>
 
-              {/* Specific seat dropdown */}
-              <select
-                value={selectedSeatIndex}
-                onChange={(e) => {
-                  setTargetType('seat');
-                  setSelectedSeatIndex(Number(e.target.value));
-                }}
-                className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2 py-1.5 text-xs font-medium focus:outline-none focus:border-amber-500"
-              >
-                {activeRoom.seats.map((seat, i) => (
-                  <option key={i} value={i}>
-                    المقعد {i + 1} {seat.userName ? `(${seat.userName})` : '(فارغ)'}
-                  </option>
-                ))}
-              </select>
-            </div>
+                <select
+                  value={selectedSeatIndex}
+                  onChange={(e) => {
+                    setTargetType('seat');
+                    setSelectedSeatIndex(Number(e.target.value));
+                  }}
+                  className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2 py-1.5 text-xs font-medium focus:outline-none focus:border-amber-500"
+                >
+                  {occupiedSeats.map((seat) => (
+                    <option key={seat.index} value={seat.index}>
+                      مايك {seat.index + 1} ({seat.userName})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           {/* Combos Pill Row */}

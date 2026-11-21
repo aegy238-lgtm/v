@@ -18,17 +18,25 @@ export const AgencyPortalModal: React.FC<AgencyPortalModalProps> = ({ isOpen, on
   const [appPhone, setAppPhone] = useState('');
   const [appExp, setAppExp] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [agencyNotice, setAgencyNotice] = useState<string | null>(null);
 
   if (!isOpen) return null;
+
+  const showNotice = (msg: string) => {
+    setAgencyNotice(msg);
+    setTimeout(() => setAgencyNotice(null), 3500);
+  };
 
   const handleApply = (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitted(true);
     setTimeout(() => {
-      alert('تم إرسال طلب تأسيس الوكالة بنجاح إلى الإدارة العليا لمراجعته والاعتماد!');
       setSubmitted(false);
-      onClose();
-    }, 1000);
+      setAppName('');
+      setAppPhone('');
+      setAppExp('');
+      showNotice('تم إرسال طلب تأسيس الوكالة بنجاح إلى الإدارة العليا لمراجعته والاعتماد.');
+    }, 600);
   };
 
   const agencyHosts = users.filter((u) => u.agencyId === selectedAgency.id);
@@ -99,6 +107,11 @@ export const AgencyPortalModal: React.FC<AgencyPortalModalProps> = ({ isOpen, on
 
         {/* Body Content */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1">
+          {agencyNotice && (
+            <div className="px-4 py-2.5 rounded-2xl bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 text-xs font-bold text-right">
+              {agencyNotice}
+            </div>
+          )}
           
           {/* TAB 1: MY AGENCY DASHBOARD */}
           {activeTab === 'my_agency' && (
@@ -268,7 +281,7 @@ export const AgencyPortalModal: React.FC<AgencyPortalModalProps> = ({ isOpen, on
 
                   <button
                     onClick={() => {
-                      alert(`تم إرسال طلب انضمامك إلى ${agency.name}! سيتواصل معك مالك الوكالة.`);
+                      showNotice(`تم إرسال طلب انضمامك إلى ${agency.name} بنجاح.`);
                     }}
                     className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-colors flex items-center justify-center gap-1.5"
                   >

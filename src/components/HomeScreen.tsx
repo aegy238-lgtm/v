@@ -2,334 +2,248 @@ import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   Search,
-  Flame,
   Crown,
-  Sparkles,
   Plus,
-  ChevronLeft,
+  Mic,
+  Users,
+  Wallet,
+  Briefcase,
+  Gamepad2,
+  Trophy,
+  X,
 } from 'lucide-react';
 
+const LOCAL_ROOM_COVERS = [
+  '/src/assets/images/room_bg_midnight_lounge_1795294231147.jpg',
+  '/src/assets/images/room_bg_royal_majlis_1795294234181.jpg',
+  '/src/assets/images/room_bg_starlight_sky_1795294232054.jpg',
+];
+
 export const HomeScreen: React.FC = () => {
-  const { rooms, joinRoom, setActiveModal } = useApp();
-  const [activeTopTab, setActiveTopTab] = useState<'me' | 'active' | 'event'>('active');
+  const { rooms, currentUser, joinRoom, setActiveModal, setActiveTab } = useApp();
+  const [activeTopTab, setActiveTopTab] = useState<'all' | 'mine' | 'vip'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
 
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+
+  const filteredRooms = rooms.filter((room) => {
+    if (activeTopTab === 'mine' && room.ownerId !== currentUser.id) {
+      return false;
+    }
+    if (activeTopTab === 'vip' && room.type !== 'vip' && room.totalDiamondsEarned < 500000) {
+      return false;
+    }
+    if (!normalizedQuery) return true;
+    return (
+      room.title.toLowerCase().includes(normalizedQuery) ||
+      room.roomNo.toLowerCase().includes(normalizedQuery) ||
+      room.ownerName.toLowerCase().includes(normalizedQuery)
+    );
+  });
+
+  const formatDiamonds = (val: number) => {
+    if (val >= 1000000) return `${(val / 1000000).toFixed(1)}M`;
+    if (val >= 1000) return `${(val / 1000).toFixed(1)}K`;
+    return val.toString();
+  };
+
   return (
-    <div className="min-h-screen max-w-md mx-auto bg-gradient-to-b from-[#f0fbf7] via-[#f8fdfb] to-white text-slate-900 pb-24 font-tajawal select-none shadow-2xl">
-      
-      {/* 1. Top Navigation Header (00:42 - 00:47): Search on Left, Tabs (حدث | نشيط | انا) + Emblem on Right */}
-      <div className="sticky top-0 z-30 bg-[#f0fbf7]/95 backdrop-blur-md px-4 py-3 flex items-center justify-between">
-        
-        {/* Left: Search Icon */}
-        <button
-          onClick={() => setShowSearch(!showSearch)}
-          className="p-2 rounded-full hover:bg-teal-100/60 text-slate-600 transition-colors"
-          title="بحث"
-        >
-          <Search className="w-5 h-5" />
-        </button>
+    <div className="min-h-dvh max-w-md mx-auto bg-[#0b101d] text-white pb-24 font-tajawal select-none shadow-2xl">
+      {/* Top Sticky Header */}
+      <header className="sticky top-0 z-30 bg-[#0b101d]/95 backdrop-blur-md border-b border-white/8 px-4 py-3 space-y-2.5">
+        <div className="flex items-center justify-between gap-2">
+          {/* Tabs */}
+          <div className="flex items-center gap-4">
+            {[
+              { id: 'all', label: 'الغرف النشطة' },
+              { id: 'mine', label: 'غرفي' },
+              { id: 'vip', label: 'VIP' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTopTab(tab.id as typeof activeTopTab)}
+                className={`relative pb-1 text-sm transition-colors ${
+                  activeTopTab === tab.id
+                    ? 'text-amber-300 font-bold after:content-[""] after:absolute after:bottom-[-4px] after:inset-x-0 after:h-[2px] after:bg-amber-400 after:rounded-full'
+                    : 'text-slate-400 hover:text-slate-200 font-medium'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
 
-        {/* Right: Tabs (حدث | نشيط | انا) + Golden Crest Avatar */}
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => setActiveTopTab('event')}
-            className={`text-sm font-bold transition-all ${
-              activeTopTab === 'event'
-                ? 'text-slate-900 font-black scale-110'
-                : 'text-slate-400'
-            }`}
-          >
-            حدث
-          </button>
-
-          <button
-            onClick={() => setActiveTopTab('active')}
-            className={`relative text-lg font-black transition-all ${
-              activeTopTab === 'active'
-                ? 'text-slate-900 after:content-[""] after:absolute after:-bottom-1 after:inset-x-1 after:h-1 after:rounded-full after:bg-teal-500'
-                : 'text-slate-400 text-sm font-bold'
-            }`}
-          >
-            نشيط
-          </button>
-
-          <button
-            onClick={() => setActiveTopTab('me')}
-            className={`text-sm font-bold transition-all ${
-              activeTopTab === 'me'
-                ? 'text-slate-900 font-black scale-110'
-                : 'text-slate-400'
-            }`}
-          >
-            انا
-          </button>
-
-          {/* Right Golden Winged Crest */}
-          <button
-            onClick={() => joinRoom('room_tyy')}
-            className="w-10 h-10 rounded-full bg-gradient-to-tr from-slate-900 via-amber-900 to-amber-500 p-0.5 shadow-md flex items-center justify-center"
-            title="غرفتي"
-          >
-            <div className="w-full h-full rounded-full bg-slate-950 flex flex-col items-center justify-center">
-              <span className="text-sm leading-none">🦅</span>
-              <span className="text-[6px] font-black text-amber-300 uppercase">EMPIRE</span>
-            </div>
-          </button>
-        </div>
-      </div>
-
-      {/* Expandable Search Bar */}
-      {showSearch && (
-        <div className="px-4 pb-2 animate-in slide-in-from-top-2">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="ابحث عن غرفة أو ID..."
-            className="w-full bg-white border border-teal-200 rounded-2xl px-4 py-2 text-xs text-slate-800 shadow-inner focus:outline-none focus:border-teal-500"
-            autoFocus
-          />
-        </div>
-      )}
-
-      {/* Main Content Container */}
-      <div className="px-3 space-y-3 pt-1">
-        
-        {/* 2. Floating Golden Lucky Multiplier Banner (Exact match to video 00:43 - 00:45) */}
-        <div
-          onClick={() => joinRoom('room_tyy')}
-          className="relative mx-auto w-full h-14 rounded-full bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-600 border-2 border-yellow-200 shadow-lg px-3 flex items-center justify-between cursor-pointer hover:scale-[1.01] transition-transform"
-        >
-          {/* Left: Golden Lollipop & Wings */}
+          {/* Search & Create Room Actions */}
           <div className="flex items-center gap-1.5">
-            <div className="w-10 h-10 rounded-full bg-pink-500/30 border border-white flex items-center justify-center text-xl shadow">
-              🍭
-            </div>
-          </div>
+            <button
+              onClick={() => setShowSearch((prev) => !prev)}
+              className="w-9 h-9 rounded-xl bg-white/8 hover:bg-white/14 border border-white/10 flex items-center justify-center text-slate-200 transition-colors"
+              title="بحث عن غرفة"
+            >
+              {showSearch ? <X className="w-4 h-4" /> : <Search className="w-4 h-4" />}
+            </button>
 
-          {/* Center Text: سمو الامير VIP4 ربح 12250 من الكوينزات في */}
-          <div className="flex-1 text-center px-1">
-            <div className="flex items-center justify-center gap-1">
-              <span className="px-1.5 py-0.2 rounded bg-sky-600 text-white font-black text-[9px]">
-                VIP4
-              </span>
-              <span className="text-xs font-black text-slate-950 truncate">
-                🦅 سمو الامير 🦅
-              </span>
-            </div>
-            <div className="text-[11px] font-black text-red-900">
-              ربح <span className="underline">12250</span> من الكوينزات في 🍭
-            </div>
-          </div>
-
-          {/* Right: 250 مرات Multiplier Orb */}
-          <div className="w-11 h-11 rounded-full bg-gradient-to-b from-orange-400 via-amber-500 to-red-600 border-2 border-yellow-100 flex flex-col items-center justify-center text-white shadow-md shrink-0">
-            <span className="text-xs font-black leading-none">250</span>
-            <span className="text-[8px] font-bold leading-none">مرات</span>
+            <button
+              onClick={() => setActiveModal('create_room')}
+              className="h-9 px-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center gap-1 transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              <span>إنشاء غرفة</span>
+            </button>
           </div>
         </div>
 
-        {/* 3. Three Ornate 3D Metallic Gold Ranking Plaques: FAMILY | CHARM | WEALTH (00:42 - 00:47) */}
-        <div className="grid grid-cols-3 gap-2 pt-1">
-          
-          {/* FAMILY Plaque */}
-          <div
+        {showSearch && (
+          <div className="pt-0.5">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="ابحث باسم الغرفة أو رقم ID أو اسم المضيف..."
+              className="w-full h-10 bg-white/6 border border-white/12 rounded-xl px-3.5 text-xs text-white placeholder:text-slate-400 focus:outline-none focus:border-amber-400"
+              autoFocus
+            />
+          </div>
+        )}
+      </header>
+
+      <div className="px-4 pt-4 space-y-4">
+        {/* Real Quick Shortcuts (Wallet, VIP, Agency, Games — All Working) */}
+        <div className="grid grid-cols-4 gap-2">
+          <button
+            onClick={() => setActiveModal('wallet')}
+            className="p-2.5 rounded-2xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/8 flex flex-col items-center gap-1.5 transition-colors"
+          >
+            <Wallet className="w-5 h-5 text-amber-400" />
+            <span className="text-[11px] font-semibold text-slate-200">المحفظة</span>
+          </button>
+
+          <button
+            onClick={() => setActiveModal('vip')}
+            className="p-2.5 rounded-2xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/8 flex flex-col items-center gap-1.5 transition-colors"
+          >
+            <Crown className="w-5 h-5 text-amber-300" />
+            <span className="text-[11px] font-semibold text-slate-200">VIP</span>
+          </button>
+
+          <button
             onClick={() => setActiveModal('agency')}
-            className="relative rounded-2xl p-2 bg-gradient-to-b from-[#2a1b4e] via-[#1a1033] to-[#0f0820] border-2 border-amber-400 shadow-md flex flex-col items-center cursor-pointer hover:scale-[1.02] transition-transform"
+            className="p-2.5 rounded-2xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/8 flex flex-col items-center gap-1.5 transition-colors"
           >
-            <div className="w-11 h-11 rounded-full ring-2 ring-amber-300 p-0.5 overflow-hidden bg-slate-900 -mt-1 shadow-lg">
-              <img
-                src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
-                alt="Family Top"
-                className="w-full h-full rounded-full object-cover"
-              />
-            </div>
-            <div className="mt-1.5 w-full py-0.5 rounded bg-gradient-to-r from-amber-600 via-yellow-400 to-amber-600 text-slate-950 font-black text-[9px] text-center tracking-wider uppercase shadow">
-              FAMILY
-            </div>
-          </div>
+            <Briefcase className="w-5 h-5 text-sky-400" />
+            <span className="text-[11px] font-semibold text-slate-200">الوكالات</span>
+          </button>
 
-          {/* CHARM Plaque */}
-          <div
-            onClick={() => setActiveModal('vip')}
-            className="relative rounded-2xl p-2 bg-gradient-to-b from-[#4a153b] via-[#2e0c25] to-[#170512] border-2 border-amber-400 shadow-md flex flex-col items-center cursor-pointer hover:scale-[1.02] transition-transform"
+          <button
+            onClick={() => setActiveTab('game')}
+            className="p-2.5 rounded-2xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/8 flex flex-col items-center gap-1.5 transition-colors"
           >
-            <div className="w-11 h-11 rounded-full ring-2 ring-amber-300 p-0.5 overflow-hidden bg-slate-900 -mt-1 shadow-lg">
-              <img
-                src="https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=150&q=80"
-                alt="Charm Top"
-                className="w-full h-full rounded-full object-cover"
-              />
-            </div>
-            <div className="mt-1.5 w-full py-0.5 rounded bg-gradient-to-r from-amber-600 via-yellow-400 to-amber-600 text-slate-950 font-black text-[9px] text-center tracking-wider uppercase shadow">
-              CHARM
-            </div>
-          </div>
-
-          {/* WEALTH Plaque */}
-          <div
-            onClick={() => setActiveModal('vip')}
-            className="relative rounded-2xl p-2 bg-gradient-to-b from-[#3d260a] via-[#261705] to-[#140b02] border-2 border-amber-400 shadow-md flex flex-col items-center cursor-pointer hover:scale-[1.02] transition-transform"
-          >
-            <div className="w-11 h-11 rounded-full ring-2 ring-amber-300 p-0.5 overflow-hidden bg-slate-900 -mt-1 shadow-lg">
-              <img
-                src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80"
-                alt="Wealth Top"
-                className="w-full h-full rounded-full object-cover"
-              />
-            </div>
-            <div className="mt-1.5 w-full py-0.5 rounded bg-gradient-to-r from-amber-600 via-yellow-400 to-amber-600 text-slate-950 font-black text-[9px] text-center tracking-wider uppercase shadow">
-              WEALTH
-            </div>
-          </div>
-
+            <Gamepad2 className="w-5 h-5 text-emerald-400" />
+            <span className="text-[11px] font-semibold text-slate-200">الألعاب</span>
+          </button>
         </div>
 
-        {/* 4. Featured Luxury Room Grid (Exact Match to Video 00:42 - 00:47) */}
-        <div className="grid grid-cols-2 gap-2.5">
-          
-          {/* Left Tall Card: بيت العائلة (38 Il.) */}
-          <div
-            onClick={() => joinRoom('room_tyy')}
-            className="row-span-2 relative rounded-2xl overflow-hidden cursor-pointer group shadow-lg border-2 border-amber-400 bg-slate-900 min-h-[250px] flex flex-col justify-end"
-          >
-            <img
-              src="https://images.unsplash.com/photo-1522529599102-193c0d76b5b6?auto=format&fit=crop&w=500&q=80"
-              alt="بيت العائلة"
-              className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
-
-            {/* Top decorative red/gold corner */}
-            <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 font-black text-[10px] shadow">
-              TOP 1 👑
-            </div>
-
-            <div className="relative z-10 p-3 flex items-center justify-between text-white">
-              <div className="flex items-center gap-1 bg-rose-600/90 px-2 py-0.5 rounded-full text-[10px] font-black">
-                <span>📊</span>
-                <span>38</span>
-              </div>
-              <span className="text-sm font-black text-amber-300 drop-shadow">
-                بيت العائلة
-              </span>
-            </div>
+        {/* Real Active Voice Rooms List */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-bold text-slate-300">
+              الغرف الصوتية المتاحة ({filteredRooms.length})
+            </h2>
+            <span className="text-[11px] text-slate-400 font-mono tabular-nums">
+              الرصيد: {currentUser.coins.toLocaleString()} 🪙
+            </span>
           </div>
 
-          {/* Right Top Card: عيد الحب (51 Il.) with Purple/Gold Wings */}
-          <div
-            onClick={() => joinRoom('room_tyy')}
-            className="relative rounded-2xl overflow-hidden cursor-pointer group shadow-lg border-2 border-purple-400 bg-gradient-to-b from-purple-900 via-indigo-950 to-slate-950 h-[120px] flex flex-col justify-between p-2.5"
-          >
-            <div className="flex items-center justify-center my-auto">
-              <div className="relative w-14 h-14 rounded-full ring-2 ring-amber-300 p-0.5 bg-purple-950 shadow-[0_0_20px_rgba(168,85,247,0.8)]">
-                <img
-                  src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80"
-                  alt="عيد الحب"
-                  className="w-full h-full rounded-full object-cover"
-                />
-                <span className="absolute -top-2 inset-x-0 text-center text-xs">👑</span>
+          {filteredRooms.length === 0 ? (
+            <div className="rounded-2xl bg-white/[0.04] border border-white/8 p-8 text-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-white/6 mx-auto flex items-center justify-center text-slate-400">
+                <Mic className="w-6 h-6" />
               </div>
+              <p className="text-xs text-slate-300">
+                {normalizedQuery
+                  ? 'لا توجد غرف مطابقة للبحث الحالي.'
+                  : activeTopTab === 'mine'
+                  ? 'لم تقم بإنشاء غرفة بعد.'
+                  : 'لا توجد غرف متاحة في هذا القسم حالياً.'}
+              </p>
+              <button
+                onClick={() => setActiveModal('create_room')}
+                className="h-9 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-colors"
+              >
+                + إنشاء غرفة جديدة
+              </button>
             </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3">
+              {filteredRooms.map((room, index) => {
+                const occupiedCount = room.seats.filter((s) => Boolean(s.userId)).length;
+                const coverSrc = LOCAL_ROOM_COVERS[index % LOCAL_ROOM_COVERS.length];
 
-            <div className="relative z-10 flex items-center justify-between text-white">
-              <div className="flex items-center gap-1 bg-purple-600/90 px-1.5 py-0.2 rounded-full text-[10px] font-black">
-                <span>📊</span>
-                <span>51</span>
-              </div>
-              <span className="text-xs font-black text-amber-200 truncate">
-                💜 عيد الحب 💜
-              </span>
+                return (
+                  <button
+                    key={room.id}
+                    onClick={() => joinRoom(room.id)}
+                    className="relative w-full rounded-2xl overflow-hidden border border-white/10 hover:border-amber-400/50 bg-[#121829] text-right transition-all active:scale-[0.99] shadow-lg"
+                  >
+                    <img
+                      src={coverSrc}
+                      alt={room.title}
+                      referrerPolicy="no-referrer"
+                      className="absolute inset-0 w-full h-full object-cover opacity-35"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-l from-[#0b101d]/95 via-[#0b101d]/75 to-[#0b101d]/45" />
+
+                    <div className="relative z-10 p-3.5 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <img
+                          src={room.ownerAvatar || currentUser.avatar}
+                          alt={room.ownerName}
+                          referrerPolicy="no-referrer"
+                          className="w-14 h-14 rounded-2xl object-cover border border-amber-400/40 shrink-0"
+                        />
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-1.5">
+                            <h3 className="text-sm font-bold text-white truncate">{room.title}</h3>
+                            {room.type === 'vip' && (
+                              <span className="px-1.5 py-0.5 rounded bg-amber-400/20 border border-amber-400/40 text-amber-300 text-[9px] font-bold shrink-0">
+                                VIP
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-300 truncate">
+                            المضيف: {room.ownerName} ·{' '}
+                            <span className="font-mono tabular-nums text-slate-400">
+                              ID {room.roomNo}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 text-[11px] text-slate-300 font-mono tabular-nums">
+                            <span className="flex items-center gap-1 text-emerald-300">
+                              <Mic className="w-3 h-3" />
+                              {occupiedCount}/8
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Users className="w-3 h-3 text-slate-400" />
+                              {Math.max(1, room.onlineViewersCount)}
+                            </span>
+                            <span className="flex items-center gap-1 text-amber-300">
+                              <Trophy className="w-3 h-3" />
+                              {formatDiamonds(room.totalDiamondsEarned)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <span className="h-9 px-3.5 rounded-xl bg-amber-400/15 border border-amber-400/40 text-amber-300 font-bold text-xs flex items-center justify-center shrink-0">
+                        دخول
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
-          </div>
-
-          {/* Right Bottom Card: مبروك افتتاح وكالة حفل افتتاح وتكاليف (35 Il.) */}
-          <div
-            onClick={() => joinRoom('room_tyy')}
-            className="relative rounded-2xl overflow-hidden cursor-pointer group shadow-lg border-2 border-amber-400 bg-gradient-to-r from-amber-950 via-stone-900 to-amber-900 h-[120px] flex flex-col justify-between p-2.5"
-          >
-            <div className="flex items-center justify-between my-auto">
-              <div className="text-right">
-                <div className="text-xs font-black text-amber-300 leading-tight">
-                  مبروك
-                </div>
-                <div className="text-sm font-black text-white leading-tight">
-                  افتتاح وكالة 🤍
-                </div>
-              </div>
-              <img
-                src="https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=150&q=80"
-                alt="افتتاح وكالة"
-                className="w-12 h-12 rounded-xl object-cover ring-2 ring-amber-300"
-              />
-            </div>
-
-            <div className="relative z-10 flex items-center justify-between text-white">
-              <div className="flex items-center gap-1 bg-sky-600/90 px-1.5 py-0.2 rounded-full text-[10px] font-black">
-                <span>📊</span>
-                <span>35</span>
-              </div>
-              <span className="text-[10px] font-bold text-amber-100 truncate">
-                حفل افتتاح وتكاليف...
-              </span>
-            </div>
-          </div>
-
+          )}
         </div>
-
-        {/* 5. Bottom Row Cards: الفرحة فرحتنا (الأصدقاء النشطون) + LIONS EMPIRE (00:42 - 00:47) */}
-        <div className="grid grid-cols-2 gap-2.5">
-          
-          {/* Left Card: الفرحة فرحتنا + الأصدقاء النشطون pill */}
-          <div
-            onClick={() => joinRoom('room_amir')}
-            className="relative rounded-2xl overflow-hidden cursor-pointer shadow-md border border-amber-300 bg-amber-50 h-28 p-2.5 flex flex-col justify-between"
-          >
-            <div className="text-right">
-              <span className="text-xs font-black text-amber-900 block">
-                الفرحة فرحتنا 🎉
-              </span>
-              <span className="text-[10px] text-amber-700 font-bold">
-                تهنينا ياجدعان خطوبة احلي عروسة
-              </span>
-            </div>
-
-            {/* Active Friends Pill Overlay */}
-            <div className="flex items-center justify-between bg-slate-900/85 text-white px-2.5 py-1.5 rounded-full text-[10px] font-bold shadow">
-              <ChevronLeft className="w-3.5 h-3.5 text-amber-300" />
-              <span>الأصدقاء النشطون</span>
-              <img
-                src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80"
-                alt="Friend"
-                className="w-5 h-5 rounded-full object-cover"
-              />
-            </div>
-          </div>
-
-          {/* Right Card: THE LIONS EMPIRE */}
-          <div
-            onClick={() => joinRoom('room_aseer')}
-            className="relative rounded-2xl overflow-hidden cursor-pointer shadow-md border border-amber-500/60 bg-slate-950 h-28 p-2.5 flex flex-col justify-end text-white"
-          >
-            <img
-              src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80"
-              alt="Lions Empire"
-              className="absolute inset-0 w-full h-full object-cover opacity-55"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent" />
-            <div className="relative z-10 text-center">
-              <div className="text-xs font-black text-amber-400 tracking-wider uppercase">
-                THE LIONS EMPIRE
-              </div>
-              <div className="text-[9px] text-stone-300 font-bold">
-                إمبراطورية الأسود الملكية
-              </div>
-            </div>
-          </div>
-
-        </div>
-
       </div>
     </div>
   );

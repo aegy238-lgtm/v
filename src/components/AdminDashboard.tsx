@@ -67,6 +67,12 @@ export const AdminDashboard: React.FC = () => {
   const [newAgentName, setNewAgentName] = useState('');
   const [newAgentBalance, setNewAgentBalance] = useState(2000000);
   const [newAgentRate, setNewAgentRate] = useState(5);
+  const [adminNotice, setAdminNotice] = useState<string | null>(null);
+
+  const showAdminNotice = (msg: string) => {
+    setAdminNotice(msg);
+    setTimeout(() => setAdminNotice(null), 3500);
+  };
 
   const selectedUser = users.find((u) => u.id === selectedUserId) || users[0];
 
@@ -81,7 +87,7 @@ export const AdminDashboard: React.FC = () => {
     e.preventDefault();
     if (!selectedUser) return;
     adminAddBalance(selectedUser.id, adjustCoins, adjustDiamonds, adjustNote);
-    alert(`تم تعديل رصيد ${selectedUser.displayName} بنجاح!`);
+    showAdminNotice(`تم تعديل رصيد ${selectedUser.displayName} بنجاح.`);
   };
 
   const handleCreateGift = (e: React.FormEvent) => {
@@ -103,7 +109,7 @@ export const AdminDashboard: React.FC = () => {
     };
 
     adminCreateGift(gift);
-    alert('تمت إضافة الهدية للمتجر فوراً دون الحاجة لتحديث الكود أو التطبيق!');
+    showAdminNotice('تمت إضافة الهدية إلى المتجر فوراً.');
     setNewGiftName('');
   };
 
@@ -117,7 +123,7 @@ export const AdminDashboard: React.FC = () => {
       commissionRate: newAgentRate,
     });
 
-    alert('تم إنشاء حساب وكيل شحن جديد وتخصيص رصيده بنجاح!');
+    showAdminNotice('تم إنشاء حساب وكيل الشحن وتخصيص رصيده بنجاح.');
     setNewAgentName('');
   };
 
@@ -153,6 +159,12 @@ export const AdminDashboard: React.FC = () => {
           العودة لواجهة المستخدم
         </button>
       </div>
+
+      {adminNotice && (
+        <div className="px-4 py-3 rounded-2xl bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 text-xs font-bold text-right">
+          {adminNotice}
+        </div>
+      )}
 
       {/* Admin Nav Tabs */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
@@ -509,9 +521,8 @@ export const AdminDashboard: React.FC = () => {
                   </span>
                   <button
                     onClick={() => {
-                      if (confirm(`هل أنت متأكد من إغلاق الغرفة (${room.title})؟`)) {
-                        adminCloseRoom(room.id);
-                      }
+                      adminCloseRoom(room.id);
+                      showAdminNotice(`تم إغلاق الغرفة (${room.title}).`);
                     }}
                     className="px-3 py-1.5 rounded-xl bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 text-xs font-bold"
                   >
@@ -723,7 +734,7 @@ export const AdminDashboard: React.FC = () => {
                   <button
                     onClick={() => {
                       adminTopupAgent(ag.id, 1000000);
-                      alert(`تمت إضافة 1,000,000 عملة لرصيد الوكيل ${ag.name}!`);
+                      showAdminNotice(`تمت إضافة 1,000,000 عملة لرصيد الوكيل ${ag.name}.`);
                     }}
                     className="flex-1 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 text-xs font-bold transition-colors"
                   >

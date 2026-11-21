@@ -14,7 +14,7 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({ isOpen, onClos
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<VoiceRoom['category']>('music');
   const [roomType, setRoomType] = useState<VoiceRoom['type']>('public');
-  const [seatCount, setSeatCount] = useState<VoiceRoom['seatCount']>(9);
+  const seatCount: VoiceRoom['seatCount'] = 8;
 
   if (!isOpen) return null;
 
@@ -97,42 +97,9 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({ isOpen, onClos
             </div>
           </div>
 
-          <div>
-            <label className="block text-slate-300 font-semibold mb-1.5">
-              سعة مقاعد المايك:
-            </label>
-            <div className="grid grid-cols-4 gap-2">
-              {[4, 6, 8, 9, 12, 16, 20].slice(0, 4).map((cnt) => (
-                <button
-                  key={cnt}
-                  type="button"
-                  onClick={() => setSeatCount(cnt as any)}
-                  className={`py-2 rounded-xl border font-mono font-bold transition-all ${
-                    seatCount === cnt
-                      ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md'
-                      : 'bg-slate-950 border-slate-800 text-slate-400'
-                  }`}
-                >
-                  {cnt} مقاعد
-                </button>
-              ))}
-            </div>
-            <div className="grid grid-cols-3 gap-2 mt-2">
-              {[9, 12, 16].map((cnt) => (
-                <button
-                  key={cnt}
-                  type="button"
-                  onClick={() => setSeatCount(cnt as any)}
-                  className={`py-2 rounded-xl border font-mono font-bold transition-all ${
-                    seatCount === cnt
-                      ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md'
-                      : 'bg-slate-950 border-slate-800 text-slate-400'
-                  }`}
-                >
-                  {cnt} مقاعد
-                </button>
-              ))}
-            </div>
+          <div className="px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs">
+            <span className="text-slate-400 font-semibold">عدد المايكات:</span>
+            <span className="text-amber-300 font-mono font-bold">8 مايكات صوتية (4×2)</span>
           </div>
 
           <div>

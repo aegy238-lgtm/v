@@ -13,7 +13,6 @@ import {
   Star,
   Lock,
 } from 'lucide-react';
-import confetti from 'canvas-confetti';
 
 interface VipCenterModalProps {
   isOpen: boolean;
@@ -44,7 +43,6 @@ export const VipCenterModal: React.FC<VipCenterModalProps> = ({ isOpen, onClose 
     }
     const success = purchaseVip(currentTier.level, durationMonths);
     if (success) {
-      confetti({ particleCount: 90, spread: 80, origin: { y: 0.5 } });
       onClose();
     }
   };

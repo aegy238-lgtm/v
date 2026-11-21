@@ -339,7 +339,7 @@ export const VoiceRoomView: React.FC = () => {
   >('all');
   const [selectedGiftId, setSelectedGiftId] = useState<string>('gift_rose');
   const [giftCount, setGiftCount] = useState<number>(1);
-  const [selectedRecipientSeats, setSelectedRecipientSeats] = useState<number[]>([0]);
+  const [selectedRecipientSeats, setSelectedRecipientSeats] = useState<number[]>([]);
 
   // Emoji State
   const [emojiCategory, setEmojiCategory] = useState<'faces' | 'gestures' | 'hearts' | 'fun'>(
@@ -434,6 +434,33 @@ export const VoiceRoomView: React.FC = () => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [roomEventLogs.length, activeRoomMessages.length]);
 
+  // Keep selected gift recipients & active combo strictly synced to OCCUPIED mics only
+  const occupiedIndicesKey = (activeRoom?.seats || [])
+    .slice(0, 8)
+    .filter((s) => Boolean(s.userId))
+    .map((s) => s.index)
+    .join(',');
+
+  useEffect(() => {
+    const occupiedList = occupiedIndicesKey
+      ? occupiedIndicesKey.split(',').map((n) => Number(n))
+      : [];
+    const occupiedSet = new Set(occupiedList);
+
+    setSelectedRecipientSeats((prev) => {
+      const stillValid = prev.filter((idx) => occupiedSet.has(idx));
+      if (stillValid.length > 0) return stillValid;
+      return occupiedList.length > 0 ? [occupiedList[0]] : [];
+    });
+
+    setComboState((prev) => {
+      if (!prev) return null;
+      const validTargets = prev.targetSeats.filter((idx) => occupiedSet.has(idx));
+      if (validTargets.length === 0) return null;
+      return { ...prev, targetSeats: validTargets };
+    });
+  }, [occupiedIndicesKey]);
+
   if (!activeRoom) return null;
 
   const activeTheme = ROOM_THEMES.find((t) => t.id === themeId) || ROOM_THEMES[0];
@@ -477,8 +504,26 @@ export const VoiceRoomView: React.FC = () => {
     };
   });
 
+  const occupiedSeats = seats8.filter((s) => Boolean(s.userId));
   const mySeat = seats8.find((s) => s.userId === currentUser.id);
   const totalBagCount = Object.values(bagGifts).reduce((a, b) => a + b, 0);
+
+  const openGiftDrawer = (preferredSeatIndex?: number) => {
+    if (
+      preferredSeatIndex !== undefined &&
+      seats8[preferredSeatIndex] &&
+      Boolean(seats8[preferredSeatIndex].userId)
+    ) {
+      setSelectedRecipientSeats([preferredSeatIndex]);
+    } else {
+      setSelectedRecipientSeats((prev) => {
+        const stillOccupied = prev.filter((idx) => Boolean(seats8[idx]?.userId));
+        if (stillOccupied.length > 0) return stillOccupied;
+        return occupiedSeats.length > 0 ? [occupiedSeats[0].index] : [];
+      });
+    }
+    setActiveBottomDrawer('gift');
+  };
 
   const formatScore = (val: number) => {
     if (val === 0) return '0';
@@ -488,13 +533,12 @@ export const VoiceRoomView: React.FC = () => {
   };
 
   const getTargetNamesLabel = (seatIndices: number[]) => {
-    const valid = seatIndices.filter((i) => i >= 0 && i < 8);
-    if (valid.length === 0) return 'مايك 1';
-    if (valid.length === 8) return 'جميع المايكات';
-    const names = valid.map((idx) => {
-      const s = seats8[idx];
-      return s?.userName || (idx === 0 ? 'المضيف' : `مايك ${idx + 1}`);
-    });
+    const valid = seatIndices.filter((i) => i >= 0 && i < 8 && Boolean(seats8[i]?.userId));
+    if (valid.length === 0) return '';
+    if (occupiedSeats.length > 1 && valid.length === occupiedSeats.length) {
+      return 'جميع المتحدثين';
+    }
+    const names = valid.map((idx) => seats8[idx]?.userName || `مايك ${idx + 1}`);
     return names.length <= 2 ? names.join('، ') : `${names[0]} +${names.length - 1}`;
   };
 
@@ -729,8 +773,8 @@ export const VoiceRoomView: React.FC = () => {
     comboHits: number,
     fromBag = false
   ) => {
-    const cleanTargets = targetSeats.filter((i) => i >= 0 && i < 8);
-    const finalTargets = cleanTargets.length > 0 ? cleanTargets : [0];
+    const finalTargets = targetSeats.filter((i) => i >= 0 && i < 8 && Boolean(seats8[i]?.userId));
+    if (finalTargets.length === 0) return;
     const targetLabel = getTargetNamesLabel(finalTargets);
     const totalNeededCount = count * finalTargets.length;
 
@@ -844,8 +888,11 @@ export const VoiceRoomView: React.FC = () => {
 
   const handleSendSelectedGift = () => {
     const giftObj = gifts.find((g) => g.id === selectedGiftId) || gifts[0];
-    const targets = selectedRecipientSeats.length > 0 ? selectedRecipientSeats : [0];
+    const targets = selectedRecipientSeats.filter((i) => i >= 0 && i < 8 && Boolean(seats8[i]?.userId));
+    if (!giftObj || targets.length === 0) return;
+
     const isFromBag = giftDrawerTab === 'bag' && (bagGifts[giftObj.id] || 0) > 0;
+    if (giftDrawerTab === 'bag' && !isFromBag) return;
 
     setActiveBottomDrawer('none');
     executeGiftThrow(giftObj, giftCount, targets, 1, isFromBag);
@@ -956,15 +1003,17 @@ export const VoiceRoomView: React.FC = () => {
   });
 
   const visibleTextMessages = activeRoomMessages.filter((msg) => {
+    // Gift throws are rendered cleanly once via visibleEventLogs (prevent duplicate gift lines)
+    if (msg.giftData) return false;
     if (chatTab === 'all') return true;
-    if (chatTab === 'message') return !msg.isSystem && !msg.giftData;
-    if (chatTab === 'gifts') return Boolean(msg.giftData);
+    if (chatTab === 'message') return !msg.isSystem;
+    if (chatTab === 'gifts') return false;
     if (chatTab === 'system') return Boolean(msg.isSystem);
     return true;
   });
 
   return (
-    <div className="relative min-h-dvh w-full bg-[#090c14] flex items-center justify-center font-tajawal select-none overflow-hidden">
+    <div className="relative h-dvh w-full bg-[#090c14] flex items-center justify-center font-tajawal select-none overflow-hidden">
       {/* Desktop Ambient Backdrop so wide viewports never look like an empty void */}
       <div className="hidden sm:block fixed inset-0 pointer-events-none">
         <img
@@ -978,7 +1027,7 @@ export const VoiceRoomView: React.FC = () => {
 
       {/* Main Voice Room Shell (Mobile full-viewport, Desktop refined wide stage frame) */}
       <div
-        className={`relative w-full max-w-[460px] h-dvh sm:h-[min(900px,calc(100dvh-2rem))] sm:rounded-[30px] sm:border sm:border-white/10 bg-gradient-to-b ${activeTheme.fallbackGradient} text-white flex flex-col justify-between overflow-hidden shadow-[0_24px_80px_rgba(0,0,0,0.75)]`}
+        className={`relative w-full max-w-[460px] h-full sm:h-[min(900px,calc(100dvh-2rem))] sm:rounded-[30px] sm:border sm:border-white/10 bg-gradient-to-b ${activeTheme.fallbackGradient} text-white flex flex-col overflow-hidden shadow-[0_24px_80px_rgba(0,0,0,0.75)]`}
       >
         {/* Room Theme Wallpaper + Measured Readability Scrim */}
         <img
@@ -1078,7 +1127,7 @@ export const VoiceRoomView: React.FC = () => {
         {/* ================================================================= */}
         {/* 1. TOP ROOM HEADER BAR (Clean Flagship Voice Room Architecture)   */}
         {/* ================================================================= */}
-        <header className="relative z-30 pt-3 px-3.5 space-y-2">
+        <header className="relative z-30 shrink-0 pt-3 px-3.5 space-y-2">
           <div className="flex items-center justify-between gap-2">
             {/* Right in RTL (First in DOM): Room Identity */}
             <div className="flex items-center gap-2.5 min-w-0 bg-black/35 backdrop-blur-md pl-3 pr-1.5 py-1.5 rounded-2xl border border-white/10">
@@ -1196,8 +1245,8 @@ export const VoiceRoomView: React.FC = () => {
         {/* ================================================================= */}
         {/* 2. SPACIOUS 8-MIC VOICE STAGE (2 Rows × 4 Mics — Yalla/SoulChill) */}
         {/* ================================================================= */}
-        <section className="relative z-20 px-4 pt-4 pb-2">
-          <div className="grid grid-cols-4 gap-x-3 gap-y-5">
+        <section className="relative z-20 shrink-0 px-4 pt-3 pb-1.5">
+          <div className="grid grid-cols-4 gap-x-3 gap-y-4">
             {seats8.map((seat, idx) => {
               const isHostSeat = idx === 0;
               const heartVal =
@@ -1348,7 +1397,7 @@ export const VoiceRoomView: React.FC = () => {
         {/* 3. AUTHENTIC SIDE STACKED GIFT COMBO RAIL (Yalla / SoulChill)     */}
         {/* Clean, compact slide-in cards above the chat — never covers mics! */}
         {/* ================================================================= */}
-        <div className="relative z-30 px-3.5 min-h-[64px] flex flex-col justify-end gap-1.5 pointer-events-none">
+        <div className="relative z-30 shrink-0 px-3.5 min-h-[54px] flex flex-col justify-end gap-1.5 pointer-events-none">
           {giftComboTrack.map((item) => (
             <div
               key={item.id}
@@ -1553,7 +1602,7 @@ export const VoiceRoomView: React.FC = () => {
         {/* ================================================================= */}
         {/* 5. ERGONOMIC BOTTOM ACTION BAR (Yalla / SoulChill Thumb Zone)     */}
         {/* ================================================================= */}
-        <footer className="relative z-30 px-3.5 py-3 bg-[#080b14]/90 backdrop-blur-md border-t border-white/10">
+        <footer className="relative z-30 shrink-0 px-3.5 py-2.5 bg-[#080b14]/90 backdrop-blur-md border-t border-white/10">
           {showChatInputBar ? (
             <form onSubmit={handleSendChat} className="flex items-center gap-2">
               <button
@@ -1648,7 +1697,7 @@ export const VoiceRoomView: React.FC = () => {
 
                 {/* Primary CTA: Gift Drawer */}
                 <button
-                  onClick={() => setActiveBottomDrawer('gift')}
+                  onClick={() => openGiftDrawer()}
                   className="relative w-11 h-11 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 text-slate-950 flex items-center justify-center shadow-[0_4px_16px_rgba(245,158,11,0.35)] active:scale-95 transition-transform"
                   title="إرسال هدية"
                 >
@@ -1679,73 +1728,97 @@ export const VoiceRoomView: React.FC = () => {
               {/* Drag Handle */}
               <div className="w-10 h-1 bg-white/20 rounded-full mx-auto" />
 
-              {/* 1. 8-Seat Recipient Selector Bar */}
-              <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/8">
-                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
-                  {seats8.map((s, idx) => {
-                    const isSelected = selectedRecipientSeats.includes(idx);
-                    return (
+              {/* 1. OCCUPIED MICS ONLY Recipient Selector Bar (Empty Mics Hidden) */}
+              <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/8 min-h-[60px]">
+                {occupiedSeats.length === 0 ? (
+                  <div className="w-full flex items-center justify-between gap-2 py-1 px-2 rounded-xl bg-white/[0.04] border border-white/8">
+                    <span className="text-xs text-slate-300">
+                      لا يوجد متحدث على المايك حالياً لإرسال الهدايا له
+                    </span>
+                    <button
+                      onClick={() => {
+                        const firstOpen = seats8.find((s) => !s.userId && !s.isLocked);
+                        if (firstOpen) {
+                          takeSeat(firstOpen.index);
+                          setSelectedRecipientSeats([firstOpen.index]);
+                        }
+                      }}
+                      className="h-8 px-3 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs shrink-0 transition-colors"
+                    >
+                      صعود على المايك
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar py-0.5">
+                      {occupiedSeats.map((s) => {
+                        const idx = s.index;
+                        const isSelected = selectedRecipientSeats.includes(idx);
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => {
+                              setSelectedRecipientSeats((prev) =>
+                                prev.includes(idx)
+                                  ? prev.length > 1
+                                    ? prev.filter((i) => i !== idx)
+                                    : prev
+                                  : [...prev, idx]
+                              );
+                            }}
+                            className="relative flex flex-col items-center shrink-0"
+                          >
+                            <div
+                              className={`relative w-10 h-10 rounded-full p-[2px] transition-all ${
+                                isSelected
+                                  ? 'ring-2 ring-amber-400 bg-amber-400/20'
+                                  : 'border border-white/15 opacity-65 hover:opacity-100'
+                              }`}
+                            >
+                              <img
+                                src={s.userAvatar || currentUser.avatar}
+                                alt={s.userName || `مايك ${idx + 1}`}
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full rounded-full object-cover"
+                              />
+                              <span className="absolute -top-1 -left-1 w-4 h-4 rounded-full bg-slate-950 border border-white/25 text-[9px] font-mono tabular-nums font-bold text-amber-300 flex items-center justify-center">
+                                {idx + 1}
+                              </span>
+                              {isSelected && (
+                                <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-amber-400 text-slate-950 flex items-center justify-center">
+                                  <Check className="w-2.5 h-2.5 stroke-[3]" />
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-white font-medium max-w-[56px] truncate mt-1">
+                              {s.userName || `مايك ${idx + 1}`}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {occupiedSeats.length > 1 && (
                       <button
-                        key={idx}
                         onClick={() => {
-                          setSelectedRecipientSeats((prev) =>
-                            prev.includes(idx)
-                              ? prev.length > 1
-                                ? prev.filter((i) => i !== idx)
-                                : prev
-                              : [...prev, idx]
+                          const allOccupied = occupiedSeats.map((s) => s.index);
+                          setSelectedRecipientSeats(
+                            selectedRecipientSeats.length === allOccupied.length
+                              ? [allOccupied[0]]
+                              : allOccupied
                           );
                         }}
-                        className="relative flex flex-col items-center shrink-0"
+                        className={`h-9 px-3 rounded-xl text-xs font-bold shrink-0 transition-colors ${
+                          selectedRecipientSeats.length === occupiedSeats.length
+                            ? 'bg-amber-400 text-slate-950'
+                            : 'bg-white/8 text-slate-200 hover:bg-white/14'
+                        }`}
                       >
-                        <div
-                          className={`relative w-10 h-10 rounded-full p-[2px] transition-all ${
-                            isSelected
-                              ? 'ring-2 ring-amber-400 bg-amber-400/20'
-                              : 'border border-white/15 opacity-60 hover:opacity-90'
-                          }`}
-                        >
-                          {s.userAvatar ? (
-                            <img
-                              src={s.userAvatar}
-                              alt={s.userName || `مايك ${idx + 1}`}
-                              referrerPolicy="no-referrer"
-                              className="w-full h-full rounded-full object-cover"
-                            />
-                          ) : (
-                            <div className="w-full h-full rounded-full bg-slate-800 flex items-center justify-center text-xs font-mono tabular-nums font-bold text-slate-200">
-                              {idx + 1}
-                            </div>
-                          )}
-                          {isSelected && (
-                            <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-amber-400 text-slate-950 flex items-center justify-center">
-                              <Check className="w-2.5 h-2.5 stroke-[3]" />
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-[10px] text-slate-300 max-w-[44px] truncate mt-1">
-                          {s.userName || (idx === 0 ? 'المضيف' : `مايك ${idx + 1}`)}
-                        </span>
+                        {selectedRecipientSeats.length === occupiedSeats.length ? 'واحد' : 'الكل'}
                       </button>
-                    );
-                  })}
-                </div>
-
-                <button
-                  onClick={() => {
-                    const all8 = [0, 1, 2, 3, 4, 5, 6, 7];
-                    setSelectedRecipientSeats(
-                      selectedRecipientSeats.length === 8 ? [0] : all8
-                    );
-                  }}
-                  className={`h-9 px-3 rounded-xl text-xs font-bold shrink-0 transition-colors ${
-                    selectedRecipientSeats.length === 8
-                      ? 'bg-amber-400 text-slate-950'
-                      : 'bg-white/8 text-slate-200 hover:bg-white/14'
-                  }`}
-                >
-                  {selectedRecipientSeats.length === 8 ? 'مايك 1' : 'الكل'}
-                </button>
+                    )}
+                  </>
+                )}
               </div>
 
               {/* 2. Clean Gift Category Tabs */}
@@ -1860,9 +1933,16 @@ export const VoiceRoomView: React.FC = () => {
                   </select>
                   <button
                     onClick={handleSendSelectedGift}
-                    className="h-10 px-5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-colors"
+                    disabled={selectedRecipientSeats.length === 0 || (giftDrawerTab === 'bag' && filteredDrawerGifts.length === 0)}
+                    className={`h-10 px-5 font-bold text-xs transition-colors ${
+                      selectedRecipientSeats.length > 0 && !(giftDrawerTab === 'bag' && filteredDrawerGifts.length === 0)
+                        ? 'bg-amber-400 hover:bg-amber-300 text-slate-950'
+                        : 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                    }`}
                   >
-                    إرسال ({selectedRecipientSeats.length})
+                    {selectedRecipientSeats.length > 0
+                      ? `إرسال (${selectedRecipientSeats.length})`
+                      : 'اختر متحدثاً'}
                   </button>
                 </div>
               </div>
@@ -2100,15 +2180,16 @@ export const VoiceRoomView: React.FC = () => {
                     : 'صعود إلى المايك'}
                 </button>
 
-                <button
-                  onClick={() => {
-                    setSelectedRecipientSeats([selectedSeatForMenu.index]);
-                    setActiveBottomDrawer('gift');
-                  }}
-                  className="w-full h-12 text-amber-300 hover:bg-white/6 transition-colors font-semibold"
-                >
-                  إرسال هدية لهذا المايك
-                </button>
+                {selectedSeatForMenu.userId && (
+                  <button
+                    onClick={() => {
+                      openGiftDrawer(selectedSeatForMenu.index);
+                    }}
+                    className="w-full h-12 text-amber-300 hover:bg-white/6 transition-colors font-semibold"
+                  >
+                    إرسال هدية إلى {selectedSeatForMenu.userName || `مايك #${selectedSeatForMenu.index + 1}`}
+                  </button>
+                )}
 
                 <button
                   onClick={() => {
@@ -2310,7 +2391,7 @@ export const VoiceRoomView: React.FC = () => {
               <button
                 onClick={() => {
                   setGiftDrawerTab('all');
-                  setActiveBottomDrawer('gift');
+                  openGiftDrawer();
                 }}
                 className="w-full h-11 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-colors"
               >
@@ -2471,67 +2552,67 @@ export const VoiceRoomView: React.FC = () => {
               </div>
 
               <div className="max-h-72 overflow-y-auto space-y-2 no-scrollbar">
-                {seats8
-                  .slice()
-                  .sort((a, b) => (b.heartPoints || 0) - (a.heartPoints || 0))
-                  .map((s, rankIdx) => {
-                    const heartScore =
-                      seatHeartsOverride[s.index] !== undefined
-                        ? seatHeartsOverride[s.index]
-                        : s.heartPoints || 0;
-                    return (
-                      <div
-                        key={s.index}
-                        className="flex items-center justify-between p-2.5 rounded-2xl bg-white/[0.04] border border-white/8"
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <span
-                            className={`w-6 h-6 rounded-full flex items-center justify-center font-mono tabular-nums font-bold text-xs ${
-                              rankIdx === 0
-                                ? 'bg-amber-400 text-slate-950'
-                                : rankIdx === 1
-                                ? 'bg-slate-300 text-slate-950'
-                                : rankIdx === 2
-                                ? 'bg-amber-700 text-white'
-                                : 'bg-white/10 text-slate-300'
-                            }`}
-                          >
-                            {rankIdx + 1}
-                          </span>
-                          {s.userAvatar ? (
+                {occupiedSeats.length === 0 ? (
+                  <div className="py-10 text-center space-y-2.5">
+                    <div className="text-3xl opacity-80">🎙️</div>
+                    <p className="text-xs text-slate-400">
+                      لا يوجد متحدثون على المايكات حالياً — اصعد على أي مايك لبدء التفاعل والدعم.
+                    </p>
+                  </div>
+                ) : (
+                  occupiedSeats
+                    .slice()
+                    .sort((a, b) => (b.heartPoints || 0) - (a.heartPoints || 0))
+                    .map((s, rankIdx) => {
+                      const heartScore =
+                        seatHeartsOverride[s.index] !== undefined
+                          ? seatHeartsOverride[s.index]
+                          : s.heartPoints || 0;
+                      return (
+                        <div
+                          key={s.index}
+                          className="flex items-center justify-between p-2.5 rounded-2xl bg-white/[0.04] border border-white/8"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <span
+                              className={`w-6 h-6 rounded-full flex items-center justify-center font-mono tabular-nums font-bold text-xs ${
+                                rankIdx === 0
+                                  ? 'bg-amber-400 text-slate-950'
+                                  : rankIdx === 1
+                                  ? 'bg-slate-300 text-slate-950'
+                                  : rankIdx === 2
+                                  ? 'bg-amber-700 text-white'
+                                  : 'bg-white/10 text-slate-300'
+                              }`}
+                            >
+                              {rankIdx + 1}
+                            </span>
                             <img
-                              src={s.userAvatar}
+                              src={s.userAvatar || currentUser.avatar}
                               alt={s.userName}
                               referrerPolicy="no-referrer"
                               className="w-9 h-9 rounded-full object-cover"
                             />
-                          ) : (
-                            <div className="w-9 h-9 rounded-full bg-slate-800 flex items-center justify-center text-xs font-mono tabular-nums text-slate-300">
-                              #{s.index + 1}
-                            </div>
-                          )}
-                          <div className="text-right">
-                            <div className="text-xs font-semibold text-white">
-                              {s.userName || (s.index === 0 ? 'المضيف' : `مايك #${s.index + 1}`)}
-                            </div>
-                            <div className="text-[11px] font-mono tabular-nums text-rose-300">
-                              {heartScore.toLocaleString()} نقطة
+                            <div className="text-right">
+                              <div className="text-xs font-semibold text-white">
+                                {s.userName || `مايك #${s.index + 1}`}
+                              </div>
+                              <div className="text-[11px] font-mono tabular-nums text-rose-300">
+                                مايك {s.index + 1} · {heartScore.toLocaleString()} نقطة
+                              </div>
                             </div>
                           </div>
-                        </div>
 
-                        <button
-                          onClick={() => {
-                            setSelectedRecipientSeats([s.index]);
-                            setActiveBottomDrawer('gift');
-                          }}
-                          className="h-8 px-3 rounded-xl bg-amber-400/15 border border-amber-400/40 text-amber-300 font-bold text-xs hover:bg-amber-400/25 transition-colors"
-                        >
-                          دعم
-                        </button>
-                      </div>
-                    );
-                  })}
+                          <button
+                            onClick={() => openGiftDrawer(s.index)}
+                            className="h-8 px-3 rounded-xl bg-amber-400/15 border border-amber-400/40 text-amber-300 font-bold text-xs hover:bg-amber-400/25 transition-colors"
+                          >
+                            دعم
+                          </button>
+                        </div>
+                      );
+                    })
+                )}
               </div>
             </div>
           </div>

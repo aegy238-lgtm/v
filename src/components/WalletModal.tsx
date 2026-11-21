@@ -16,7 +16,6 @@ import {
   Crown,
 } from 'lucide-react';
 import { RECHARGE_PACKAGES } from '../data/mockData';
-import confetti from 'canvas-confetti';
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -73,10 +72,9 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => 
     const totalToCredit = baseCoins + bonusCoins;
 
     rechargeCoins(totalToCredit, selectedPaymentMethod);
-    confetti({ particleCount: 70, spread: 80, origin: { y: 0.6 } });
     showToast(
       'success',
-      `✅ تم شحن ${totalToCredit.toLocaleString()} كوينز بنجاح عبر ${selectedPaymentMethod}!`
+      `تم شحن ${totalToCredit.toLocaleString()} كوينز بنجاح عبر ${selectedPaymentMethod}`
     );
     setCustomCoinsAmount('');
   };
@@ -86,8 +84,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => 
     if (!promoCode.trim()) return;
     const reward = 25000;
     rechargeCoins(reward, `كود شحن (${promoCode.trim().toUpperCase()})`);
-    confetti({ particleCount: 55, spread: 70, origin: { y: 0.6 } });
-    showToast('success', `🎁 تم تفعيل الكود بنجاح وإضافة ${reward.toLocaleString()} كوينز إلى محفظتك!`);
+    showToast('success', `تم تفعيل الكود بنجاح وإضافة ${reward.toLocaleString()} كوينز إلى محفظتك`);
     setPromoCode('');
   };
 
@@ -99,10 +96,9 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => 
     }
     const ok = convertDiamondsToCoins(exchangeAmount);
     if (ok) {
-      confetti({ particleCount: 50, spread: 60, origin: { y: 0.6 } });
       showToast(
         'success',
-        `✅ تم تحويل ${exchangeAmount.toLocaleString()} ألماسة إلى ${Math.round(exchangeAmount * 2.1).toLocaleString()} كوينز فوراً!`
+        `تم تحويل ${exchangeAmount.toLocaleString()} ألماسة إلى ${Math.round(exchangeAmount * 2.1).toLocaleString()} كوينز فوراً`
       );
     }
   };

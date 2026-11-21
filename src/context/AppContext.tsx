@@ -28,7 +28,6 @@ import {
   INITIAL_TRANSACTIONS,
 } from '../data/mockData';
 import { sound } from '../utils/audio';
-import confetti from 'canvas-confetti';
 
 interface FlyingGiftState {
   gift: GiftItem;
@@ -550,39 +549,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const gift = gifts.find((g) => g.id === giftId);
     if (!gift) return false;
 
-    // Identify target users & seat indices
+    // Identify target users & seat indices — STRICTLY OCCUPIED MICS ONLY (no gifting empty seats!)
     let targets: { id: string; name: string; seatIndex?: number }[] = [];
 
     if (seatIndices && seatIndices.length > 0) {
       seatIndices.forEach((sIdx) => {
         const seat = activeRoom.seats[sIdx];
         if (seat && seat.userId) {
-          targets.push({ id: seat.userId, name: seat.userName || `مقعد ${sIdx + 1}`, seatIndex: sIdx });
-        } else {
-          targets.push({ id: activeRoom.ownerId, name: `مقعد ${sIdx + 1}`, seatIndex: sIdx });
+          targets.push({ id: seat.userId, name: seat.userName || `مايك ${sIdx + 1}`, seatIndex: sIdx });
         }
       });
     } else if (targetType === 'all') {
-      const activeSeats = activeRoom.seats.filter((s) => s.userId);
-      if (activeSeats.length === 0) {
-        targets = [{ id: activeRoom.ownerId, name: activeRoom.ownerName, seatIndex: 0 }];
-      } else {
-        targets = activeSeats.map((s) => ({ id: s.userId!, name: s.userName || 'مستخدم', seatIndex: s.index }));
-      }
+      const activeSeats = activeRoom.seats.filter((s) => Boolean(s.userId));
+      targets = activeSeats.map((s) => ({
+        id: s.userId!,
+        name: s.userName || `مايك ${s.index + 1}`,
+        seatIndex: s.index,
+      }));
     } else if (targetType === 'seat' && seatIndex !== undefined) {
       const targetSeat = activeRoom.seats[seatIndex];
       if (targetSeat && targetSeat.userId) {
-        targets = [{ id: targetSeat.userId, name: targetSeat.userName || 'مستخدم', seatIndex }];
-      } else {
-        targets = [{ id: activeRoom.ownerId, name: activeRoom.ownerName, seatIndex }];
+        targets = [{ id: targetSeat.userId, name: targetSeat.userName || `مايك ${seatIndex + 1}`, seatIndex }];
       }
     } else {
-      const speakingSeat = activeRoom.seats.find((s) => s.isSpeaking && s.userId);
+      const speakingSeat = activeRoom.seats.find((s) => s.userId && s.isSpeaking) || activeRoom.seats.find((s) => Boolean(s.userId));
       if (speakingSeat && speakingSeat.userId) {
         targets = [{ id: speakingSeat.userId, name: speakingSeat.userName || 'المتحدث', seatIndex: speakingSeat.index }];
-      } else {
-        targets = [{ id: activeRoom.ownerId, name: activeRoom.ownerName, seatIndex: 0 }];
       }
+    }
+
+    if (targets.length === 0) {
+      return false;
     }
 
     const totalCoinsNeeded = gift.coinPrice * count * targets.length;
@@ -710,9 +707,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'completed',
     };
     setTransactions((prev) => [newTx, ...prev]);
-
-    sound.playWinChime();
-    confetti({ particleCount: 50, spread: 60, origin: { y: 0.5 } });
   };
 
   // Agent Recharge User
@@ -798,7 +792,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const totalCost = tier.coinCostMonthly * durationMonths;
     if (currentUser.coins < totalCost) {
-      alert(`رصيدك من العملات لا يكفي للاشتراك في VIP ${level}. التكلفة: ${totalCost.toLocaleString()} عملة`);
+      setActiveModal('wallet');
       return false;
     }
 
@@ -827,8 +821,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setTransactions((prev) => [tx, ...prev]);
 
-    sound.playGiftSound('fanfare');
-    confetti({ particleCount: 70, spread: 80, origin: { y: 0.5 } });
     return true;
   };
 
@@ -838,7 +830,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!item) return false;
 
     if (currentUser.coins < item.priceCoins) {
-      alert(`رصيدك من العملات لا يكفي لشراء ${item.nameAr}.`);
+      setActiveModal('wallet');
       return false;
     }
 
@@ -892,7 +884,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Convert Diamonds to Coins
   const convertDiamondsToCoins = (diamondsToExchange: number): boolean => {
     if (currentUser.diamonds < diamondsToExchange) {
-      alert('رصيدك من الألماس لا يكفي للاستبدال');
       return false;
     }
 
@@ -924,14 +915,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setTransactions((prev) => [tx, ...prev]);
 
-    sound.playWinChime();
     return true;
   };
 
   // Request Profit Withdrawal
   const requestWithdrawal = (diamondsAmount: number, bankInfo: string): boolean => {
     if (currentUser.diamonds < diamondsAmount) {
-      alert('رصيد الألماس غير كافٍ');
       return false;
     }
 
@@ -958,7 +947,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setTransactions((prev) => [tx, ...prev]);
 
-    alert(`تم استلام طلب السحب بنجاح بقيمة $${usdValue.toLocaleString()}! سيتم التحويل بعد مراجعة الإدارة المالية.`);
     return true;
   };
 
