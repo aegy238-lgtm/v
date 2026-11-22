@@ -28,6 +28,7 @@ import {
   RechargeAgent,
   RoomBackground,
   RoomChatMessage,
+  RoomLiveEvent,
   StaffMember,
   StoreItem,
   Transaction,
@@ -579,17 +580,146 @@ export function subscribeToRoomMessages(
   if (!auth.currentUser || !roomId) return () => {};
   const path = `${COLLECTIONS.rooms}/${roomId}/messages`;
   return onSnapshot(
-    query(collection(db, COLLECTIONS.rooms, roomId, 'messages'), orderBy('id', 'asc'), limit(100)),
+    query(collection(db, COLLECTIONS.rooms, roomId, 'messages'), orderBy('id', 'desc'), limit(80)),
     (snap) => {
       const list: RoomChatMessage[] = [];
       snap.forEach((d) => {
         const data = d.data() as RoomChatMessage;
-        if (data?.id && data?.roomId) list.push(data);
+        if (data?.id && data?.roomId && !data.isRtcSignal) list.push(data);
       });
+      list.reverse();
       if (list.length > 0) onMessages(list);
     },
-    (error) => handleFirestoreError(error, OperationType.LIST, path)
+    (error) => {
+      console.warn(`subscribeToRoomMessages notice (${path}):`, error);
+    }
   );
+}
+
+export interface FirestoreRtcSignalPayload {
+  id: string;
+  roomId: string;
+  signalType: 'hello' | 'offer' | 'answer' | 'ice' | 'mic_state' | 'leave';
+  fromPeerId: string;
+  fromUserId: string;
+  displayName: string;
+  targetPeerId?: string;
+  onSeat?: boolean;
+  muted?: boolean;
+  sdp?: RTCSessionDescriptionInit;
+  candidate?: RTCIceCandidateInit;
+  rtcCreatedAt: number;
+}
+
+export async function publishFirestoreRtcSignal(
+  payload: Omit<FirestoreRtcSignalPayload, 'id' | 'rtcCreatedAt'>
+): Promise<void> {
+  if (!auth.currentUser || !payload.roomId) return;
+  const now = Date.now();
+  const safeId = `0rtc_${now}_${Math.random().toString(36).slice(2, 8)}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+  try {
+    await setDoc(
+      doc(db, COLLECTIONS.rooms, payload.roomId, 'messages', safeId),
+      stripUndefinedForFirestore({
+        id: safeId,
+        roomId: payload.roomId,
+        senderId: payload.fromUserId || auth.currentUser.uid,
+        senderName: (payload.displayName || 'مستخدم').slice(0, 80),
+        senderAvatar: '',
+        vipLevel: 0,
+        level: 0,
+        isSystem: true,
+        isRtcSignal: true,
+        timestamp: new Date(now).toISOString().slice(11, 19),
+        rtcCreatedAt: now,
+        rtcSignal: {
+          ...payload,
+          id: safeId,
+          rtcCreatedAt: now,
+        },
+      })
+    );
+  } catch (err) {
+    console.warn('publishFirestoreRtcSignal notice:', err);
+  }
+}
+
+export function subscribeToFirestoreRtcSignals(
+  roomId: string,
+  sinceMs: number,
+  onSignal: (signal: FirestoreRtcSignalPayload) => void
+): () => void {
+  if (!auth.currentUser || !roomId) return () => {};
+  const seen = new Set<string>();
+  return onSnapshot(
+    query(
+      collection(db, COLLECTIONS.rooms, roomId, 'messages'),
+      orderBy('rtcCreatedAt', 'desc'),
+      limit(60)
+    ),
+    (snap) => {
+      const items: FirestoreRtcSignalPayload[] = [];
+      snap.forEach((d) => {
+        const data = d.data() as { rtcSignal?: FirestoreRtcSignalPayload; rtcCreatedAt?: number };
+        const sig = data?.rtcSignal;
+        if (!sig || !sig.id || seen.has(sig.id)) return;
+        const ts = sig.rtcCreatedAt || data.rtcCreatedAt || 0;
+        if (ts < sinceMs) return;
+        items.push(sig);
+      });
+      // Deliver in chronological order
+      items.sort((a, b) => a.rtcCreatedAt - b.rtcCreatedAt);
+      items.forEach((sig) => {
+        seen.add(sig.id);
+        onSignal(sig);
+      });
+    },
+    (err) => {
+      console.warn('subscribeToFirestoreRtcSignals notice:', err);
+    }
+  );
+}
+
+export async function publishRoomLiveEventToFirestore(event: RoomLiveEvent): Promise<void> {
+  if (!auth.currentUser || !event.roomId) return;
+  const safeId = `msg_${event.createdAt}_${event.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48)}`;
+  const msgDoc: RoomChatMessage = {
+    id: safeId,
+    roomId: event.roomId,
+    senderId: event.senderId || auth.currentUser.uid,
+    senderName: (event.senderName || 'مستخدم').slice(0, 80),
+    senderAvatar: event.senderAvatar || '',
+    vipLevel: event.senderVipLevel || 0,
+    level: event.senderLevel || 1,
+    isSystem: event.kind !== 'gift_throw' && event.kind !== 'chat_message',
+    text: event.kind === 'chat_message' ? event.text : undefined,
+    giftData:
+      event.kind === 'gift_throw' && event.gift
+        ? {
+            giftId: event.gift.id,
+            giftName: event.gift.nameAr,
+            giftIcon: event.gift.icon,
+            giftCount: event.count || 1,
+            targetUserName: event.targetNames || 'الغرفة',
+            totalCoins: (event.gift.coinPrice || 0) * (event.count || 1) * Math.max(1, event.targetSeats?.length || 1),
+          }
+        : undefined,
+    liveEvent: event,
+    timestamp: new Date(event.createdAt).toLocaleTimeString('ar-EG', {
+      hour: '2-digit',
+      minute: '2-digit',
+    }),
+  };
+
+  try {
+    await setDoc(
+      doc(db, COLLECTIONS.rooms, event.roomId, 'messages', safeId),
+      stripUndefinedForFirestore(msgDoc),
+      { merge: true }
+    );
+  } catch (error) {
+    console.warn('publishRoomLiveEventToFirestore notice:', error);
+  }
 }
 
 export async function persistAuraUser(user: User): Promise<void> {

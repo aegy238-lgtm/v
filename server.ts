@@ -121,6 +121,9 @@ function getIceServers() {
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
     { urls: "stun:stun3.l.google.com:19302" },
+    { urls: "stun:stun4.l.google.com:19302" },
+    { urls: "stun:stun.cloudflare.com:3478" },
+    { urls: "stun:global.stun.twilio.com:3478" },
   ];
 }
 
@@ -134,6 +137,158 @@ function sanitizeRoomKey(raw: unknown): string {
 
 function sanitizeShortString(raw: unknown, maxLen: number): string {
   return String(raw || "").trim().slice(0, maxLen);
+}
+
+function sanitizeOptionalMediaUrl(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim().slice(0, 2048);
+  if (!trimmed) return undefined;
+  if (
+    trimmed.startsWith("https://") ||
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("data:image/")
+  ) {
+    return trimmed;
+  }
+  return undefined;
+}
+
+function sanitizeRoomLiveEvent(
+  rawEvent: unknown,
+  session: VoicePeerSession
+): Record<string, unknown> | null {
+  if (!rawEvent || typeof rawEvent !== "object" || Array.isArray(rawEvent)) return null;
+  const ev = rawEvent as Record<string, unknown>;
+  const kind = sanitizeShortString(ev.kind, 32);
+  const allowedKinds = new Set([
+    "gift_throw",
+    "lucky_bag",
+    "rocket_explosion",
+    "seat_emoji",
+    "chat_message",
+  ]);
+  if (!allowedKinds.has(kind)) return null;
+
+  const id =
+    sanitizeShortString(ev.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_") ||
+    `evt_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+  const createdAt =
+    typeof ev.createdAt === "number" && Number.isFinite(ev.createdAt)
+      ? ev.createdAt
+      : Date.now();
+
+  const base: Record<string, unknown> = {
+    id,
+    kind,
+    roomId: session.roomId,
+    senderId: sanitizeShortString(ev.senderId, 64) || session.userId,
+    senderName: sanitizeShortString(ev.senderName, 80) || session.displayName,
+    senderAvatar: sanitizeOptionalMediaUrl(ev.senderAvatar) || "",
+    senderVipLevel: Math.max(0, Math.min(30, Math.round(Number(ev.senderVipLevel) || 0))),
+    senderLevel: Math.max(0, Math.min(500, Math.round(Number(ev.senderLevel) || 1))),
+    createdAt,
+  };
+
+  if (kind === "gift_throw") {
+    const rawTargets = Array.isArray(ev.targetSeats) ? ev.targetSeats : [];
+    const targetSeats = rawTargets
+      .map((n) => Math.round(Number(n)))
+      .filter((n) => Number.isFinite(n) && n >= 0 && n < 24)
+      .slice(0, 24);
+    const rawGift =
+      ev.gift && typeof ev.gift === "object" && !Array.isArray(ev.gift)
+        ? (ev.gift as Record<string, unknown>)
+        : {};
+    return {
+      ...base,
+      targetSeats,
+      targetNames: sanitizeShortString(ev.targetNames, 120),
+      count: Math.max(1, Math.min(99999, Math.round(Number(ev.count) || 1))),
+      comboHits: Math.max(1, Math.min(99999, Math.round(Number(ev.comboHits) || 1))),
+      isLucky: Boolean(ev.isLucky),
+      luckyMultiplier:
+        typeof ev.luckyMultiplier === "number" && Number.isFinite(ev.luckyMultiplier)
+          ? Math.max(0, Math.min(10000, Math.round(ev.luckyMultiplier)))
+          : undefined,
+      luckyWinCoins:
+        typeof ev.luckyWinCoins === "number" && Number.isFinite(ev.luckyWinCoins)
+          ? Math.max(0, Math.round(ev.luckyWinCoins))
+          : undefined,
+      gift: {
+        id: sanitizeShortString(rawGift.id, 96) || "gift",
+        name: sanitizeShortString(rawGift.name, 80) || "Gift",
+        nameAr: sanitizeShortString(rawGift.nameAr, 80) || "هدية",
+        category: sanitizeShortString(rawGift.category, 32) || "classic",
+        coinPrice: Math.max(0, Math.round(Number(rawGift.coinPrice) || 0)),
+        diamondReward: Math.max(0, Math.round(Number(rawGift.diamondReward) || 0)),
+        icon: sanitizeShortString(rawGift.icon, 24) || "🎁",
+        imageUrl: sanitizeOptionalMediaUrl(rawGift.imageUrl),
+        videoUrl: sanitizeOptionalMediaUrl(rawGift.videoUrl),
+        soundUrl: sanitizeOptionalMediaUrl(rawGift.soundUrl),
+        effectDurationSec:
+          typeof rawGift.effectDurationSec === "number" && Number.isFinite(rawGift.effectDurationSec)
+            ? Math.max(1, Math.min(120, rawGift.effectDurationSec))
+            : undefined,
+        accentColor: sanitizeShortString(rawGift.accentColor, 32) || "#f59e0b",
+        animationType: sanitizeShortString(rawGift.animationType, 32) || "particle",
+        soundEffect: sanitizeShortString(rawGift.soundEffect, 32) || "chime",
+        isLucky: Boolean(rawGift.isLucky),
+      },
+    };
+  }
+
+  if (kind === "lucky_bag") {
+    const rawRewards = Array.isArray(ev.rewardGifts) ? ev.rewardGifts.slice(0, 10) : [];
+    const rewardGifts = rawRewards
+      .filter((item) => item && typeof item === "object")
+      .map((item) => {
+        const rec = item as Record<string, unknown>;
+        return {
+          giftId: sanitizeShortString(rec.giftId, 96),
+          nameAr: sanitizeShortString(rec.nameAr, 80),
+          icon: sanitizeShortString(rec.icon, 24) || "🎁",
+          count: Math.max(1, Math.min(9999, Math.round(Number(rec.count) || 1))),
+        };
+      });
+    return {
+      ...base,
+      tierName: sanitizeShortString(ev.tierName, 80) || "كيس الحظ",
+      totalCoinsPool: Math.max(0, Math.round(Number(ev.totalCoinsPool) || 0)),
+      rewardGifts,
+    };
+  }
+
+  if (kind === "rocket_explosion") {
+    return {
+      ...base,
+      rocketLevel: Math.max(1, Math.min(5, Math.round(Number(ev.rocketLevel) || 1))),
+      rocketNameAr: sanitizeShortString(ev.rocketNameAr, 80) || "صاروخ الغرفة",
+      rocketIcon: sanitizeShortString(ev.rocketIcon, 24) || "🚀",
+      rewardCoins: Math.max(0, Math.round(Number(ev.rewardCoins) || 0)),
+    };
+  }
+
+  if (kind === "seat_emoji") {
+    return {
+      ...base,
+      seatIndex: Math.max(0, Math.min(23, Math.round(Number(ev.seatIndex) || 0))),
+      emoji: sanitizeShortString(ev.emoji, 16) || "✨",
+    };
+  }
+
+  if (kind === "chat_message") {
+    const text = sanitizeShortString(ev.text, 500);
+    if (!text) return null;
+    return {
+      ...base,
+      text,
+      isSystem: Boolean(ev.isSystem),
+      timestamp: sanitizeShortString(ev.timestamp, 32),
+    };
+  }
+
+  return null;
 }
 
 function toPublicPeer(peer: VoicePeerSession): PublicVoicePeer {
@@ -218,6 +373,8 @@ async function startServer() {
 
   wss.on("connection", (ws: WebSocket) => {
     let session: VoicePeerSession | undefined;
+    let audioFramesInWindow = 0;
+    let audioWindowStart = Date.now();
 
     ws.on("pong", () => {
       if (session) session.isAlive = true;
@@ -363,6 +520,102 @@ async function startServer() {
             userId: session.userId,
             peerId: session.peerId,
             level,
+          },
+          session.peerId
+        );
+        return;
+      }
+
+      // Server-Relayed Live Voice Frame (Automatic NAT/Firewall Fallback when WebRTC ICE cannot traverse)
+      if (type === "voice:audio_frame") {
+        if (!session.onSeat || session.muted) return;
+        const now = Date.now();
+        if (now - audioWindowStart >= 1000) {
+          audioWindowStart = now;
+          audioFramesInWindow = 0;
+        }
+        audioFramesInWindow += 1;
+        if (audioFramesInWindow > 35) return; // Rate limit guard
+
+        const pcmB64 = typeof msg.data === "string" ? msg.data : "";
+        if (!pcmB64 || pcmB64.length > 24000) return;
+        const sampleRate = Math.max(8000, Math.min(48000, Math.round(Number(msg.sampleRate) || 16000)));
+        const seq = Math.max(0, Math.round(Number(msg.seq) || 0));
+        const level = Math.max(0, Math.min(100, Math.round(Number(msg.level) || 0)));
+        const targetPeerIds = Array.isArray(msg.targetPeerIds)
+          ? (msg.targetPeerIds as unknown[])
+              .map((id) => sanitizeShortString(id, 96))
+              .filter(Boolean)
+              .slice(0, 64)
+          : null;
+
+        const room = voiceRooms.get(session.roomId);
+        if (!room) return;
+
+        const relayPayload = {
+          type: "voice:audio_frame",
+          roomId: session.roomId,
+          fromPeerId: session.peerId,
+          fromUserId: session.userId,
+          sampleRate,
+          seq,
+          level,
+          data: pcmB64,
+        };
+
+        if (targetPeerIds && targetPeerIds.length > 0) {
+          targetPeerIds.forEach((targetId) => {
+            if (targetId === session!.peerId) return;
+            const target = room.get(targetId);
+            if (target) safeWsSend(target.ws, relayPayload);
+          });
+        } else {
+          broadcastToRoom(session.roomId, relayPayload, session.peerId);
+        }
+        return;
+      }
+
+      // Request server-relay voice mode from a specific peer (e.g. if P2P ICE failed)
+      if (type === "voice:relay_request") {
+        const targetPeerId = sanitizeShortString(msg.targetPeerId, 96);
+        const enabled = Boolean(msg.enabled);
+        const room = voiceRooms.get(session.roomId);
+        if (!room) return;
+        if (targetPeerId) {
+          const target = room.get(targetPeerId);
+          if (target) {
+            safeWsSend(target.ws, {
+              type: "voice:relay_request",
+              roomId: session.roomId,
+              fromPeerId: session.peerId,
+              enabled,
+            });
+          }
+        } else {
+          broadcastToRoom(
+            session.roomId,
+            {
+              type: "voice:relay_request",
+              roomId: session.roomId,
+              fromPeerId: session.peerId,
+              enabled,
+            },
+            session.peerId
+          );
+        }
+        return;
+      }
+
+      // Real-Time Room Live Events (Gifts, Lucky Bags, Rocket, Seat Emojis, Chat)
+      if (type === "room:event") {
+        const cleanEvent = sanitizeRoomLiveEvent(msg.event, session);
+        if (!cleanEvent) return;
+        broadcastToRoom(
+          session.roomId,
+          {
+            type: "room:event",
+            roomId: session.roomId,
+            event: cleanEvent,
           },
           session.peerId
         );

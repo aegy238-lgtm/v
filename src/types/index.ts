@@ -270,6 +270,8 @@ export interface RoomChatMessage {
     targetUserName: string;
     totalCoins: number;
   };
+  liveEvent?: RoomLiveEvent;
+  isRtcSignal?: boolean;
   timestamp: string;
 }
 
@@ -302,3 +304,59 @@ export interface AgoraVoiceConfig {
   note?: string;
   updatedAt?: string;
 }
+
+export interface RoomLiveEventGiftSnapshot {
+  id: string;
+  name: string;
+  nameAr: string;
+  category: GiftCategory;
+  coinPrice: number;
+  diamondReward: number;
+  icon: string;
+  imageUrl?: string;
+  videoUrl?: string;
+  soundUrl?: string;
+  effectDurationSec?: number;
+  accentColor: string;
+  animationType: GiftItem['animationType'];
+  soundEffect: SoundEffectType;
+  isLucky?: boolean;
+}
+
+export interface RoomLiveEvent {
+  id: string;
+  kind: 'gift_throw' | 'lucky_bag' | 'rocket_explosion' | 'seat_emoji' | 'chat_message';
+  roomId: string;
+  senderId: string;
+  senderName: string;
+  senderAvatar?: string;
+  senderVipLevel?: number;
+  senderLevel?: number;
+  createdAt: number;
+  // gift_throw fields
+  gift?: RoomLiveEventGiftSnapshot;
+  targetSeats?: number[];
+  targetNames?: string;
+  count?: number;
+  comboHits?: number;
+  isLucky?: boolean;
+  luckyMultiplier?: number;
+  luckyWinCoins?: number;
+  // lucky_bag fields
+  tierName?: string;
+  totalCoinsPool?: number;
+  rewardGifts?: { giftId: string; nameAr: string; icon: string; count: number }[];
+  // rocket_explosion fields
+  rocketLevel?: number;
+  rocketNameAr?: string;
+  rocketIcon?: string;
+  rewardCoins?: number;
+  // seat_emoji fields
+  seatIndex?: number;
+  emoji?: string;
+  // chat_message fields
+  text?: string;
+  isSystem?: boolean;
+  timestamp?: string;
+}
+

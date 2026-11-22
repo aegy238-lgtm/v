@@ -108,6 +108,35 @@ service cloud.firestore {
         (!('text' in data) || (data.text is string && data.text.size() <= 500));
     }
 
+    function isValidRoomLiveEvent(data) {
+      return data.keys().hasAll(['id', 'kind', 'roomId', 'senderId', 'senderName', 'createdAt']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.kind in ['gift_throw', 'lucky_bag', 'rocket_explosion', 'seat_emoji', 'chat_message'] &&
+        data.roomId is string && data.roomId.size() > 0 && data.roomId.size() <= 128 &&
+        data.senderId is string && data.senderId.size() > 0 && data.senderId.size() <= 128 &&
+        data.senderName is string && data.senderName.size() > 0 && data.senderName.size() <= 80 &&
+        data.createdAt is number && data.createdAt > 0;
+    }
+
+    function isValidVoicePeer(data) {
+      return data.keys().hasAll(['peerId', 'userId', 'displayName', 'onSeat', 'muted', 'updatedAt']) &&
+        data.peerId is string && data.peerId.size() > 0 && data.peerId.size() <= 128 &&
+        data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+        data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 80 &&
+        data.onSeat is bool &&
+        data.muted is bool &&
+        data.updatedAt is number && data.updatedAt > 0;
+    }
+
+    function isValidVoiceSignal(data) {
+      return data.keys().hasAll(['type', 'fromPeerId', 'fromUserId', 'targetPeerId', 'createdAt']) &&
+        data.type in ['voice:offer', 'voice:answer', 'voice:ice'] &&
+        data.fromPeerId is string && data.fromPeerId.size() > 0 && data.fromPeerId.size() <= 128 &&
+        data.fromUserId is string && data.fromUserId.size() > 0 && data.fromUserId.size() <= 128 &&
+        data.targetPeerId is string && data.targetPeerId.size() > 0 && data.targetPeerId.size() <= 128 &&
+        data.createdAt is number && data.createdAt > 0;
+    }
+
     function isValidGiftItem(data) {
       return data.keys().hasAll(['id', 'name', 'nameAr', 'category', 'coinPrice', 'diamondReward', 'icon', 'accentColor', 'animationType', 'soundEffect']) &&
         data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
@@ -251,10 +280,31 @@ service cloud.firestore {
       allow delete: if isValidId(roomId) && (isAdmin() || (isSignedIn() && request.auth.uid == existing().ownerId));
 
       match /messages/{messageId} {
-        allow get: if isValidId(roomId) && isValidId(messageId) && isSignedIn();
-        allow list: if isValidId(roomId) && isSignedIn();
+        allow get: if isValidId(roomId) && isValidId(messageId);
+        allow list: if isValidId(roomId);
         allow create: if isValidId(roomId) && isValidId(messageId) && isSignedIn() && isValidRoomMessage(incoming()) && exists(/databases/$(database)/documents/auravoice_rooms/$(roomId));
         allow update, delete: if isValidId(roomId) && isValidId(messageId) && isAdmin();
+      }
+
+      match /room_events/{eventId} {
+        allow get: if isValidId(roomId) && isValidId(eventId);
+        allow list: if isValidId(roomId);
+        allow create: if isValidId(roomId) && isValidId(eventId) && isSignedIn() && isValidRoomLiveEvent(incoming());
+        allow update, delete: if isValidId(roomId) && isValidId(eventId) && isAdmin();
+      }
+
+      match /voice_peers/{peerId} {
+        allow get: if isValidId(roomId) && isValidId(peerId) && isSignedIn();
+        allow list: if isValidId(roomId) && isSignedIn();
+        allow create, update: if isValidId(roomId) && isValidId(peerId) && isSignedIn() && isValidVoicePeer(incoming());
+        allow delete: if isValidId(roomId) && isValidId(peerId) && isSignedIn();
+      }
+
+      match /voice_signals/{signalId} {
+        allow get: if isValidId(roomId) && isValidId(signalId) && isSignedIn();
+        allow list: if isValidId(roomId) && isSignedIn();
+        allow create: if isValidId(roomId) && isValidId(signalId) && isSignedIn() && isValidVoiceSignal(incoming());
+        allow delete: if isValidId(roomId) && isValidId(signalId) && isSignedIn();
       }
     }
 
