@@ -241,6 +241,8 @@
         "midMultiplierWeight": { "type": "number" },
         "highMultiplierWeight": { "type": "number" },
         "megaComboThreshold": { "type": "number" },
+        "appId": { "type": "string", "maxLength": 64 },
+        "rtcToken": { "type": "string", "maxLength": 2048 },
         "updatedAt": { "type": "string", "maxLength": 64 }
       }
     },

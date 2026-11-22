@@ -44,7 +44,7 @@ import {
   resolveGiftStageMedia,
 } from '../utils/mediaFormats';
 import { preloadMediaAssets } from '../utils/apngEngine';
-import { agoraVoice } from '../utils/agoraVoice';
+import { AgoraConnectionStatus, agoraVoice } from '../utils/agoraVoice';
 import { sound } from '../utils/audio';
 import midnightLoungeBg from '../assets/images/room_bg_midnight_lounge_1795294231147.jpg';
 import royalMajlisBg from '../assets/images/room_bg_royal_majlis_1795294234181.jpg';
@@ -310,7 +310,19 @@ export const VoiceRoomView: React.FC = () => {
   const [isRoomSoundMuted, setIsRoomSoundMuted] = useState(false);
   const [agoraVolumes, setAgoraVolumes] = useState<Record<string, number>>({});
   const [agoraLiveMicActive, setAgoraLiveMicActive] = useState(false);
+  const [agoraStatus, setAgoraStatus] = useState<AgoraConnectionStatus>({
+    state: 'idle',
+    appId: '',
+    channel: null,
+    remoteUsersCount: 0,
+    autoplayBlocked: false,
+    micActive: false,
+    micError: null,
+    errorMessage: null,
+    requiresToken: false,
+  });
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  const [dismissedVoiceErrorKey, setDismissedVoiceErrorKey] = useState<string | null>(null);
   const [idCopied, setIdCopied] = useState(false);
   const [chatClearedBeforeTs, setChatClearedBeforeTs] = useState<number>(0);
 
@@ -624,6 +636,9 @@ export const VoiceRoomView: React.FC = () => {
     const unsubMic = agoraVoice.subscribeMicStatus((active) => {
       setAgoraLiveMicActive(active);
     });
+    const unsubStatus = agoraVoice.subscribeStatus((st) => {
+      setAgoraStatus(st);
+    });
     let noticeTimer: number | null = null;
     const unsubNotice = agoraVoice.subscribeNotices((msg) => {
       setVoiceNotice(msg);
@@ -634,6 +649,7 @@ export const VoiceRoomView: React.FC = () => {
     return () => {
       unsubVol();
       unsubMic();
+      unsubStatus();
       unsubNotice();
       if (noticeTimer) window.clearTimeout(noticeTimer);
     };
@@ -641,6 +657,7 @@ export const VoiceRoomView: React.FC = () => {
 
   useEffect(() => {
     if (!activeRoom?.id || !currentUser.id) return;
+    setDismissedVoiceErrorKey(null);
     void agoraVoice.joinRoom(activeRoom.id, currentUser.id);
     return () => {
       void agoraVoice.leaveRoom();
@@ -1542,13 +1559,71 @@ export const VoiceRoomView: React.FC = () => {
           </div>
         )}
 
-        {voiceNotice && (
-          <div className="absolute top-[112px] inset-x-4 z-50 pointer-events-none flex justify-center">
-            <div className="px-4 py-2 rounded-2xl bg-rose-950/95 border border-rose-400/50 text-rose-100 text-xs font-bold shadow-2xl backdrop-blur-md">
-              {voiceNotice}
+        {(() => {
+          const rawBannerMsg = voiceNotice || agoraStatus.errorMessage || agoraStatus.micError;
+          const voiceErrorKey = `${agoraStatus.channel || ''}:${agoraStatus.errorMessage || agoraStatus.micError || ''}`;
+          const showErrorBanner =
+            Boolean(voiceNotice) ||
+            ((agoraStatus.state === 'error' || Boolean(agoraStatus.micError)) &&
+              dismissedVoiceErrorKey !== voiceErrorKey &&
+              Boolean(rawBannerMsg));
+
+          if (!agoraStatus.autoplayBlocked && !showErrorBanner) return null;
+
+          return (
+            <div className="absolute top-[112px] inset-x-4 z-50 flex justify-center">
+              {agoraStatus.autoplayBlocked ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    sound.unlockAudio();
+                    setIsRoomSoundMuted(false);
+                    agoraVoice.setRemoteAudioMuted(false);
+                    agoraVoice.resumeRemoteAudio(true);
+                    setVoiceNotice(null);
+                  }}
+                  className="px-4 py-2 rounded-2xl bg-emerald-600/95 hover:bg-emerald-500 border border-emerald-300/60 text-white text-xs font-black shadow-2xl backdrop-blur-md flex items-center gap-2 cursor-pointer"
+                >
+                  <Volume2 className="w-4 h-4 animate-pulse" />
+                  <span>اضغط هنا لتفعيل سماع الصوت المباشر</span>
+                </button>
+              ) : (
+                <div className="px-3 py-2 rounded-2xl bg-rose-950/95 border border-rose-400/50 text-rose-100 text-xs font-bold shadow-2xl backdrop-blur-md flex items-center gap-2 max-w-full">
+                  <span className="flex-1 leading-relaxed">{rawBannerMsg}</span>
+                  {(agoraStatus.state === 'error' || agoraStatus.micError) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sound.unlockAudio();
+                        setVoiceNotice(null);
+                        setDismissedVoiceErrorKey(null);
+                        if (agoraStatus.state === 'error') {
+                          void agoraVoice.reconnectActiveRoom();
+                        } else {
+                          void agoraVoice.retryMicPublish();
+                        }
+                      }}
+                      className="px-2.5 py-1 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-[11px] shrink-0 cursor-pointer"
+                    >
+                      {agoraStatus.state === 'error' ? 'إعادة ربط الصوت' : 'تفعيل المايك'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVoiceNotice(null);
+                      setDismissedVoiceErrorKey(voiceErrorKey);
+                    }}
+                    aria-label="إغلاق التنبيه"
+                    className="w-6 h-6 rounded-lg bg-white/10 hover:bg-white/20 text-rose-200 flex items-center justify-center shrink-0 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ================================================================= */}
         {/* 1. TOP ROOM HEADER BAR (Clean Flagship Voice Room Architecture)   */}
@@ -1691,22 +1766,74 @@ export const VoiceRoomView: React.FC = () => {
               </button>
             </div>
 
-            {/* Compact Rocket Progress Chip (No clutter, 24h lock preserved) */}
-            <button
-              onClick={() => {
-                setPreviewRocketLevel(rocketLevel);
-                setActiveBottomDrawer('rocket');
-              }}
-              className="h-7 px-2.5 rounded-lg bg-black/35 backdrop-blur-sm border border-white/10 flex items-center gap-1.5 text-slate-200 hover:border-amber-400/40 transition-colors shrink-0"
-              title="صاروخ الغرفة"
-            >
-              <Rocket className="w-3.5 h-3.5 text-amber-400" />
-              <span className="font-mono tabular-nums font-semibold">
-                {isRocketLocked24h
-                  ? formatCooldownHMS(rocketCooldownRemainingMs)
-                  : `Lv.${rocketLevel} · ${rocketProgressPercent}%`}
-              </span>
-            </button>
+            {/* Compact Voice Live + Rocket Progress Chip */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {(agoraStatus.state === 'connected' ||
+                agoraStatus.state === 'connecting' ||
+                agoraLiveMicActive ||
+                agoraStatus.requiresToken) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    sound.unlockAudio();
+                    agoraVoice.resumeRemoteAudio(true);
+                    if (agoraStatus.state === 'error') {
+                      setDismissedVoiceErrorKey(null);
+                      void agoraVoice.reconnectActiveRoom();
+                    }
+                  }}
+                  title={`قناة Agora (${agoraStatus.channel || agoraStatus.appId})`}
+                  className={`h-7 px-2 rounded-lg border flex items-center gap-1 text-[10px] font-bold transition-colors ${
+                    agoraStatus.state === 'connecting'
+                      ? 'bg-amber-500/15 border-amber-400/40 text-amber-200'
+                      : agoraLiveMicActive
+                      ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300'
+                      : agoraStatus.requiresToken
+                      ? 'bg-amber-500/15 border-amber-400/40 text-amber-200'
+                      : 'bg-black/35 border-emerald-500/30 text-emerald-300/90'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      agoraStatus.state === 'connecting'
+                        ? 'bg-amber-400 animate-pulse'
+                        : agoraLiveMicActive
+                        ? 'bg-emerald-400 animate-ping'
+                        : agoraStatus.requiresToken
+                        ? 'bg-amber-400'
+                        : 'bg-emerald-400'
+                    }`}
+                  />
+                  <span>
+                    {agoraStatus.state === 'connecting'
+                      ? 'جاري ربط الصوت'
+                      : agoraLiveMicActive
+                      ? agoraStatus.state === 'connected'
+                        ? 'مايك مباشر'
+                        : 'مايك محلي'
+                      : agoraStatus.requiresToken
+                      ? 'يلزم Token'
+                      : 'صوت متصل'}
+                  </span>
+                </button>
+              )}
+
+              <button
+                onClick={() => {
+                  setPreviewRocketLevel(rocketLevel);
+                  setActiveBottomDrawer('rocket');
+                }}
+                className="h-7 px-2.5 rounded-lg bg-black/35 backdrop-blur-sm border border-white/10 flex items-center gap-1.5 text-slate-200 hover:border-amber-400/40 transition-colors shrink-0"
+                title="صاروخ الغرفة"
+              >
+                <Rocket className="w-3.5 h-3.5 text-amber-400" />
+                <span className="font-mono tabular-nums font-semibold">
+                  {isRocketLocked24h
+                    ? formatCooldownHMS(rocketCooldownRemainingMs)
+                    : `Lv.${rocketLevel} · ${rocketProgressPercent}%`}
+                </span>
+              </button>
+            </div>
           </div>
         </header>
 
@@ -1729,9 +1856,9 @@ export const VoiceRoomView: React.FC = () => {
                 isOccupied &&
                 !seat.isMuted &&
                 (seat.userId === currentUser.id && agoraLiveMicActive
-                  ? (liveAgoraLevel ?? 0) > 4
+                  ? (liveAgoraLevel ?? 0) > 2
                   : liveAgoraLevel !== undefined
-                  ? liveAgoraLevel > 4
+                  ? liveAgoraLevel > 2
                   : seat.isSpeaking);
               const seatUserProfile = seat.userId
                 ? users.find((u) => u.id === seat.userId)
@@ -2230,6 +2357,8 @@ export const VoiceRoomView: React.FC = () => {
                 {/* Mic Toggle / Climb Mic */}
                 <button
                   onClick={() => {
+                    sound.unlockAudio();
+                    agoraVoice.resumeRemoteAudio(true);
                     if (!mySeat) {
                       const firstOpen = seats8.find((s) => !s.userId && !s.isLocked);
                       if (firstOpen) takeSeat(firstOpen.index);
@@ -3222,6 +3351,8 @@ export const VoiceRoomView: React.FC = () => {
                         setViewingProfileUser(targetUser || currentUser);
                         setActiveModal('profile');
                       } else {
+                        sound.unlockAudio();
+                        agoraVoice.resumeRemoteAudio(true);
                         takeSeat(liveSeat.index);
                       }
                       setActiveBottomDrawer('none');

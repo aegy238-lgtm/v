@@ -293,3 +293,10 @@ export interface StaffMember {
   status: 'active' | 'suspended';
   lastActive: string;
 }
+
+export interface AgoraVoiceConfig {
+  appId: string;
+  rtcToken?: string;
+  note?: string;
+  updatedAt?: string;
+}

@@ -20,6 +20,7 @@ import {
 } from './firebase';
 import {
   Agency,
+  AgoraVoiceConfig,
   GiftItem,
   LuckyGiftConfig,
   RechargeAgent,
@@ -345,6 +346,7 @@ export function subscribeToPublicAuraCollections(handlers: {
   onStoreItems: (items: StoreItem[]) => void;
   onAgencies: (agencies: Agency[]) => void;
   onLuckyConfig: (cfg: LuckyGiftConfig) => void;
+  onAgoraConfig?: (cfg: AgoraVoiceConfig) => void;
 }): () => void {
   const unsubRooms = onSnapshot(
     collection(db, COLLECTIONS.rooms),
@@ -424,6 +426,19 @@ export function subscribeToPublicAuraCollections(handlers: {
     (error) => handleFirestoreError(error, OperationType.GET, `${COLLECTIONS.config}/lucky`)
   );
 
+  const unsubAgora = onSnapshot(
+    doc(db, COLLECTIONS.config, 'agora'),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as AgoraVoiceConfig;
+        if (data?.appId && typeof data.appId === 'string') {
+          handlers.onAgoraConfig?.(data);
+        }
+      }
+    },
+    (error) => handleFirestoreError(error, OperationType.GET, `${COLLECTIONS.config}/agora`)
+  );
+
   return () => {
     unsubRooms();
     unsubRoomBgs();
@@ -431,6 +446,7 @@ export function subscribeToPublicAuraCollections(handlers: {
     unsubStore();
     unsubAgencies();
     unsubLucky();
+    unsubAgora();
   };
 }
 
@@ -727,6 +743,20 @@ export async function persistBagGifts(items: Record<string, number>): Promise<vo
     await setDoc(
       doc(db, COLLECTIONS.config, 'bag_gifts'),
       stripUndefinedForFirestore({ items, updatedAt: new Date().toISOString() }),
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function persistAgoraConfig(cfg: AgoraVoiceConfig): Promise<void> {
+  if (!auth.currentUser) return;
+  const path = `${COLLECTIONS.config}/agora`;
+  try {
+    await setDoc(
+      doc(db, COLLECTIONS.config, 'agora'),
+      stripUndefinedForFirestore({ ...cfg, updatedAt: new Date().toISOString() }),
       { merge: true }
     );
   } catch (error) {

@@ -32,6 +32,9 @@ import {
   ShieldCheck,
   UserPlus,
   Link2,
+  Mic,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { GiftCategory, GiftItem, SoundEffectType, StoreItem } from '../types';
 import { SmartMediaView } from './SmartMediaView';
@@ -42,6 +45,13 @@ import {
 } from '../utils/mediaFormats';
 import { ApngInfo, inspectApngUrl } from '../utils/apngEngine';
 import { sound } from '../utils/audio';
+import {
+  agoraVoice,
+  formatAgoraChannelName,
+  isValidAgoraAppId,
+  parseAgoraTokenInfo,
+  ParsedAgoraTokenInfo,
+} from '../utils/agoraVoice';
 
 function parseOptionalDurationSec(raw: string): number | undefined {
   const trimmed = raw.trim();
@@ -64,6 +74,8 @@ export const AdminDashboard: React.FC = () => {
     storeItems,
     luckyConfig,
     updateLuckyConfig,
+    agoraConfig,
+    updateAgoraConfig,
     triggerGlobalJackpotBanner,
     currentUser,
     adminAddBalance,
@@ -97,7 +109,7 @@ export const AdminDashboard: React.FC = () => {
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<
-    'kpi' | 'users' | 'rooms' | 'gifts' | 'store' | 'agents' | 'agencies' | 'staff' | 'ledger' | 'firebase'
+    'kpi' | 'users' | 'rooms' | 'gifts' | 'store' | 'agents' | 'agencies' | 'staff' | 'ledger' | 'agora' | 'firebase'
   >('kpi');
 
   // Full Store Management State (Frames, Entrances, Badges, Bubbles)
@@ -197,6 +209,55 @@ export const AdminDashboard: React.FC = () => {
   const [newBgName, setNewBgName] = useState('');
   const [newBgUrl, setNewBgUrl] = useState('');
   const [roomModTargetUserByRoom, setRoomModTargetUserByRoom] = useState<Record<string, string>>({});
+
+  // Agora Live Voice Settings & Hardware Diagnostics
+  const [agoraAppIdInput, setAgoraAppIdInput] = useState(agoraConfig.appId);
+  const [agoraTokenInput, setAgoraTokenInput] = useState(agoraConfig.rtcToken || '');
+  const [agoraTokenInspectorInput, setAgoraTokenInspectorInput] = useState('');
+  const [parsedAgoraToken, setParsedAgoraToken] = useState<ParsedAgoraTokenInfo | null>(null);
+  const [agoraTestStatus, setAgoraTestStatus] = useState<{
+    ok: boolean;
+    message: string;
+    requiresToken?: boolean;
+  } | null>(null);
+  const [copiedAgoraChannel, setCopiedAgoraChannel] = useState<string | null>(null);
+  const [isTestingAgora, setIsTestingAgora] = useState(false);
+  const [isMicProbing, setIsMicProbing] = useState(false);
+  const [micProbeLevel, setMicProbeLevel] = useState(0);
+  const [micProbeMsg, setMicProbeMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAgoraAppIdInput(agoraConfig.appId);
+    setAgoraTokenInput(agoraConfig.rtcToken || '');
+  }, [agoraConfig.appId, agoraConfig.rtcToken]);
+
+  useEffect(() => {
+    const trimmed = agoraTokenInspectorInput.trim();
+    if (!trimmed) {
+      setParsedAgoraToken(null);
+      return;
+    }
+    let cancelled = false;
+    void parseAgoraTokenInfo(trimmed).then((info) => {
+      if (cancelled) return;
+      setParsedAgoraToken(info);
+      if (info.valid && info.appId) {
+        setAgoraAppIdInput(info.appId);
+      }
+      if (info.valid && info.isRtcToken) {
+        setAgoraTokenInput(trimmed);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agoraTokenInspectorInput]);
+
+  useEffect(() => {
+    return () => {
+      agoraVoice.stopMicProbe();
+    };
+  }, []);
 
   useEffect(() => {
     const probeUrl = (newGiftVideoUrl || newGiftImageUrl).trim();
@@ -416,6 +477,7 @@ export const AdminDashboard: React.FC = () => {
     { id: 'agencies', label: 'الوكالات', icon: <Briefcase className="w-4 h-4" /> },
     { id: 'staff', label: 'الصلاحيات', icon: <Shield className="w-4 h-4" /> },
     { id: 'ledger', label: 'السجل المالي', icon: <History className="w-4 h-4" /> },
+    { id: 'agora', label: 'الصوت المباشر Agora', icon: <Mic className="w-4 h-4" /> },
     { id: 'firebase', label: 'قاعدة البيانات', icon: <Database className="w-4 h-4" /> },
   ];
 
@@ -2451,6 +2513,330 @@ export const AdminDashboard: React.FC = () => {
               <div className="p-3 rounded-2xl bg-slate-950/80 border border-white/8">
                 <div className="text-slate-400 font-mono text-[11px]">auravoice_transactions</div>
                 <div className="text-cyan-300 font-black text-base mt-1">{transactions.length}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 10: AGORA LIVE VOICE ACCOUNT & AUDIO ACTIVATION */}
+      {activeTab === 'agora' && (
+        <div className="space-y-4">
+          <div className="p-5 rounded-3xl bg-gradient-to-br from-[#10192b] via-[#0e1524] to-[#0b101d] border border-cyan-500/30 shadow-xl space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-cyan-500/15 border border-cyan-400/40 flex items-center justify-center text-cyan-300 shrink-0">
+                  <Mic className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-base font-black text-white">تفعيل حساب Agora والصوت المباشر</h3>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold border bg-emerald-500/15 text-emerald-300 border-emerald-400/40">
+                      مفعّل · App ID جاهز
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1 font-mono" dir="ltr">
+                    Active App ID: {agoraConfig.appId}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isTestingAgora}
+                  onClick={async () => {
+                    setIsTestingAgora(true);
+                    setAgoraTestStatus(null);
+                    const testRoomId = rooms[0]?.id || 'room_tyy';
+                    const res = await agoraVoice.testConnection(testRoomId);
+                    setAgoraTestStatus({
+                      ok: res.ok,
+                      message: res.message,
+                      requiresToken: res.requiresToken,
+                    });
+                    setIsTestingAgora(false);
+                  }}
+                  className="min-h-[42px] px-4 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60"
+                >
+                  <Wifi className="w-4 h-4" />
+                  <span>{isTestingAgora ? 'جاري اختبار القناة...' : 'اختبار اتصال Agora المباشر'}</span>
+                </button>
+              </div>
+            </div>
+
+            {agoraTestStatus && (
+              <div
+                className={`p-3.5 rounded-2xl border text-xs font-bold space-y-2 ${
+                  agoraTestStatus.ok
+                    ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-200'
+                    : 'bg-rose-500/15 border-rose-400/40 text-rose-200'
+                }`}
+              >
+                <div>{agoraTestStatus.message}</div>
+                {agoraTestStatus.requiresToken && (
+                  <div className="p-2.5 rounded-xl bg-black/30 border border-amber-400/30 text-amber-200 font-normal leading-relaxed space-y-1">
+                    <div className="font-black text-amber-300">طريقتا التشغيل السريع لربط البث الصوتي:</div>
+                    <div>1) من لوحة console.agora.io: اختر مشروعك ← Project Management ← فعّل Testing Mode (APP ID only) وعطّل Primary Certificate، ثم أعد اختبار الاتصال.</div>
+                    <div>2) أو انسخ اسم قناة الغرفة من الأسفل وأنشئ Temp RTC Token في Agora Console والصقه في خانة RTC Temp Token.</div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Left: Account Configuration & Smart 007 Token Decoder */}
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!isValidAgoraAppId(agoraAppIdInput)) {
+                    showAdminNotice('يرجى إدخال Agora App ID صحيح مكون من 32 حرف/رقم.');
+                    return;
+                  }
+                  let tokenToSave = agoraTokenInput.trim() || undefined;
+                  let extractedAppId = agoraAppIdInput.trim();
+                  if (tokenToSave && tokenToSave.startsWith('007')) {
+                    const info = await parseAgoraTokenInfo(tokenToSave);
+                    if (info.valid && info.appId) {
+                      extractedAppId = info.appId;
+                      setAgoraAppIdInput(info.appId);
+                    }
+                    if (info.valid && !info.isRtcToken) {
+                      tokenToSave = undefined;
+                      setAgoraTokenInput('');
+                      updateAgoraConfig({ appId: extractedAppId, rtcToken: undefined });
+                      showAdminNotice(
+                        `تم تفعيل App ID (${extractedAppId}). التوكن المُدخل (${info.serviceLabel}) مخصص للشات وليس RTC Voice Token.`
+                      );
+                      return;
+                    }
+                  }
+                  updateAgoraConfig({
+                    appId: extractedAppId,
+                    rtcToken: tokenToSave,
+                  });
+                  showAdminNotice('تم حفظ وتفعيل إعدادات Agora للصوت المباشر في جميع الغرف.');
+                }}
+                className="p-4 rounded-2xl bg-slate-950/80 border border-white/10 space-y-3.5 text-xs"
+              >
+                <div className="font-black text-sm text-amber-300">
+                  إعدادات مشروع Agora (App ID / Token)
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">
+                    لصق توكن Agora (007...) لاستخراج App ID وفحصه تلقائياً:
+                  </label>
+                  <textarea
+                    rows={2}
+                    dir="ltr"
+                    value={agoraTokenInspectorInput}
+                    onChange={(e) => setAgoraTokenInspectorInput(e.target.value)}
+                    placeholder="007eJxTY..."
+                    className="w-full bg-slate-900 border border-white/12 rounded-xl p-2.5 text-cyan-300 font-mono text-[11px] focus:outline-none focus:border-cyan-400"
+                  />
+                  {parsedAgoraToken && (
+                    <div
+                      className={`mt-2 p-2.5 rounded-xl border text-[11px] space-y-1 ${
+                        parsedAgoraToken.valid
+                          ? 'bg-slate-900/90 border-cyan-400/30 text-slate-200'
+                          : 'bg-rose-950/60 border-rose-400/30 text-rose-200'
+                      }`}
+                    >
+                      {parsedAgoraToken.valid ? (
+                        <>
+                          <div>
+                            <span className="text-slate-400">App ID المستخرج: </span>
+                            <span className="font-mono text-emerald-300 font-bold" dir="ltr">
+                              {parsedAgoraToken.appId}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">نوع التوكن: </span>
+                            <span className="font-bold text-amber-300">
+                              {parsedAgoraToken.serviceLabel}
+                            </span>
+                            {!parsedAgoraToken.isRtcToken && (
+                              <span className="text-rose-300 block mt-0.5">
+                                ملاحظة: هذا توكن شات/تطبيق وليس RTC Voice Token — تم استخراج App ID وتفعيله للعمل بوضع Testing Mode (App ID فقط)، أو أضف RTC Token / App Certificate للوضع المحمي.
+                              </span>
+                            )}
+                          </div>
+                          {parsedAgoraToken.channelName && (
+                            <div dir="ltr" className="text-slate-300 font-mono">
+                              Channel: {parsedAgoraToken.channelName}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div>{parsedAgoraToken.error || 'تعذر قراءة التوكن'}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">
+                    Agora App ID (32-char hex):
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={agoraAppIdInput}
+                    onChange={(e) => setAgoraAppIdInput(e.target.value)}
+                    placeholder="d5c272d82b094c2f86ccc75df0819dfe"
+                    className="w-full min-h-[42px] bg-slate-900 border border-white/12 rounded-xl px-3 text-emerald-300 font-mono focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+
+                {/* Copyable Room Channel Names for Agora Console Temp RTC Token */}
+                <div className="p-2.5 rounded-xl bg-slate-900/80 border border-white/8 space-y-1.5">
+                  <div className="text-[11px] font-bold text-slate-300">
+                    أسماء قنوات الغرف النشطة (لإنشاء Temp RTC Token في Agora Console):
+                  </div>
+                  <div className="flex flex-wrap gap-1.5" dir="ltr">
+                    {rooms.slice(0, 4).map((r) => {
+                      const ch = formatAgoraChannelName(r.id);
+                      const isCopied = copiedAgoraChannel === ch;
+                      return (
+                        <button
+                          key={r.id}
+                          type="button"
+                          onClick={() => {
+                            void navigator.clipboard?.writeText(ch);
+                            setCopiedAgoraChannel(ch);
+                            setTimeout(() => setCopiedAgoraChannel(null), 1800);
+                          }}
+                          className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-white/10 text-[10px] font-mono text-cyan-200 flex items-center gap-1 cursor-pointer"
+                          title={`نسخ قناة غرفة ${r.title}`}
+                        >
+                          {isCopied ? (
+                            <Check className="w-3 h-3 text-emerald-400" />
+                          ) : (
+                            <Copy className="w-3 h-3 text-slate-400" />
+                          )}
+                          <span>{ch}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">
+                    RTC Temp Token (اختياري — اتركه فارغاً لوضع Testing Mode):
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={agoraTokenInput}
+                    onChange={(e) => setAgoraTokenInput(e.target.value)}
+                    placeholder="اختياري في حال تفعيل App Certificate في Agora"
+                    className="w-full min-h-[42px] bg-slate-900 border border-white/12 rounded-xl px-3 text-amber-200 font-mono focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="submit"
+                    className="flex-1 min-h-[42px] px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black cursor-pointer"
+                  >
+                    حفظ وتفعيل حساب Agora
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const reset = updateAgoraConfig({}, true);
+                      setAgoraAppIdInput(reset.appId);
+                      setAgoraTokenInput('');
+                      showAdminNotice('تمت إعادة تعيين إعدادات Agora للافتراضي.');
+                    }}
+                    className="min-h-[42px] px-3 rounded-xl bg-white/8 hover:bg-white/12 text-slate-300 font-bold cursor-pointer"
+                  >
+                    استعادة الافتراضي
+                  </button>
+                </div>
+              </form>
+
+              {/* Right: Live Microphone & Browser Audio Tester */}
+              <div className="p-4 rounded-2xl bg-slate-950/80 border border-white/10 space-y-4 text-xs flex flex-col justify-between">
+                <div className="space-y-3">
+                  <div className="font-black text-sm text-emerald-300">
+                    فحص وتفعيل الميكروفون والصوت في المتصفح
+                  </div>
+                  <p className="text-slate-400 leading-relaxed">
+                    استخدم هذا الفحص للتأكد من منح المتصفح صلاحية الميكروفون وأن الصوت المباشر جاهز قبل دخول الغرف الصوتية.
+                  </p>
+
+                  <div className="p-3 rounded-xl bg-slate-900/90 border border-white/8 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-300 font-semibold">مؤشر التقاط الميكروفون المباشر</span>
+                      <span className="font-mono text-emerald-300 font-bold">{micProbeLevel}%</span>
+                    </div>
+                    <div className="w-full h-2.5 rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-emerald-400 to-cyan-400 transition-all duration-100"
+                        style={{ width: `${micProbeLevel}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {micProbeMsg && (
+                    <div className="p-3 rounded-xl bg-slate-900 border border-white/10 text-slate-200 font-semibold">
+                      {micProbeMsg}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {!isMicProbing ? (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        sound.unlockAudio();
+                        setIsMicProbing(true);
+                        const res = await agoraVoice.startMicProbe((lvl) => setMicProbeLevel(lvl));
+                        setMicProbeMsg(res.message);
+                        if (!res.ok) {
+                          setIsMicProbing(false);
+                          setMicProbeLevel(0);
+                        }
+                      }}
+                      className="flex-1 min-h-[42px] px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Mic className="w-4 h-4" />
+                      <span>تشغيل وفحص الميكروفون الآن</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        agoraVoice.stopMicProbe();
+                        setIsMicProbing(false);
+                        setMicProbeLevel(0);
+                        setMicProbeMsg('تم إيقاف فحص الميكروفون.');
+                      }}
+                      className="flex-1 min-h-[42px] px-4 rounded-xl bg-rose-500/20 border border-rose-400/50 text-rose-200 font-black flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Square className="w-4 h-4" />
+                      <span>إيقاف الفحص</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sound.unlockAudio();
+                      sound.playWinChime();
+                      agoraVoice.resumeRemoteAudio(true);
+                      setMicProbeMsg('تم تفعيل سماعة المتصفح وتشغيل نغمة الاختبار بنجاح 🔊');
+                    }}
+                    className="min-h-[42px] px-4 rounded-xl bg-white/8 hover:bg-white/12 border border-white/10 text-slate-200 font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Volume2 className="w-4 h-4 text-amber-300" />
+                    <span>تفعيل السماعة</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>

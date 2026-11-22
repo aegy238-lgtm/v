@@ -17,6 +17,7 @@ import {
   RoomBackground,
   LuckyGiftConfig,
   GlobalJackpotBannerState,
+  AgoraVoiceConfig,
 } from '../types';
 import { translations, Translations } from '../utils/i18n';
 import {
@@ -57,6 +58,7 @@ import {
   persistAuraUser,
   persistBagGifts,
   persistLuckyConfig,
+  persistAgoraConfig,
   persistRoomMessage,
   removeAuraGift,
   removeAuraRoom,
@@ -69,6 +71,7 @@ import {
 } from '../utils/auravoiceFirestore';
 import { buildVoiceAvatarSvg } from '../utils/voiceProfileOptions';
 import { resolveEntranceStageMedia } from '../utils/mediaFormats';
+import { agoraVoice, getAgoraConfig } from '../utils/agoraVoice';
 
 interface FlyingGiftState {
   id: string;
@@ -120,6 +123,8 @@ interface AppContextType {
   entranceBanner: EntranceBannerState | null;
   luckyConfig: LuckyGiftConfig;
   updateLuckyConfig: (updates: Partial<LuckyGiftConfig>) => void;
+  agoraConfig: AgoraVoiceConfig;
+  updateAgoraConfig: (updates: Partial<AgoraVoiceConfig>, resetToDefault?: boolean) => AgoraVoiceConfig;
   bagGifts: Record<string, number>;
   addBagGifts: (items: { giftId: string; count: number }[]) => void;
   consumeBagGift: (giftId: string, count: number) => boolean;
@@ -386,6 +391,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   });
 
+  const [agoraConfig, setAgoraConfig] = useState<AgoraVoiceConfig>(() => getAgoraConfig());
+
   // Persistent Backpack Lucky/Bag Gifts
   const [bagGifts, setBagGifts] = useState<Record<string, number>>(() => {
     try {
@@ -610,6 +617,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       onStoreItems: (remoteStore) => setStoreItems(remoteStore),
       onAgencies: (remoteAgencies) => setAgencies(remoteAgencies),
       onLuckyConfig: (remoteLucky) => setLuckyConfig(remoteLucky),
+      onAgoraConfig: (remoteAgora) => {
+        const applied = agoraVoice.setConfig(remoteAgora, true);
+        setAgoraConfig(applied);
+      },
     });
     return () => {
       unsubPublic();
@@ -876,6 +887,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       void persistLuckyConfig(next).catch(() => {});
       return next;
     });
+  };
+
+  const updateAgoraConfig = (
+    updates: Partial<AgoraVoiceConfig>,
+    resetToDefault = false
+  ): AgoraVoiceConfig => {
+    const applied = resetToDefault
+      ? agoraVoice.resetConfig()
+      : agoraVoice.setConfig(updates, true);
+    setAgoraConfig(applied);
+    void persistAgoraConfig(applied).catch((err) => {
+      console.warn('Agora config cloud sync notice:', err);
+    });
+    return applied;
   };
 
   const addBagGifts = (items: { giftId: string; count: number }[]) => {
@@ -2645,6 +2670,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         entranceBanner,
         luckyConfig,
         updateLuckyConfig,
+        agoraConfig,
+        updateAgoraConfig,
         bagGifts,
         addBagGifts,
         consumeBagGift,
