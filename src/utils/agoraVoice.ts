@@ -6,7 +6,7 @@ import type {
   IAgoraRTCRemoteUser,
 } from 'agora-rtc-sdk-ng';
 
-const DEFAULT_AGORA_APP_ID = 'c7f17271e84547f286458e2040a38429';
+const DEFAULT_AGORA_APP_ID = '9209e41821f34b4bb3d5bc8391d86cdc';
 
 export function getAgoraAppId(): string {
   const envId =
@@ -49,6 +49,8 @@ class AgoraVoiceEngine {
   private micStatusListeners = new Set<MicStatusListener>();
 
   private isLiveMicActive = false;
+  private autoplayBlocked = false;
+  private lastJoinFailureMsg: string | null = null;
 
   private emitVolumes(volumes: Record<string, number>) {
     this.volumeListeners.forEach((cb) => cb(volumes));
@@ -92,10 +94,36 @@ class AgoraVoiceEngine {
     const sdk = mod.default;
     sdk.setLogLevel(3); // Warning & Error only
     sdk.onAutoplayFailed = () => {
+      this.autoplayBlocked = true;
       this.emitNotice('اضغط في أي مكان داخل الغرفة لتفعيل سماع الصوت المباشر.');
     };
     this.sdk = sdk;
     return sdk;
+  }
+
+  private translateAgoraJoinError(err: unknown): string {
+    const code = (err as { code?: string })?.code || '';
+    const msg = err instanceof Error ? err.message : String(err);
+    const combined = `${code} ${msg}`;
+
+    if (
+      combined.includes('DYNAMIC_USE_STATIC_KEY') ||
+      combined.includes('INVALID_TOKEN') ||
+      combined.includes('TOKEN_EXPIRED') ||
+      combined.includes('dynamic use static key')
+    ) {
+      return 'مشروع Agora مفعّل عليه وضع الشهادة (Token). فعّل وضع Testing (App ID فقط) من لوحة Agora أو أضف Token.';
+    }
+    if (combined.includes('UID_CONFLICT')) {
+      return 'نفس الحساب متصل حالياً من جهاز أو تبويب آخر (UID_CONFLICT). سجّل بحساب مختلف للتجربة.';
+    }
+    if (combined.includes('INVALID_VENDOR_KEY') || combined.includes('INVALID_PARAMS')) {
+      return 'معرّف Agora App ID غير صالح (تأكد من وضع App ID وليس App Certificate).';
+    }
+    if (combined.includes('CAN_NOT_GET_GATEWAY_SERVER')) {
+      return 'تعذر الوصول إلى خوادم Agora (تحقق من صحة App ID أو تعطيل الشهادة أو الشبكة).';
+    }
+    return `تعذر الاتصال بغرفة الصوت المباشر (${code || 'خطأ اتصال'}).`;
   }
 
   private attachClientEvents(client: IAgoraRTCClient, uidStr: string) {
@@ -109,8 +137,8 @@ class AgoraVoiceEngine {
           track.setVolume(this.remoteMuted ? 0 : 100);
           track.play();
         }
-      } catch {
-        // Ignore transient remote subscribe failures
+      } catch (err) {
+        console.warn('[AgoraVoice] remote audio subscribe/play failed:', err);
       }
     });
 
@@ -121,6 +149,18 @@ class AgoraVoiceEngine {
 
     client.on('user-left', (user: IAgoraRTCRemoteUser) => {
       this.remoteTracks.delete(String(user.uid));
+    });
+
+    client.on('connection-state-change', (curState, _revState, reason) => {
+      if (curState === 'DISCONNECTED' && reason === 'UID_BANNED') {
+        this.emitNotice('تم فصل الاتصال الصوتي بسبب حظر الجلسة أو تعارض المعرف.');
+      } else if (curState === 'DISCONNECTED' && reason && reason !== 'LEAVE') {
+        console.warn('[AgoraVoice] disconnected:', reason);
+      }
+    });
+
+    client.on('exception', (evt) => {
+      console.warn('[AgoraVoice] exception:', evt);
     });
 
     client.on('volume-indicator', (volumes) => {
@@ -210,22 +250,13 @@ class AgoraVoiceEngine {
 
         this.activeChannel = channel;
         this.activeUid = uid;
+        this.lastJoinFailureMsg = null;
         client.enableAudioVolumeIndicator();
       } catch (err: unknown) {
-        const code = (err as { code?: string })?.code || '';
-        const msg = err instanceof Error ? err.message : String(err);
-        const combined = `${code} ${msg}`;
-        if (
-          combined.includes('DYNAMIC_USE_STATIC_KEY') ||
-          combined.includes('INVALID_TOKEN') ||
-          combined.includes('dynamic use static key')
-        ) {
-          this.emitNotice('سيرفر Agora يتطلب تفعيل وضع App ID (بدون شهادة) أو توفير Token.');
-        } else if (combined.includes('INVALID_VENDOR_KEY')) {
-          this.emitNotice('معرّف تطبيق Agora (App ID) غير صالح.');
-        } else if (combined.includes('CAN_NOT_GET_GATEWAY_SERVER')) {
-          this.emitNotice('تعذر الاتصال بخوادم Agora الصوتية، تحقق من الشبكة أو إعدادات App ID.');
-        }
+        console.error('[AgoraVoice] joinRoom failed:', err);
+        const notice = this.translateAgoraJoinError(err);
+        this.lastJoinFailureMsg = notice;
+        this.emitNotice(notice);
         await this.internalLeave();
       }
     });
@@ -237,7 +268,16 @@ class AgoraVoiceEngine {
     const capturedEpoch = this.joinEpoch;
 
     this.opChain = this.opChain.then(async () => {
-      if (capturedEpoch !== this.joinEpoch || !this.client || !this.activeChannel) return;
+      if (capturedEpoch !== this.joinEpoch) return;
+      if (!this.client || !this.activeChannel) {
+        if (onSeat && !muted) {
+          this.emitNotice(
+            this.lastJoinFailureMsg ||
+              'لم يتم ربط قناة الصوت في Agora بعد؛ افتح رابط التطبيق في متصفح مستقل وتحقق من إعدادات Agora.'
+          );
+        }
+        return;
+      }
 
       if (!onSeat) {
         await this.teardownLocalMic(this.client);
@@ -281,6 +321,7 @@ class AgoraVoiceEngine {
           this.setLiveMicActive(!muted);
         }
       } catch (err: unknown) {
+        console.error('[AgoraVoice] mic/publish failed:', err);
         const errName = (err as { code?: string; name?: string })?.code || (err instanceof Error ? err.name : '');
         if (
           errName === 'PERMISSION_DENIED' ||
@@ -288,7 +329,13 @@ class AgoraVoiceEngine {
           errName === 'DEVICE_NOT_FOUND' ||
           errName === 'NotFoundError'
         ) {
-          this.emitNotice('يرجى السماح بصلاحية الميكروفون للتحدث عبر الصوت المباشر.');
+          this.emitNotice('يرجى السماح بصلاحية الميكروفون أو التأكد من توصيله (افتح الرابط في نافذة مستقلة إذا كان محجوباً داخل المعاينة).');
+        } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
+          this.emitNotice('الميكروفون مستخدم من تطبيق آخر حالياً.');
+        } else if (errName === 'NOT_SUPPORTED' || errName === 'SecurityError') {
+          this.emitNotice('المتصفح يمنع الميكروفون في هذا الإطار؛ افتح التطبيق في تبويب مستقل عبر HTTPS.');
+        } else {
+          this.emitNotice(`تعذر تشغيل الميكروفون المباشر (${errName || 'خطأ بث'}).`);
         }
         this.setLiveMicActive(false);
       }
@@ -308,8 +355,10 @@ class AgoraVoiceEngine {
     });
   }
 
-  public resumeRemoteAudio(): void {
+  public resumeRemoteAudio(force = false): void {
     if (this.remoteMuted) return;
+    if (!force && !this.autoplayBlocked) return;
+    this.autoplayBlocked = false;
     this.remoteTracks.forEach((track) => {
       try {
         track.setVolume(100);

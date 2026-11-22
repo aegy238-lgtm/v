@@ -628,7 +628,7 @@ export const VoiceRoomView: React.FC = () => {
     const unsubNotice = agoraVoice.subscribeNotices((msg) => {
       setVoiceNotice(msg);
       if (noticeTimer) window.clearTimeout(noticeTimer);
-      noticeTimer = window.setTimeout(() => setVoiceNotice(null), 4500);
+      noticeTimer = window.setTimeout(() => setVoiceNotice(null), 7000);
     });
 
     return () => {
@@ -1293,7 +1293,13 @@ export const VoiceRoomView: React.FC = () => {
   });
 
   return (
-    <div className="relative h-dvh w-full bg-[#090c14] flex items-center justify-center font-tajawal select-none overflow-hidden">
+    <div
+      onPointerDownCapture={() => {
+        sound.unlockAudio();
+        agoraVoice.resumeRemoteAudio();
+      }}
+      className="relative h-dvh w-full bg-[#090c14] flex items-center justify-center font-tajawal select-none overflow-hidden"
+    >
       {/* Desktop Ambient Backdrop so wide viewports never look like an empty void */}
       <div className="hidden sm:block fixed inset-0 pointer-events-none">
         <img
@@ -2257,7 +2263,7 @@ export const VoiceRoomView: React.FC = () => {
                       sound.stopAllCustomAudio();
                     } else {
                       sound.unlockAudio();
-                      agoraVoice.resumeRemoteAudio();
+                      agoraVoice.resumeRemoteAudio(true);
                     }
                   }}
                   className="w-11 h-11 rounded-xl bg-white/8 hover:bg-white/12 border border-white/10 flex items-center justify-center text-slate-200 transition-colors"
