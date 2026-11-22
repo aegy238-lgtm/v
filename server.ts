@@ -5,6 +5,9 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import dns from "dns/promises";
+import net from "net";
+import { Readable } from "stream";
 import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import agoraTokenPkg from "agora-token";
@@ -683,6 +686,154 @@ async function startServer() {
   app.get("/api/ip", (req, res) => {
     const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
     res.json({ ip });
+  });
+
+  // SSRF-Safe CORS Media Proxy for VAP / MP4 / WebM / APNG gift rendering in WebGL
+  const isPrivateOrReservedIp = (ip: string): boolean => {
+    if (net.isIPv4(ip)) {
+      const parts = ip.split(".").map(Number);
+      if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return true;
+      const [a, b] = parts;
+      if (a === 0 || a === 10 || a === 127) return true;
+      if (a === 169 && b === 254) return true;
+      if (a === 172 && b >= 16 && b <= 31) return true;
+      if (a === 192 && b === 168) return true;
+      if (a === 100 && b >= 64 && b <= 127) return true;
+      if (a >= 224) return true;
+      return false;
+    }
+    if (net.isIPv6(ip)) {
+      const lower = ip.toLowerCase();
+      if (
+        lower === "::1" ||
+        lower === "::" ||
+        lower.startsWith("fc") ||
+        lower.startsWith("fd") ||
+        lower.startsWith("fe80:") ||
+        lower.startsWith("::ffff:127.") ||
+        lower.startsWith("::ffff:10.") ||
+        lower.startsWith("::ffff:192.168.") ||
+        lower.startsWith("::ffff:169.254.")
+      ) {
+        return true;
+      }
+      return false;
+    }
+    return true;
+  };
+
+  app.get("/api/media-proxy", async (req, res) => {
+    const rawUrl = typeof req.query.url === "string" ? req.query.url.trim() : "";
+    if (!rawUrl || rawUrl.length > 2048) {
+      res.status(400).json({ error: "رابط الوسائط غير صالح." });
+      return;
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      res.status(400).json({ error: "صيغة الرابط غير صالحة." });
+      return;
+    }
+
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      res.status(400).json({ error: "يُسمح فقط بروابط HTTP/HTTPS." });
+      return;
+    }
+
+    const host = parsed.hostname.toLowerCase();
+    if (
+      host === "localhost" ||
+      host.endsWith(".local") ||
+      host.endsWith(".internal") ||
+      host === "metadata.google.internal"
+    ) {
+      res.status(403).json({ error: "النطاق غير مسموح به." });
+      return;
+    }
+
+    try {
+      const resolved = await dns.lookup(host, { all: true });
+      if (!resolved.length || resolved.some((entry) => isPrivateOrReservedIp(entry.address))) {
+        res.status(403).json({ error: "عنوان الخادم غير مسموح به." });
+        return;
+      }
+    } catch {
+      res.status(400).json({ error: "تعذر الوصول إلى النطاق." });
+      return;
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      const upstreamHeaders: Record<string, string> = {
+        "User-Agent": "AuraVoiceMediaProxy/1.0",
+        Accept: "video/*,image/*,application/octet-stream,*/*;q=0.8",
+      };
+      if (typeof req.headers.range === "string") {
+        upstreamHeaders.Range = req.headers.range;
+      }
+
+      const upstream = await fetch(parsed.toString(), {
+        method: "GET",
+        headers: upstreamHeaders,
+        redirect: "follow",
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!upstream.ok && upstream.status !== 206) {
+        res.status(upstream.status).end();
+        return;
+      }
+
+      const ct = (upstream.headers.get("content-type") || "application/octet-stream").toLowerCase();
+      const isAllowedType =
+        ct.startsWith("video/") ||
+        ct.startsWith("image/") ||
+        ct.startsWith("audio/") ||
+        ct.includes("octet-stream") ||
+        ct.includes("mp4");
+      if (!isAllowedType) {
+        res.status(415).json({ error: "نوع الملف غير مدعوم." });
+        return;
+      }
+
+      const contentLength = Number(upstream.headers.get("content-length") || "0");
+      if (contentLength > 45 * 1024 * 1024) {
+        res.status(413).json({ error: "حجم الملف أكبر من الحد المسموح." });
+        return;
+      }
+
+      res.status(upstream.status);
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.setHeader("Content-Type", ct.includes("octet-stream") && rawUrl.toLowerCase().includes("vap") ? "video/mp4" : ct);
+      res.setHeader("Cache-Control", "public, max-age=3600");
+
+      const passthroughHeaders = ["content-length", "content-range", "accept-ranges", "etag"];
+      passthroughHeaders.forEach((h) => {
+        const val = upstream.headers.get(h);
+        if (val) res.setHeader(h, val);
+      });
+
+      if (!upstream.body) {
+        res.end();
+        return;
+      }
+
+      const nodeStream = Readable.fromWeb(upstream.body as unknown as import("stream/web").ReadableStream);
+      nodeStream.on("error", () => {
+        if (!res.headersSent) res.status(502).end();
+        else res.end();
+      });
+      nodeStream.pipe(res);
+    } catch {
+      if (!res.headersSent) {
+        res.status(502).json({ error: "تعذر تحميل ملف الوسائط." });
+      }
+    }
   });
 
   app.get("/api/voice-server/status", (_req, res) => {

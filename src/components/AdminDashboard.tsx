@@ -904,7 +904,7 @@ export const AdminDashboard: React.FC = () => {
                   <label className="flex items-center justify-between text-slate-300 mb-1 font-semibold">
                     <span className="flex items-center gap-1.5">
                       <Video className="w-3.5 h-3.5 text-rose-400" />
-                      <span>رابط حركة الهدية (MP4 / WebM / APNG / GIF / WebP):</span>
+                      <span>رابط حركة الهدية (VAP / MP4 شفاف تلقائياً / WebM / APNG / GIF / WebP):</span>
                     </span>
                     {newGiftVideoUrl.trim() && (
                       <span className="font-mono text-[10px] text-rose-300">
@@ -918,7 +918,7 @@ export const AdminDashboard: React.FC = () => {
                     type="text"
                     value={newGiftVideoUrl}
                     onChange={(e) => setNewGiftVideoUrl(e.target.value)}
-                    placeholder="https://example.com/luxury-gift.mp4 أو .apng أو .gif"
+                    placeholder="https://example.com/gift-vap.mp4 أو .vap أو .apng أو .gif (يزيل الخلفية البيضاء تلقائياً)"
                     dir="ltr"
                     className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-rose-300 font-mono text-left focus:outline-none focus:border-rose-400"
                   />
@@ -1355,7 +1355,7 @@ export const AdminDashboard: React.FC = () => {
                       <label className="block text-slate-300 mb-1 font-semibold flex items-center justify-between gap-1.5">
                         <span className="flex items-center gap-1.5">
                           <Video className="w-3.5 h-3.5 text-purple-400" />
-                          <span>رابط حركة الدخولية (MP4 / WebM / GIF / WebP — أي رابط):</span>
+                          <span>رابط حركة الدخولية (VAP / MP4 شفاف تلقائياً / WebM / APNG / GIF / WebP):</span>
                         </span>
                         {newStoreType === 'entrance' && (
                           <span className="font-mono text-[10px] text-purple-300">
@@ -1372,7 +1372,7 @@ export const AdminDashboard: React.FC = () => {
                         dir="ltr"
                         value={newStoreVideoUrl}
                         onChange={(e) => setNewStoreVideoUrl(e.target.value)}
-                        placeholder="https://example.com/entrance.mp4 أو .apng أو .gif"
+                        placeholder="https://example.com/entrance-vap.mp4 أو .vap أو .apng أو .gif"
                         className="w-full min-h-[40px] bg-slate-950 border border-white/12 rounded-xl px-3 text-purple-300 font-mono text-left focus:outline-none focus:border-purple-400"
                       />
                     </div>
@@ -3160,7 +3160,7 @@ export const AdminDashboard: React.FC = () => {
 
               <div>
                 <label className="flex items-center justify-between text-slate-300 mb-1 font-semibold">
-                  <span>رابط حركة الهدية (MP4 / WebM / APNG / GIF / WebP):</span>
+                  <span>رابط حركة الهدية (VAP / MP4 شفاف تلقائياً / WebM / APNG / GIF / WebP):</span>
                   {editVideoUrl.trim() && (
                     <span className="font-mono text-[10px] text-rose-300">
                       {editGiftApngInfo
@@ -3174,7 +3174,7 @@ export const AdminDashboard: React.FC = () => {
                   dir="ltr"
                   value={editVideoUrl}
                   onChange={(e) => setEditVideoUrl(e.target.value)}
-                  placeholder="https://example.com/gift-animation.mp4 أو .apng أو .gif"
+                  placeholder="https://example.com/gift-vap.mp4 أو .vap أو .apng أو .gif (شفاف تلقائياً)"
                   className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-rose-300 font-mono text-left focus:outline-none focus:border-rose-400"
                 />
               </div>

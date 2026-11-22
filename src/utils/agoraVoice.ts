@@ -45,6 +45,8 @@ export interface AgoraConnectionStatus {
   micError: string | null;
   errorMessage: string | null;
   requiresToken?: boolean;
+  transport?: 'websocket' | 'firestore_rtc' | 'idle';
+  relayActive?: boolean;
 }
 
 export interface ServerAgoraStatus {
@@ -419,7 +421,11 @@ class AgoraVoiceEngine {
 
   public setConfig(next: Partial<AgoraVoiceConfig>, persistLocal = true): AgoraVoiceConfig {
     const prevProvider = this.runtimeConfig.provider || 'self_hosted';
-    const nextProvider = next.provider || prevProvider;
+    // Only switch to Agora if explicitly requested; otherwise keep Self-Hosted Voice Server active
+    const nextProvider =
+      next.provider === 'agora' || next.provider === 'self_hosted'
+        ? next.provider
+        : prevProvider;
     const validNextId = normalizeAppId(next.appId);
     const cleanAppId = validNextId || this.runtimeConfig.appId || DEFAULT_AGORA_APP_ID;
     const cleanToken =
@@ -947,6 +953,13 @@ class AgoraVoiceEngine {
       }
     });
     this.updateStatus({});
+  }
+
+  public primeFromUserGesture(): void {
+    selfHostedVoice.primeFromUserGesture();
+    if (!this.isSelfHosted()) {
+      this.resumeRemoteAudio(true);
+    }
   }
 
   public async testConnection(roomId = 'room_tyy', userId = 'admin_tester'): Promise<{

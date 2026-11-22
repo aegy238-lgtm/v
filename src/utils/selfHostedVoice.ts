@@ -1,3 +1,11 @@
+import type { RoomLiveEvent } from '../types';
+import {
+  FirestoreRtcSignalPayload,
+  isCloudWriteReady,
+  publishFirestoreRtcSignal,
+  subscribeToFirestoreRtcSignals,
+} from './auravoiceFirestore';
+
 export interface VoiceServerStatusSnapshot {
   status: 'online' | 'offline';
   engine: string;
@@ -19,6 +27,8 @@ export interface SelfHostedVoiceStatus {
   micError: string | null;
   errorMessage: string | null;
   requiresToken?: boolean;
+  transport?: 'websocket' | 'firestore_rtc' | 'idle';
+  relayActive?: boolean;
 }
 
 interface RemotePeerRecord {
@@ -27,21 +37,90 @@ interface RemotePeerRecord {
   displayName: string;
   onSeat: boolean;
   muted: boolean;
+  polite: boolean;
   pc: RTCPeerConnection;
-  audioSender: RTCRtpSender | null;
+  makingOffer: boolean;
+  ignoreOffer: boolean;
   pendingIce: RTCIceCandidateInit[];
   remoteDescriptionSet: boolean;
+  p2pConnected: boolean;
+  relayFallbackTimer: number | null;
   audioEl: HTMLAudioElement | null;
   remoteStream: MediaStream | null;
   analyser: AnalyserNode | null;
   analyserData: Uint8Array | null;
   sourceNode: MediaStreamAudioSourceNode | null;
+  // WebSocket audio relay playback jitter cursor
+  relayNextPlayTime: number;
+  relayLastLevel: number;
+  relayLastLevelAt: number;
 }
 
 type VolumeListener = (volumes: Record<string, number>) => void;
 type NoticeListener = (message: string) => void;
 type MicStatusListener = (isLiveMicActive: boolean) => void;
 type ConnectionStatusListener = (status: SelfHostedVoiceStatus) => void;
+type RoomEventListener = (event: RoomLiveEvent) => void;
+
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:global.stun.twilio.com:3478' },
+];
+
+// ============================================================================
+// G.711 MU-LAW COMPACT AUDIO CODEC (For Automatic NAT/Firewall WS Relay)
+// 16kHz mono -> 16 KB/s crisp voice over HTTPS/WSS port 443!
+// ============================================================================
+function linearToMuLaw(sample: number): number {
+  const MULAW_MAX = 0x1fff;
+  const MULAW_BIAS = 33;
+  let pcm = Math.max(-1, Math.min(1, sample)) * 32767;
+  let sign = 0;
+  if (pcm < 0) {
+    sign = 0x80;
+    pcm = -pcm;
+  }
+  pcm = Math.min(MULAW_MAX * 4, pcm);
+  pcm = (pcm >> 2) + MULAW_BIAS;
+  let exponent = 7;
+  for (let expMask = 0x4000; (pcm & expMask) === 0 && exponent > 0; exponent--, expMask >>= 1) {
+    // find highest bit
+  }
+  const mantissa = (pcm >> (exponent + 3)) & 0x0f;
+  return ~(sign | (exponent << 4) | mantissa) & 0xff;
+}
+
+function muLawToLinear(uVal: number): number {
+  const val = ~uVal & 0xff;
+  const sign = val & 0x80;
+  const exponent = (val >> 4) & 0x07;
+  const mantissa = val & 0x0f;
+  let sample = ((mantissa << 3) + 0x84) << exponent;
+  sample -= 0x84;
+  return (sign ? -sample : sample) / 32768;
+}
+
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
+}
 
 export async function fetchVoiceServerStatus(): Promise<VoiceServerStatusSnapshot | null> {
   if (typeof fetch === 'undefined' || typeof window === 'undefined') return null;
@@ -67,15 +146,16 @@ function getVoiceWebSocketUrl(): string {
 
 class SelfHostedVoiceEngine {
   private ws: WebSocket | null = null;
+  private transport: 'websocket' | 'firestore_rtc' | 'idle' = 'idle';
+  private unsubFirestoreSignals: (() => void) | null = null;
+  private firestoreHelloTimer: number | null = null;
+
   private selfPeerId: string | null = null;
   private activeRoomId: string | null = null;
   private activeChannel: string | null = null;
   private activeUserId: string | null = null;
   private activeDisplayName = 'مستخدم';
-  private iceServers: RTCIceServer[] = [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-  ];
+  private iceServers: RTCIceServer[] = [...DEFAULT_ICE_SERVERS];
 
   private desiredOnSeat = false;
   private desiredMuted = false;
@@ -88,6 +168,11 @@ class SelfHostedVoiceEngine {
   private localSource: MediaStreamAudioSourceNode | null = null;
   private localAnalyser: AnalyserNode | null = null;
   private localAnalyserData: Uint8Array | null = null;
+  private relayProcessor: ScriptProcessorNode | null = null;
+  private relayMuteGain: GainNode | null = null;
+  private relayRequestedByPeers = new Set<string>();
+  private relaySeq = 0;
+
   private volumeTimer: number | null = null;
   private heartbeatTimer: number | null = null;
   private reconnectTimer: number | null = null;
@@ -106,6 +191,7 @@ class SelfHostedVoiceEngine {
   private noticeListeners = new Set<NoticeListener>();
   private micStatusListeners = new Set<MicStatusListener>();
   private statusListeners = new Set<ConnectionStatusListener>();
+  private roomEventListeners = new Set<RoomEventListener>();
 
   private isLiveMicActive = false;
   private autoplayBlocked = false;
@@ -120,6 +206,8 @@ class SelfHostedVoiceEngine {
     micError: null,
     errorMessage: null,
     requiresToken: false,
+    transport: 'idle',
+    relayActive: false,
   };
 
   private updateStatus(patch: Partial<SelfHostedVoiceStatus>) {
@@ -130,6 +218,8 @@ class SelfHostedVoiceEngine {
       micActive: this.isLiveMicActive,
       autoplayBlocked: this.autoplayBlocked,
       remoteUsersCount: this.peers.size,
+      transport: this.transport,
+      relayActive: this.relayRequestedByPeers.size > 0,
     };
     this.statusListeners.forEach((cb) => cb({ ...this.status }));
   }
@@ -167,6 +257,31 @@ class SelfHostedVoiceEngine {
     return () => this.statusListeners.delete(cb);
   }
 
+  public subscribeRoomEvents(cb: RoomEventListener): () => void {
+    this.roomEventListeners.add(cb);
+    return () => this.roomEventListeners.delete(cb);
+  }
+
+  public broadcastRoomEvent(event: RoomLiveEvent): boolean {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.sendWs({
+        type: 'room:event',
+        event,
+      });
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Call directly inside a user tap handler (e.g., Climb Mic button or room tap)
+   * so mobile Safari / Android Chrome unlock AudioContext and remote <audio> immediately.
+   */
+  public primeFromUserGesture(): void {
+    this.ensureAudioContext();
+    this.resumeRemoteAudio(true);
+  }
+
   private ensureAudioContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
     if (!this.audioCtx || this.audioCtx.state === 'closed') {
@@ -186,6 +301,7 @@ class SelfHostedVoiceEngine {
     if (this.volumeTimer !== null || typeof window === 'undefined') return;
     this.volumeTimer = window.setInterval(() => {
       const next: Record<string, number> = {};
+      const now = Date.now();
 
       if (this.activeUserId && this.localAnalyser && this.localAnalyserData && this.isLiveMicActive) {
         this.localAnalyser.getByteTimeDomainData(
@@ -197,19 +313,28 @@ class SelfHostedVoiceEngine {
           sum += v * v;
         }
         const rms = Math.sqrt(sum / this.localAnalyserData.length);
-        next[this.activeUserId] = Math.min(100, Math.round(rms * 260));
+        next[this.activeUserId] = Math.min(100, Math.round(rms * 280));
       }
 
       this.peers.forEach((peer) => {
-        if (!peer.analyser || !peer.analyserData || !peer.onSeat || peer.muted) return;
-        peer.analyser.getByteTimeDomainData(peer.analyserData as Uint8Array<ArrayBuffer>);
-        let sum = 0;
-        for (let i = 0; i < peer.analyserData.length; i++) {
-          const v = (peer.analyserData[i] - 128) / 128;
-          sum += v * v;
+        if (!peer.onSeat || peer.muted) return;
+        let lvl = 0;
+        if (peer.analyser && peer.analyserData && peer.p2pConnected) {
+          peer.analyser.getByteTimeDomainData(peer.analyserData as Uint8Array<ArrayBuffer>);
+          let sum = 0;
+          for (let i = 0; i < peer.analyserData.length; i++) {
+            const v = (peer.analyserData[i] - 128) / 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / peer.analyserData.length);
+          lvl = Math.min(100, Math.round(rms * 280));
         }
-        const rms = Math.sqrt(sum / peer.analyserData.length);
-        next[peer.userId] = Math.min(100, Math.round(rms * 260));
+        if (lvl === 0 && now - peer.relayLastLevelAt < 450) {
+          lvl = peer.relayLastLevel;
+        }
+        if (lvl > 0) {
+          next[peer.userId] = lvl;
+        }
       });
 
       this.volumeListeners.forEach((cb) => cb(next));
@@ -234,6 +359,51 @@ class SelfHostedVoiceEngine {
     }
   }
 
+  private sendSignal(params: {
+    type: 'voice:offer' | 'voice:answer' | 'voice:ice';
+    targetPeerId: string;
+    sdp?: RTCSessionDescriptionInit | null;
+    candidate?: RTCIceCandidateInit | null;
+  }) {
+    if (this.transport === 'websocket') {
+      this.sendWs(params);
+      return;
+    }
+    if (
+      this.transport === 'firestore_rtc' &&
+      this.activeRoomId &&
+      this.selfPeerId &&
+      this.activeUserId
+    ) {
+      const sigType =
+        params.type === 'voice:offer'
+          ? 'offer'
+          : params.type === 'voice:answer'
+          ? 'answer'
+          : 'ice';
+      void publishFirestoreRtcSignal({
+        roomId: this.activeRoomId,
+        signalType: sigType,
+        fromPeerId: this.selfPeerId,
+        fromUserId: this.activeUserId,
+        displayName: this.activeDisplayName,
+        targetPeerId: params.targetPeerId,
+        sdp: params.sdp || undefined,
+        candidate: params.candidate || undefined,
+      });
+    }
+  }
+
+  private getAudioTransceiver(pc: RTCPeerConnection): RTCRtpTransceiver | undefined {
+    return pc
+      .getTransceivers()
+      .find(
+        (tr) =>
+          tr.receiver?.track?.kind === 'audio' ||
+          tr.sender?.track?.kind === 'audio'
+      );
+  }
+
   private setupPeerConnection(peerInfo: {
     peerId: string;
     userId: string;
@@ -245,16 +415,17 @@ class SelfHostedVoiceEngine {
     if (existing) {
       existing.onSeat = peerInfo.onSeat;
       existing.muted = peerInfo.muted;
+      existing.displayName = peerInfo.displayName || existing.displayName;
       return existing;
     }
 
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-    const transceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
-    const audioSender = transceiver.sender;
+    const pc = new RTCPeerConnection({
+      iceServers: this.iceServers,
+      iceCandidatePoolSize: 4,
+    });
 
-    if (this.localTrack && this.desiredOnSeat && !this.desiredMuted) {
-      void audioSender.replaceTrack(this.localTrack).catch(() => {});
-    }
+    // Deterministic Perfect Negotiation polite role
+    const polite = (this.selfPeerId || '') < peerInfo.peerId;
 
     const record: RemotePeerRecord = {
       peerId: peerInfo.peerId,
@@ -262,34 +433,84 @@ class SelfHostedVoiceEngine {
       displayName: peerInfo.displayName,
       onSeat: peerInfo.onSeat,
       muted: peerInfo.muted,
+      polite,
       pc,
-      audioSender,
+      makingOffer: false,
+      ignoreOffer: false,
       pendingIce: [],
       remoteDescriptionSet: false,
+      p2pConnected: false,
+      relayFallbackTimer: null,
       audioEl: null,
       remoteStream: null,
       analyser: null,
       analyserData: null,
       sourceNode: null,
+      relayNextPlayTime: 0,
+      relayLastLevel: 0,
+      relayLastLevelAt: 0,
     };
 
     pc.onicecandidate = (evt) => {
       if (!evt.candidate) return;
-      this.sendWs({
+      this.sendSignal({
         type: 'voice:ice',
         targetPeerId: peerInfo.peerId,
         candidate: evt.candidate.toJSON(),
       });
     };
 
-    pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'failed') {
+    const requestRelayFromPeer = (enabled: boolean) => {
+      if (this.transport !== 'websocket') return;
+      this.sendWs({
+        type: 'voice:relay_request',
+        targetPeerId: peerInfo.peerId,
+        enabled,
+      });
+    };
+
+    const evaluateConnectionHealth = () => {
+      const ice = pc.iceConnectionState;
+      const conn = pc.connectionState;
+      if (ice === 'connected' || ice === 'completed' || conn === 'connected') {
+        record.p2pConnected = true;
+        if (record.relayFallbackTimer !== null) {
+          window.clearTimeout(record.relayFallbackTimer);
+          record.relayFallbackTimer = null;
+        }
+        requestRelayFromPeer(false);
+        this.updateStatus({});
+      } else if (ice === 'failed' || conn === 'failed') {
+        record.p2pConnected = false;
+        requestRelayFromPeer(true);
         try {
           pc.restartIce();
         } catch {
-          // ignore ICE restart errors
+          // ignore
         }
+        this.updateStatus({});
+      } else if (ice === 'disconnected') {
+        record.p2pConnected = false;
+        requestRelayFromPeer(true);
       }
+    };
+
+    pc.oniceconnectionstatechange = evaluateConnectionHealth;
+    pc.onconnectionstatechange = evaluateConnectionHealth;
+
+    // If WebRTC P2P doesn't finish ICE within 4.5s (strict 4G/5G carrier NAT),
+    // automatically enable low-bandwidth WebSocket server audio relay!
+    if (typeof window !== 'undefined' && this.transport === 'websocket') {
+      record.relayFallbackTimer = window.setTimeout(() => {
+        if (!record.p2pConnected && this.peers.get(peerInfo.peerId) === record) {
+          requestRelayFromPeer(true);
+        }
+      }, 4500);
+    }
+
+    pc.onnegotiationneeded = () => {
+      if (this.peers.get(peerInfo.peerId) !== record) return;
+      void this.initiateOfferToPeer(record);
     };
 
     pc.ontrack = (evt) => {
@@ -343,6 +564,12 @@ class SelfHostedVoiceEngine {
     const rec = this.peers.get(peerId);
     if (!rec) return;
     this.peers.delete(peerId);
+    this.relayRequestedByPeers.delete(peerId);
+
+    if (rec.relayFallbackTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(rec.relayFallbackTimer);
+      rec.relayFallbackTimer = null;
+    }
 
     try {
       rec.sourceNode?.disconnect();
@@ -362,6 +589,8 @@ class SelfHostedVoiceEngine {
       rec.pc.ontrack = null;
       rec.pc.onicecandidate = null;
       rec.pc.oniceconnectionstatechange = null;
+      rec.pc.onconnectionstatechange = null;
+      rec.pc.onnegotiationneeded = null;
       rec.pc.close();
     } catch {
       // ignore
@@ -369,17 +598,75 @@ class SelfHostedVoiceEngine {
     this.updateStatus({});
   }
 
-  private async initiateOfferToPeer(rec: RemotePeerRecord) {
+  private async syncLocalTrackToPeer(rec: RemotePeerRecord, triggerRenegotiate: boolean) {
+    const pc = rec.pc;
+    const tr = this.getAudioTransceiver(pc);
+    const shouldSend = Boolean(this.localTrack && this.desiredOnSeat && !this.desiredMuted);
+
     try {
+      if (shouldSend && this.localTrack) {
+        if (tr) {
+          await tr.sender.replaceTrack(this.localTrack);
+          if (tr.direction !== 'sendrecv') {
+            tr.direction = 'sendrecv';
+          }
+          if (
+            triggerRenegotiate &&
+            tr.currentDirection !== 'sendrecv' &&
+            tr.currentDirection !== 'sendonly'
+          ) {
+            await this.initiateOfferToPeer(rec);
+          }
+        } else {
+          if (this.localStream) {
+            pc.addTrack(this.localTrack, this.localStream);
+          } else {
+            pc.addTransceiver(this.localTrack, { direction: 'sendrecv' });
+          }
+          if (triggerRenegotiate) {
+            await this.initiateOfferToPeer(rec);
+          }
+        }
+      } else if (tr) {
+        await tr.sender.replaceTrack(null).catch(() => {});
+      }
+    } catch (err) {
+      console.warn('[SelfHostedVoice] syncLocalTrackToPeer notice:', err);
+    }
+  }
+
+  private async initiateOfferToPeer(rec: RemotePeerRecord) {
+    if (rec.makingOffer) return;
+    try {
+      rec.makingOffer = true;
+
+      // Ensure at least one audio transceiver exists before creating offer
+      const tr = this.getAudioTransceiver(rec.pc);
+      if (this.localTrack && this.desiredOnSeat && !this.desiredMuted) {
+        if (tr) {
+          await tr.sender.replaceTrack(this.localTrack);
+          tr.direction = 'sendrecv';
+        } else if (this.localStream) {
+          rec.pc.addTrack(this.localTrack, this.localStream);
+        } else {
+          rec.pc.addTransceiver(this.localTrack, { direction: 'sendrecv' });
+        }
+      } else if (!tr) {
+        rec.pc.addTransceiver('audio', { direction: 'recvonly' });
+      }
+
       const offer = await rec.pc.createOffer({ offerToReceiveAudio: true });
+      if (rec.pc.signalingState !== 'stable') return;
       await rec.pc.setLocalDescription(offer);
-      this.sendWs({
+      this.sendSignal({
         type: 'voice:offer',
         targetPeerId: rec.peerId,
         sdp: rec.pc.localDescription,
       });
     } catch (err) {
       console.warn('[SelfHostedVoice] offer failed:', err);
+    } finally {
+      rec.makingOffer = false;
     }
   }
 
@@ -395,8 +682,15 @@ class SelfHostedVoiceEngine {
       onSeat: true,
       muted: false,
     });
+
     try {
-      if (rec.pc.signalingState !== 'stable') {
+      const offerCollision = rec.makingOffer || rec.pc.signalingState !== 'stable';
+      rec.ignoreOffer = !rec.polite && offerCollision;
+      if (rec.ignoreOffer) {
+        return;
+      }
+
+      if (offerCollision) {
         await Promise.all([
           rec.pc.setLocalDescription({ type: 'rollback' }),
           rec.pc.setRemoteDescription(new RTCSessionDescription(sdp)),
@@ -404,19 +698,26 @@ class SelfHostedVoiceEngine {
       } else {
         await rec.pc.setRemoteDescription(new RTCSessionDescription(sdp));
       }
+
       rec.remoteDescriptionSet = true;
       await this.flushPendingIce(rec);
 
+      // Bind our active mic track onto the negotiated audio transceiver BEFORE answering!
+      const tr = this.getAudioTransceiver(rec.pc);
       if (this.localTrack && this.desiredOnSeat && !this.desiredMuted) {
-        const sender = rec.pc.getSenders().find((s) => s.track?.kind === 'audio' || !s.track) || rec.audioSender;
-        if (sender) {
-          await sender.replaceTrack(this.localTrack).catch(() => {});
+        if (tr) {
+          tr.direction = 'sendrecv';
+          await tr.sender.replaceTrack(this.localTrack).catch(() => {});
+        } else if (this.localStream) {
+          rec.pc.addTrack(this.localTrack, this.localStream);
         }
+      } else if (tr && tr.direction === 'inactive') {
+        tr.direction = 'recvonly';
       }
 
       const answer = await rec.pc.createAnswer();
       await rec.pc.setLocalDescription(answer);
-      this.sendWs({
+      this.sendSignal({
         type: 'voice:answer',
         targetPeerId: fromPeerId,
         sdp: rec.pc.localDescription,
@@ -430,6 +731,7 @@ class SelfHostedVoiceEngine {
     const rec = this.peers.get(fromPeerId);
     if (!rec) return;
     try {
+      if (rec.pc.signalingState !== 'have-local-offer') return;
       await rec.pc.setRemoteDescription(new RTCSessionDescription(sdp));
       rec.remoteDescriptionSet = true;
       await this.flushPendingIce(rec);
@@ -440,7 +742,7 @@ class SelfHostedVoiceEngine {
 
   private async handleIncomingIce(fromPeerId: string, candidate: RTCIceCandidateInit) {
     const rec = this.peers.get(fromPeerId);
-    if (!rec) return;
+    if (!rec || rec.ignoreOffer) return;
     if (!rec.remoteDescriptionSet) {
       rec.pendingIce.push(candidate);
       return;
@@ -464,13 +766,164 @@ class SelfHostedVoiceEngine {
     }
   }
 
+  // ============================================================================
+  // AUTOMATIC WEBSOCKET AUDIO RELAY (When P2P ICE fails on strict 4G/5G NAT)
+  // ============================================================================
+  private attachRelayEncoder(ctx: AudioContext, src: MediaStreamAudioSourceNode) {
+    this.detachRelayEncoder();
+    try {
+      // 2048 samples @ 48kHz ~= 42ms per callback -> downsampled to 16kHz (~680 bytes mu-law)
+      const processor = ctx.createScriptProcessor(2048, 1, 1);
+      const muteGain = ctx.createGain();
+      muteGain.gain.value = 0;
+
+      const targetRate = 16000;
+      const ratio = Math.max(1, ctx.sampleRate / targetRate);
+
+      processor.onaudioprocess = (ev) => {
+        if (
+          !this.isLiveMicActive ||
+          this.desiredMuted ||
+          !this.desiredOnSeat ||
+          this.transport !== 'websocket' ||
+          !this.ws ||
+          this.ws.readyState !== WebSocket.OPEN
+        ) {
+          return;
+        }
+
+        // Only stream relay audio frames to peers whose WebRTC P2P hasn't connected yet
+        const targets: string[] = [];
+        this.peers.forEach((peer, peerId) => {
+          if (!peer.p2pConnected || this.relayRequestedByPeers.has(peerId)) {
+            targets.push(peerId);
+          }
+        });
+        if (targets.length === 0) return;
+
+        const input = ev.inputBuffer.getChannelData(0);
+        const outLen = Math.floor(input.length / ratio);
+        if (outLen <= 0) return;
+
+        const encoded = new Uint8Array(outLen);
+        let sumSq = 0;
+        for (let i = 0; i < outLen; i++) {
+          const sample = input[Math.min(input.length - 1, Math.floor(i * ratio))];
+          sumSq += sample * sample;
+          encoded[i] = linearToMuLaw(sample);
+        }
+        const rms = Math.sqrt(sumSq / outLen);
+        const level = Math.min(100, Math.round(rms * 280));
+
+        // Skip sending pure digital silence when RMS is near zero to save bandwidth
+        if (rms < 0.0025) return;
+
+        this.relaySeq += 1;
+        this.sendWs({
+          type: 'voice:audio_frame',
+          targetPeerIds: targets,
+          sampleRate: targetRate,
+          seq: this.relaySeq,
+          level,
+          data: uint8ToBase64(encoded),
+        });
+      };
+
+      src.connect(processor);
+      processor.connect(muteGain);
+      muteGain.connect(ctx.destination);
+      this.relayProcessor = processor;
+      this.relayMuteGain = muteGain;
+    } catch {
+      // Ignore ScriptProcessor fallback errors on restricted environments
+    }
+  }
+
+  private detachRelayEncoder() {
+    if (this.relayProcessor) {
+      try {
+        this.relayProcessor.onaudioprocess = null;
+        this.relayProcessor.disconnect();
+      } catch {
+        // ignore
+      }
+      this.relayProcessor = null;
+    }
+    if (this.relayMuteGain) {
+      try {
+        this.relayMuteGain.disconnect();
+      } catch {
+        // ignore
+      }
+      this.relayMuteGain = null;
+    }
+  }
+
+  private playIncomingRelayFrame(
+    fromPeerId: string,
+    fromUserId: string,
+    b64Data: string,
+    sampleRate: number,
+    level: number
+  ) {
+    if (this.remoteMuted) return;
+    const rec = this.peers.get(fromPeerId);
+    // If direct WebRTC P2P is already connected and playing audio, skip relay audio to prevent echo!
+    if (rec?.p2pConnected) return;
+
+    const ctx = this.ensureAudioContext();
+    if (!ctx) return;
+
+    if (ctx.state === 'suspended') {
+      void ctx.resume().catch(() => {
+        this.autoplayBlocked = true;
+        this.updateStatus({});
+      });
+      return;
+    }
+
+    try {
+      const encoded = base64ToUint8(b64Data);
+      if (encoded.length === 0) return;
+      const buf = ctx.createBuffer(1, encoded.length, sampleRate);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < encoded.length; i++) {
+        ch[i] = muLawToLinear(encoded[i]);
+      }
+
+      const source = ctx.createBufferSource();
+      source.buffer = buf;
+      source.connect(ctx.destination);
+
+      const now = ctx.currentTime;
+      const startAt = rec
+        ? Math.max(now + 0.02, Math.min(now + 0.25, rec.relayNextPlayTime || now + 0.02))
+        : now + 0.02;
+      source.start(startAt);
+
+      if (rec) {
+        rec.relayNextPlayTime = startAt + buf.duration;
+        rec.relayLastLevel = level || 20;
+        rec.relayLastLevelAt = Date.now();
+        rec.onSeat = true;
+        rec.muted = false;
+      } else if (fromUserId) {
+        this.volumeListeners.forEach((cb) => cb({ [fromUserId]: level || 20 }));
+      }
+    } catch {
+      // Ignore malformed audio frame
+    }
+  }
+
   private async releaseLocalMic(): Promise<void> {
     this.setLiveMicActive(false);
+    this.detachRelayEncoder();
 
     const replacePromises: Promise<void>[] = [];
     this.peers.forEach((rec) => {
-      if (rec.audioSender) {
-        replacePromises.push(rec.audioSender.replaceTrack(null).catch(() => {}));
+      const tr = this.getAudioTransceiver(rec.pc);
+      if (tr) {
+        replacePromises.push(tr.sender.replaceTrack(null).catch(() => {}));
       }
     });
     await Promise.all(replacePromises);
@@ -497,14 +950,35 @@ class SelfHostedVoiceEngine {
     this.localTrack = null;
   }
 
+  private broadcastMicState(onSeat: boolean, muted: boolean) {
+    if (this.transport === 'websocket') {
+      this.sendWs({
+        type: 'voice:mic_state',
+        onSeat,
+        muted,
+      });
+    } else if (
+      this.transport === 'firestore_rtc' &&
+      this.activeRoomId &&
+      this.selfPeerId &&
+      this.activeUserId
+    ) {
+      void publishFirestoreRtcSignal({
+        roomId: this.activeRoomId,
+        signalType: 'mic_state',
+        fromPeerId: this.selfPeerId,
+        fromUserId: this.activeUserId,
+        displayName: this.activeDisplayName,
+        onSeat,
+        muted,
+      });
+    }
+  }
+
   private async applyMicState(onSeat: boolean, muted: boolean, capturedEpoch: number): Promise<void> {
     if (capturedEpoch !== this.joinEpoch) return;
 
-    this.sendWs({
-      type: 'voice:mic_state',
-      onSeat,
-      muted,
-    });
+    this.broadcastMicState(onSeat, muted);
 
     if (!onSeat) {
       this.updateStatus({ micError: null });
@@ -522,12 +996,10 @@ class SelfHostedVoiceEngine {
     }
 
     // onSeat && !muted
-    if (this.localTrack) {
+    if (this.localTrack && this.localTrack.readyState === 'live') {
       this.localTrack.enabled = true;
       await Promise.all(
-        Array.from(this.peers.values()).map((rec) =>
-          rec.audioSender ? rec.audioSender.replaceTrack(this.localTrack).catch(() => {}) : Promise.resolve()
-        )
+        Array.from(this.peers.values()).map((rec) => this.syncLocalTrackToPeer(rec, true))
       );
       this.updateStatus({ micError: null });
       this.setLiveMicActive(true);
@@ -584,19 +1056,19 @@ class SelfHostedVoiceEngine {
           this.localSource = src;
           this.localAnalyser = analyser;
           this.localAnalyserData = new Uint8Array(analyser.frequencyBinCount);
+          this.attachRelayEncoder(ctx, src);
         } catch {
           // ignore
         }
       }
 
-      await Promise.all(
-        Array.from(this.peers.values()).map((rec) =>
-          rec.audioSender ? rec.audioSender.replaceTrack(track).catch(() => {}) : Promise.resolve()
-        )
-      );
-
       this.updateStatus({ micError: null });
       this.setLiveMicActive(true);
+
+      // Attach live mic track & trigger renegotiation for EVERY peer currently in the room!
+      await Promise.all(
+        Array.from(this.peers.values()).map((rec) => this.syncLocalTrackToPeer(rec, true))
+      );
     } catch (err) {
       const errName = (err as { name?: string })?.name || '';
       let msg = 'تعذر تشغيل الميكروفون المباشر.';
@@ -615,7 +1087,7 @@ class SelfHostedVoiceEngine {
     }
   }
 
-  private clearWsTimers() {
+  private clearTransportTimers() {
     if (this.heartbeatTimer !== null && typeof window !== 'undefined') {
       window.clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
@@ -624,6 +1096,122 @@ class SelfHostedVoiceEngine {
       window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    if (this.firestoreHelloTimer !== null && typeof window !== 'undefined') {
+      window.clearInterval(this.firestoreHelloTimer);
+      this.firestoreHelloTimer = null;
+    }
+    if (this.unsubFirestoreSignals) {
+      this.unsubFirestoreSignals();
+      this.unsubFirestoreSignals = null;
+    }
+  }
+
+  // ============================================================================
+  // AUTOMATIC FIRESTORE REALTIME SIGNALING FALLBACK (For Vercel / Static Hosts)
+  // ============================================================================
+  private async startFirestoreRtcFallback(
+    roomId: string,
+    userId: string,
+    displayName: string,
+    myEpoch: number
+  ): Promise<boolean> {
+    if (!isCloudWriteReady() || myEpoch !== this.joinEpoch) return false;
+
+    this.transport = 'firestore_rtc';
+    this.selfPeerId = `${userId}__fs_${Math.random().toString(36).slice(2, 8)}`;
+    this.iceServers = [...DEFAULT_ICE_SERVERS];
+    this.activeChannel = roomId;
+
+    const sinceMs = Date.now() - 12000;
+    this.unsubFirestoreSignals = subscribeToFirestoreRtcSignals(
+      roomId,
+      sinceMs,
+      (sig: FirestoreRtcSignalPayload) => {
+        if (myEpoch !== this.joinEpoch || sig.fromPeerId === this.selfPeerId) return;
+        if (sig.targetPeerId && sig.targetPeerId !== this.selfPeerId) return;
+
+        if (sig.signalType === 'hello') {
+          const alreadyExisted = this.peers.has(sig.fromPeerId);
+          const rec = this.setupPeerConnection({
+            peerId: sig.fromPeerId,
+            userId: sig.fromUserId,
+            displayName: sig.displayName,
+            onSeat: Boolean(sig.onSeat),
+            muted: Boolean(sig.muted),
+          });
+          if (!alreadyExisted) {
+            // Reply with hello so the other peer sees us, and deterministic initiator sends offer
+            void publishFirestoreRtcSignal({
+              roomId,
+              signalType: 'hello',
+              fromPeerId: this.selfPeerId!,
+              fromUserId: userId,
+              displayName,
+              targetPeerId: sig.fromPeerId,
+              onSeat: this.desiredOnSeat,
+              muted: this.desiredMuted,
+            });
+            if (!rec.polite) {
+              void this.initiateOfferToPeer(rec);
+            }
+          }
+          return;
+        }
+
+        if (sig.signalType === 'mic_state') {
+          const rec = this.peers.get(sig.fromPeerId);
+          if (rec) {
+            rec.onSeat = Boolean(sig.onSeat);
+            rec.muted = Boolean(sig.muted);
+          }
+          return;
+        }
+
+        if (sig.signalType === 'leave') {
+          this.cleanupPeer(sig.fromPeerId);
+          return;
+        }
+
+        if (sig.signalType === 'offer' && sig.sdp) {
+          void this.handleIncomingOffer(sig.fromPeerId, sig.fromUserId, sig.sdp);
+          return;
+        }
+
+        if (sig.signalType === 'answer' && sig.sdp) {
+          void this.handleIncomingAnswer(sig.fromPeerId, sig.sdp);
+          return;
+        }
+
+        if (sig.signalType === 'ice' && sig.candidate) {
+          void this.handleIncomingIce(sig.fromPeerId, sig.candidate);
+        }
+      }
+    );
+
+    // Announce presence into the room
+    await publishFirestoreRtcSignal({
+      roomId,
+      signalType: 'hello',
+      fromPeerId: this.selfPeerId,
+      fromUserId: userId,
+      displayName,
+      onSeat: this.desiredOnSeat,
+      muted: this.desiredMuted,
+    });
+
+    this.startVolumeLoop();
+    this.updateStatus({
+      state: 'connected',
+      channel: roomId,
+      errorMessage: null,
+      requiresToken: false,
+    });
+
+    if (this.desiredOnSeat) {
+      await this.applyMicState(this.desiredOnSeat, this.desiredMuted, myEpoch);
+    }
+
+    return true;
   }
 
   private async connectWebSocket(
@@ -631,25 +1219,27 @@ class SelfHostedVoiceEngine {
     userId: string,
     displayName: string,
     myEpoch: number
-  ): Promise<void> {
-    return new Promise<void>((resolve) => {
+  ): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
       if (typeof WebSocket === 'undefined') {
-        this.updateStatus({
-          state: 'error',
-          errorMessage: 'المتصفح لا يدعم WebSocket للتواصل الصوتي.',
-        });
-        resolve();
+        resolve(false);
         return;
       }
 
       const wsUrl = getVoiceWebSocketUrl();
-      const ws = new WebSocket(wsUrl);
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch {
+        resolve(false);
+        return;
+      }
       this.ws = ws;
       let resolved = false;
-      const done = () => {
+      const done = (ok: boolean) => {
         if (!resolved) {
           resolved = true;
-          resolve();
+          resolve(ok);
         }
       };
 
@@ -660,21 +1250,18 @@ class SelfHostedVoiceEngine {
           } catch {
             // ignore
           }
-          this.updateStatus({
-            state: 'error',
-            errorMessage: 'تعذر الوصول إلى سيرفر الصوت الخاص (/ws/voice).',
-          });
-          done();
+          done(false);
         }
-      }, 6000);
+      }, 4500);
 
       ws.onopen = () => {
         window.clearTimeout(timeout);
         if (myEpoch !== this.joinEpoch || this.ws !== ws) {
           ws.close();
-          done();
+          done(false);
           return;
         }
+        this.transport = 'websocket';
         this.reconnectAttempts = 0;
         this.sendWs({
           type: 'voice:join',
@@ -714,35 +1301,40 @@ class SelfHostedVoiceEngine {
             requiresToken: false,
           });
 
-          const existingPeers = Array.isArray(msg.peers) ? (msg.peers as Array<{
-            peerId: string;
-            userId: string;
-            displayName: string;
-            onSeat: boolean;
-            muted: boolean;
-          }>) : [];
+          const existingPeers = Array.isArray(msg.peers)
+            ? (msg.peers as Array<{
+                peerId: string;
+                userId: string;
+                displayName: string;
+                onSeat: boolean;
+                muted: boolean;
+              }>)
+            : [];
 
-          for (const p of existingPeers) {
-            const rec = this.setupPeerConnection(p);
-            // Newly joined peer initiates WebRTC offers to already-present peers
-            await this.initiateOfferToPeer(rec);
-          }
-
+          // If we are already seated before joining WS, capture mic first so our initial offer carries audio!
           if (this.desiredOnSeat) {
             await this.applyMicState(this.desiredOnSeat, this.desiredMuted, myEpoch);
           }
-          done();
+
+          for (const p of existingPeers) {
+            const rec = this.setupPeerConnection(p);
+            await this.initiateOfferToPeer(rec);
+          }
+
+          done(true);
           return;
         }
 
         if (type === 'voice:peer_joined') {
-          const p = msg.peer as {
-            peerId: string;
-            userId: string;
-            displayName: string;
-            onSeat: boolean;
-            muted: boolean;
-          } | undefined;
+          const p = msg.peer as
+            | {
+                peerId: string;
+                userId: string;
+                displayName: string;
+                onSeat: boolean;
+                muted: boolean;
+              }
+            | undefined;
           if (p?.peerId) {
             this.setupPeerConnection(p);
           }
@@ -750,13 +1342,15 @@ class SelfHostedVoiceEngine {
         }
 
         if (type === 'voice:peer_updated') {
-          const p = msg.peer as {
-            peerId: string;
-            userId: string;
-            displayName: string;
-            onSeat: boolean;
-            muted: boolean;
-          } | undefined;
+          const p = msg.peer as
+            | {
+                peerId: string;
+                userId: string;
+                displayName: string;
+                onSeat: boolean;
+                muted: boolean;
+              }
+            | undefined;
           if (p?.peerId) {
             const rec = this.peers.get(p.peerId);
             if (rec) {
@@ -799,25 +1393,52 @@ class SelfHostedVoiceEngine {
           return;
         }
 
+        if (type === 'voice:relay_request') {
+          const fromPeerId = String(msg.fromPeerId || '');
+          const enabled = Boolean(msg.enabled);
+          if (fromPeerId) {
+            if (enabled) this.relayRequestedByPeers.add(fromPeerId);
+            else this.relayRequestedByPeers.delete(fromPeerId);
+            this.updateStatus({});
+          }
+          return;
+        }
+
+        if (type === 'voice:audio_frame') {
+          const fromPeerId = String(msg.fromPeerId || '');
+          const fromUserId = String(msg.fromUserId || '');
+          const b64 = typeof msg.data === 'string' ? msg.data : '';
+          const sampleRate = Number(msg.sampleRate) || 16000;
+          const level = Number(msg.level) || 0;
+          if (fromPeerId && b64) {
+            this.playIncomingRelayFrame(fromPeerId, fromUserId, b64, sampleRate, level);
+          }
+          return;
+        }
+
+        if (type === 'room:event') {
+          const ev = msg.event as RoomLiveEvent | undefined;
+          if (ev && ev.id && ev.kind) {
+            this.roomEventListeners.forEach((cb) => cb(ev));
+          }
+          return;
+        }
+
         if (type === 'voice:error') {
           const errMsg = String(msg.message || 'خطأ في سيرفر الصوت.');
           this.emitNotice(errMsg);
           this.updateStatus({ state: 'error', errorMessage: errMsg });
-          done();
+          done(false);
         }
       };
 
       ws.onerror = () => {
         window.clearTimeout(timeout);
         if (myEpoch !== this.joinEpoch || this.ws !== ws) {
-          done();
+          done(false);
           return;
         }
-        this.updateStatus({
-          state: 'error',
-          errorMessage: 'تعذر الاتصال بسيرفر الصوت الخاص، جاري إعادة المحاولة...',
-        });
-        done();
+        done(false);
       };
 
       ws.onclose = () => {
@@ -827,11 +1448,15 @@ class SelfHostedVoiceEngine {
           this.heartbeatTimer = null;
         }
         if (myEpoch !== this.joinEpoch || this.ws !== ws) {
-          done();
+          done(false);
           return;
         }
-        // Auto-reconnect if still in active room
-        if (this.activeRoomId && this.activeUserId) {
+        if (!resolved) {
+          done(false);
+          return;
+        }
+        // Auto-reconnect if connection dropped AFTER successful open
+        if (this.activeRoomId && this.activeUserId && this.transport === 'websocket') {
           this.reconnectAttempts += 1;
           const delay = Math.min(8000, 1000 * Math.pow(2, Math.min(3, this.reconnectAttempts - 1)));
           this.updateStatus({
@@ -844,7 +1469,6 @@ class SelfHostedVoiceEngine {
             }
           }, delay);
         }
-        done();
       };
     });
   }
@@ -860,7 +1484,13 @@ class SelfHostedVoiceEngine {
 
     this.opChain = this.opChain.then(async () => {
       if (myEpoch !== this.joinEpoch) return;
-      if (this.activeChannel === cleanRoom && this.ws?.readyState === WebSocket.OPEN) return;
+      if (
+        this.activeChannel === cleanRoom &&
+        ((this.transport === 'websocket' && this.ws?.readyState === WebSocket.OPEN) ||
+          this.transport === 'firestore_rtc')
+      ) {
+        return;
+      }
 
       await this.internalLeave(false);
       if (myEpoch !== this.joinEpoch) return;
@@ -873,7 +1503,27 @@ class SelfHostedVoiceEngine {
         requiresToken: false,
       });
 
-      await this.connectWebSocket(cleanRoom, cleanUid, this.activeDisplayName, myEpoch);
+      const wsConnected = await this.connectWebSocket(
+        cleanRoom,
+        cleanUid,
+        this.activeDisplayName,
+        myEpoch
+      );
+      if (wsConnected || myEpoch !== this.joinEpoch) return;
+
+      // Seamless fallback to Firestore Realtime WebRTC Signaling (e.g., on Vercel static hosting)
+      const fsConnected = await this.startFirestoreRtcFallback(
+        cleanRoom,
+        cleanUid,
+        this.activeDisplayName,
+        myEpoch
+      );
+      if (fsConnected || myEpoch !== this.joinEpoch) return;
+
+      this.updateStatus({
+        state: 'error',
+        errorMessage: 'تعذر الوصول إلى سيرفر الصوت (/ws/voice). سجّل الدخول لتفعيل الربط السحابي.',
+      });
     });
 
     return this.opChain;
@@ -946,6 +1596,14 @@ class SelfHostedVoiceEngine {
   }> {
     const status = await fetchVoiceServerStatus();
     if (!status || status.status !== 'online') {
+      if (isCloudWriteReady()) {
+        return {
+          ok: true,
+          message: 'وضع الربط الصوتي السحابي (WebRTC + Firestore) جاهز للعمل على هذا النطاق.',
+          appId: 'self_hosted_webrtc',
+          channel: roomId,
+        };
+      }
       return {
         ok: false,
         message: 'تعذر الوصول إلى سيرفر الصوت الخاص (/api/voice-server/status).',
@@ -1085,11 +1743,27 @@ class SelfHostedVoiceEngine {
   }
 
   private async internalLeave(resetRoomTracking = true): Promise<void> {
-    this.clearWsTimers();
+    if (
+      this.transport === 'firestore_rtc' &&
+      this.activeRoomId &&
+      this.selfPeerId &&
+      this.activeUserId
+    ) {
+      void publishFirestoreRtcSignal({
+        roomId: this.activeRoomId,
+        signalType: 'leave',
+        fromPeerId: this.selfPeerId,
+        fromUserId: this.activeUserId,
+        displayName: this.activeDisplayName,
+      });
+    }
+
+    this.clearTransportTimers();
     this.stopVolumeLoop();
     await this.releaseLocalMic();
 
     Array.from(this.peers.keys()).forEach((peerId) => this.cleanupPeer(peerId));
+    this.relayRequestedByPeers.clear();
 
     if (this.ws) {
       try {
@@ -1107,6 +1781,7 @@ class SelfHostedVoiceEngine {
       this.ws = null;
     }
 
+    this.transport = 'idle';
     this.selfPeerId = null;
     this.activeChannel = null;
     this.autoplayBlocked = false;

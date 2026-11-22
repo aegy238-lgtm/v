@@ -1,9 +1,18 @@
 export type DetectedMediaKind = 'video' | 'animated_image' | 'image' | 'unknown';
 
-const VIDEO_EXTS = ['mp4', 'webm', 'mov', 'm4v', 'ogv', 'mkv'];
+const VIDEO_EXTS = ['mp4', 'vap', 'webm', 'mov', 'm4v', 'ogv', 'mkv'];
 const ANIMATED_IMG_EXTS = ['gif', 'webp', 'apng'];
 const STATIC_IMG_EXTS = ['png', 'jpg', 'jpeg', 'svg', 'avif', 'bmp', 'ico'];
 const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus', 'weba'];
+
+export function isLikelyVapUrl(url?: string | null): boolean {
+  const clean = normalizeMediaUrl(url).toLowerCase();
+  if (!clean) return false;
+  const pathPart = clean.split('#')[0].split('?')[0];
+  if (pathPart.endsWith('.vap')) return true;
+  if (/[/_.-]vap[/_.-]|[?&]vap=1|[?&]format=vap|[?&]type=vap/.test(clean)) return true;
+  return false;
+}
 
 export function normalizeMediaUrl(url?: string | null): string {
   if (!url) return '';
@@ -58,12 +67,16 @@ export function detectMediaKind(url?: string | null): DetectedMediaKind {
     }
   }
 
+  if (isLikelyVapUrl(clean)) return 'video';
+
   return 'unknown';
 }
 
 export function getMediaFormatLabel(url?: string | null): string {
   const clean = normalizeMediaUrl(url);
   if (!clean) return '';
+
+  if (isLikelyVapUrl(clean)) return 'VAP';
 
   const lower = clean.toLowerCase();
   if (lower.startsWith('data:video/')) {

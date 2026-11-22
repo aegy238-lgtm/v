@@ -18,6 +18,7 @@ import {
   LuckyGiftConfig,
   GlobalJackpotBannerState,
   AgoraVoiceConfig,
+  RoomLiveEvent,
 } from '../types';
 import { translations, Translations } from '../utils/i18n';
 import {
@@ -76,6 +77,7 @@ import {
 import { buildVoiceAvatarSvg } from '../utils/voiceProfileOptions';
 import { resolveEntranceStageMedia } from '../utils/mediaFormats';
 import { agoraVoice, getAgoraConfig } from '../utils/agoraVoice';
+import { selfHostedVoice } from '../utils/selfHostedVoice';
 
 interface FlyingGiftState {
   id: string;
@@ -187,7 +189,15 @@ interface AppContextType {
     }
   ) => boolean;
   sendRoomMessage: (text: string) => void;
-  sendGift: (giftId: string, count: number, targetType: 'speaker' | 'seat' | 'all', seatIndex?: number, seatIndices?: number[]) => boolean;
+  appendRoomMessage: (msg: RoomChatMessage) => void;
+  sendGift: (
+    giftId: string,
+    count: number,
+    targetType: 'speaker' | 'seat' | 'all',
+    seatIndex?: number,
+    seatIndices?: number[],
+    options?: { skipLiveBroadcast?: boolean }
+  ) => boolean;
   triggerFlyingGift: (gift: GiftItem, count: number, targetName: string) => void;
   rechargeCoins: (coins: number, paymentMethod: string) => void;
   agentRechargeUser: (agentId: string, targetUserCode: string, coinAmount: number) => { success: boolean; message: string };
@@ -688,7 +698,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       onAgencies: (remoteAgencies) => setAgencies(remoteAgencies),
       onLuckyConfig: (remoteLucky) => setLuckyConfig(remoteLucky),
       onAgoraConfig: (remoteAgora) => {
-        const applied = agoraVoice.setConfig(remoteAgora, true);
+        const normalizedRemote: AgoraVoiceConfig = remoteAgora.provider
+          ? remoteAgora
+          : { ...remoteAgora, provider: 'self_hosted' };
+        const applied = agoraVoice.setConfig(normalizedRemote, true);
         setAgoraConfig(applied);
       },
       onJackpotBanner: (remoteBanner) => {
@@ -1886,23 +1899,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
+  // Append incoming room message (from WebSocket / real-time sync) with deduplication
+  const appendRoomMessage = (msg: RoomChatMessage) => {
+    if (!msg || !msg.id) return;
+    setActiveRoomMessages((prev) => {
+      if (prev.some((m) => m.id === msg.id)) return prev;
+      return [...prev.slice(-119), msg];
+    });
+  };
+
   // Send Room Chat Message
   const sendRoomMessage = (text: string) => {
     if (!activeRoom || !text.trim()) return;
+    const now = Date.now();
+    const trimmed = text.trim();
     const newMsg: RoomChatMessage = {
-      id: `msg_${Date.now()}`,
+      id: `msg_${now}_${Math.random().toString(36).slice(2, 6)}`,
       roomId: activeRoom.id,
       senderId: currentUser.id,
       senderName: currentUser.displayName,
       senderAvatar: currentUser.avatar,
       vipLevel: currentUser.vipLevel,
       level: currentUser.level,
-      text: text.trim(),
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      text: trimmed,
+      timestamp: new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
     setActiveRoomMessages((prev) => [...prev, newMsg]);
     void persistRoomMessage(newMsg).catch(() => {});
+    selfHostedVoice.broadcastRoomEvent({
+      id: newMsg.id,
+      kind: 'chat_message',
+      roomId: activeRoom.id,
+      senderId: currentUser.id,
+      senderName: currentUser.displayName,
+      senderAvatar: currentUser.avatar,
+      senderVipLevel: currentUser.vipLevel,
+      senderLevel: currentUser.level,
+      text: trimmed,
+      isSystem: false,
+      timestamp: newMsg.timestamp,
+      createdAt: now,
+    });
   };
 
   // Trigger Flying Gift Stage State (used by sendGift, GiftModal, and BackpackModal)
@@ -1931,7 +1969,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     count: number,
     targetType: 'speaker' | 'seat' | 'all',
     seatIndex?: number,
-    seatIndices?: number[]
+    seatIndices?: number[],
+    options?: { skipLiveBroadcast?: boolean }
   ): boolean => {
     if (!activeRoom) return false;
     const gift = gifts.find((g) => g.id === giftId);
@@ -2049,9 +2088,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Trigger Flying Gift Banner Animation
     triggerFlyingGift(gift, count, targets.map((t) => t.name).join(', '));
 
-    // Post to Room Chat
+    // Post to Room Chat (+ attach liveEvent when triggered outside VoiceRoomView)
+    const now = Date.now();
+    const targetLabelJoined = targets.map((t) => t.name).join(' & ');
+    const targetSeatIndices = targets
+      .map((t) => t.seatIndex)
+      .filter((x): x is number => x !== undefined);
+    const giftLiveEvent: RoomLiveEvent | undefined = options?.skipLiveBroadcast
+      ? undefined
+      : {
+          id: `gift_${now}_${Math.random().toString(36).slice(2, 7)}`,
+          kind: 'gift_throw',
+          roomId: activeRoom.id,
+          senderId: currentUser.id,
+          senderName: currentUser.displayName,
+          senderAvatar: currentUser.avatar,
+          senderVipLevel: currentUser.vipLevel,
+          senderLevel: currentUser.level,
+          createdAt: now,
+          gift: {
+            id: gift.id,
+            name: gift.name,
+            nameAr: gift.nameAr,
+            category: gift.category,
+            coinPrice: gift.coinPrice,
+            diamondReward: gift.diamondReward,
+            icon: gift.icon,
+            imageUrl: gift.imageUrl,
+            videoUrl: gift.videoUrl,
+            soundUrl: gift.soundUrl,
+            effectDurationSec: gift.effectDurationSec,
+            accentColor: gift.accentColor,
+            animationType: gift.animationType,
+            soundEffect: gift.soundEffect,
+            isLucky: gift.isLucky,
+          },
+          targetSeats: targetSeatIndices,
+          targetNames: targetLabelJoined,
+          count,
+          comboHits: 1,
+          isLucky: Boolean(gift.isLucky || gift.category === 'lucky'),
+        };
+
     const chatGiftMsg: RoomChatMessage = {
-      id: `msg_${Date.now()}`,
+      id: `msg_${now}_${Math.random().toString(36).slice(2, 6)}`,
       roomId: activeRoom.id,
       senderId: currentUser.id,
       senderName: currentUser.displayName,
@@ -2064,14 +2144,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         giftName: gift.nameAr,
         giftIcon: gift.icon,
         giftCount: count,
-        targetUserName: targets.map((t) => t.name).join(' & '),
+        targetUserName: targetLabelJoined,
         totalCoins: totalCoinsNeeded,
       },
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      liveEvent: giftLiveEvent,
+      timestamp: new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
     setActiveRoomMessages((prev) => [...prev, chatGiftMsg]);
     void persistRoomMessage(chatGiftMsg).catch(() => {});
+    if (giftLiveEvent) {
+      selfHostedVoice.broadcastRoomEvent(giftLiveEvent);
+    }
     return true;
   };
 
@@ -2823,6 +2907,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         unbanUserFromRoom,
         updateRoomPrivacySettings,
         sendRoomMessage,
+        appendRoomMessage,
         sendGift,
         triggerFlyingGift,
         rechargeCoins,
