@@ -23,13 +23,15 @@ import { translations, Translations } from '../utils/i18n';
 import {
   INITIAL_USERS,
   INITIAL_ROOMS,
-  GIFTS_CATALOG,
   VIP_TIERS,
-  STORE_ITEMS,
   INITIAL_AGENCIES,
   INITIAL_AGENTS,
   INITIAL_STAFF,
   INITIAL_TRANSACTIONS,
+  STARTER_DEFAULT_GIFT,
+  STARTER_DEFAULT_GIFT_ID,
+  LEGACY_MOCK_GIFT_IDS,
+  LEGACY_MOCK_STORE_IDS,
 } from '../data/mockData';
 import { sound } from '../utils/audio';
 import type { User as FirebaseUser } from 'firebase/auth';
@@ -61,6 +63,7 @@ import {
   persistLuckyConfig,
   persistAgoraConfig,
   persistRoomMessage,
+  purgeLegacyMockCatalogFromFirestore,
   removeAuraGift,
   removeAuraRoom,
   removeAuraRoomBackground,
@@ -262,6 +265,57 @@ interface AppContextType {
   signOutCloud: () => Promise<void>;
   testCloudConnection: () => Promise<void>;
   syncAllDataToCloud: () => Promise<void>;
+  purgeMockCatalogs: () => Promise<string>;
+}
+
+const LEGACY_GIFT_ID_SET = new Set(LEGACY_MOCK_GIFT_IDS);
+const LEGACY_STORE_ID_SET = new Set(LEGACY_MOCK_STORE_IDS);
+
+function stripLegacyMockCosmetics(user: User): User {
+  let changed = false;
+  const next = { ...user };
+  if (next.activeFrameId && LEGACY_STORE_ID_SET.has(next.activeFrameId)) {
+    next.activeFrameId = '';
+    changed = true;
+  }
+  if (next.activeEntranceId && LEGACY_STORE_ID_SET.has(next.activeEntranceId)) {
+    next.activeEntranceId = '';
+    changed = true;
+  }
+  if (next.activeBadgeId && LEGACY_STORE_ID_SET.has(next.activeBadgeId)) {
+    next.activeBadgeId = '';
+    changed = true;
+  }
+  return changed ? next : user;
+}
+
+function sanitizeRealGifts(list: GiftItem[]): GiftItem[] {
+  return list.filter(
+    (g) =>
+      Boolean(g?.id) &&
+      !g.isStarterDefault &&
+      g.id !== STARTER_DEFAULT_GIFT_ID &&
+      !LEGACY_GIFT_ID_SET.has(g.id)
+  );
+}
+
+function sanitizeRealStoreItems(list: StoreItem[]): StoreItem[] {
+  return list.filter((item) => Boolean(item?.id) && !LEGACY_STORE_ID_SET.has(item.id));
+}
+
+function sanitizeBagGiftsRecord(raw: Record<string, number>): Record<string, number> {
+  const clean: Record<string, number> = {};
+  Object.entries(raw || {}).forEach(([giftId, count]) => {
+    if (
+      giftId &&
+      !LEGACY_GIFT_ID_SET.has(giftId) &&
+      typeof count === 'number' &&
+      count > 0
+    ) {
+      clean[giftId] = count;
+    }
+  });
+  return clean;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -271,20 +325,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentView, setCurrentView] = useState<'user_app' | 'agent_portal' | 'admin_dashboard'>('user_app');
   const [activeTab, setActiveTab] = useState<ActiveScreenTab>('room');
   
-  // State loaded from localStorage or default mocks
+  // State loaded from localStorage or clean initial defaults
   const [users, setUsers] = useState<User[]>(() => {
     const saved = localStorage.getItem('auravoice_users');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.some((u: User) => u.userCode === '2026091')) {
-          return parsed;
+          return parsed.map((u: User) => stripLegacyMockCosmetics(u));
         }
       } catch (e) {
         // ignore
       }
     }
-    return INITIAL_USERS;
+    return INITIAL_USERS.map((u) => stripLegacyMockCosmetics(u));
   });
 
   const [currentUserId, setCurrentUserId] = useState<string>('user_current');
@@ -295,7 +349,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.some((r: VoiceRoom) => r.roomNo === '2026091' && r.seats.length === 8)) {
-          return parsed;
+          return parsed.map((r: VoiceRoom) => ({
+            ...r,
+            seats: Array.isArray(r.seats)
+              ? r.seats.map((s) =>
+                  s.activeFrameId && LEGACY_STORE_ID_SET.has(s.activeFrameId)
+                    ? { ...s, activeFrameId: '' }
+                    : s
+                )
+              : r.seats,
+          }));
         }
       } catch (e) {
         // ignore
@@ -323,14 +386,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.some((g: GiftItem) => g.id === 'gift_lollipop_lucky')) {
-          return parsed;
+        if (Array.isArray(parsed)) {
+          const clean = sanitizeRealGifts(parsed);
+          if (clean.length > 0) return clean;
         }
       } catch (e) {
         // ignore
       }
     }
-    return GIFTS_CATALOG;
+    return [STARTER_DEFAULT_GIFT];
   });
 
   const [vipTiers] = useState<VipTier[]>(VIP_TIERS);
@@ -339,12 +403,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const saved = localStorage.getItem('auravoice_store_items_v1');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return sanitizeRealStoreItems(parsed);
       }
     } catch {
       // ignore
     }
-    return STORE_ITEMS;
+    return [];
   });
 
   const [agencies, setAgencies] = useState<Agency[]>(() => {
@@ -394,19 +458,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [agoraConfig, setAgoraConfig] = useState<AgoraVoiceConfig>(() => getAgoraConfig());
 
-  // Persistent Backpack Lucky/Bag Gifts
+  // Persistent Backpack Lucky/Bag Gifts (no mock pre-filled items)
   const [bagGifts, setBagGifts] = useState<Record<string, number>>(() => {
     try {
       const saved = localStorage.getItem('auravoice_bag_gifts_v1');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return sanitizeBagGiftsRecord(parsed as Record<string, number>);
+        }
+      }
     } catch {
       // ignore
     }
-    return {
-      gift_lollipop_lucky: 25,
-      gift_halloween_candy: 5,
-      gift_rose: 15,
-    };
+    return {};
   });
 
   // Global 3-Second Jackpot Ticker Banner across entire app & all rooms
@@ -535,7 +600,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('auravoice_rooms_8mic_v4', JSON.stringify(rooms));
   }, [rooms]);
   useEffect(() => {
-    localStorage.setItem('auravoice_gifts', JSON.stringify(gifts));
+    localStorage.setItem('auravoice_gifts', JSON.stringify(sanitizeRealGifts(gifts)));
   }, [gifts]);
   useEffect(() => {
     localStorage.setItem('auravoice_agencies', JSON.stringify(agencies));
@@ -615,8 +680,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setRoomBackgrounds([]);
         }
       },
-      onGifts: (remoteGifts) => setGifts(remoteGifts),
-      onStoreItems: (remoteStore) => setStoreItems(remoteStore),
+      onGifts: (remoteGifts) => {
+        const realGifts = sanitizeRealGifts(remoteGifts);
+        setGifts(realGifts.length > 0 ? realGifts : [STARTER_DEFAULT_GIFT]);
+      },
+      onStoreItems: (remoteStore) => setStoreItems(sanitizeRealStoreItems(remoteStore)),
       onAgencies: (remoteAgencies) => setAgencies(remoteAgencies),
       onLuckyConfig: (remoteLucky) => setLuckyConfig(remoteLucky),
       onAgoraConfig: (remoteAgora) => {
@@ -668,16 +736,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (cancelled) return;
       unsubAuthCols = subscribeToAuthAuraCollections({
         onUsers: (remoteUsers) => {
+          const cleaned = remoteUsers.map((u) => stripLegacyMockCosmetics(u));
           setUsers((prev) => {
-            const remoteIds = new Set(remoteUsers.map((u) => u.id));
+            const remoteIds = new Set(cleaned.map((u) => u.id));
             const localAuthUser = prev.find((u) => u.id === firebaseUser.uid && !remoteIds.has(u.id));
-            return localAuthUser ? [localAuthUser, ...remoteUsers] : remoteUsers;
+            return localAuthUser ? [localAuthUser, ...cleaned] : cleaned;
           });
         },
         onAgents: (remoteAgents) => setAgents(remoteAgents),
         onStaff: (remoteStaff) => setStaff(remoteStaff),
         onTransactions: (remoteTxs) => setTransactions(remoteTxs),
-        onBagGifts: (remoteBag) => setBagGifts(remoteBag),
+        onBagGifts: (remoteBag) => setBagGifts(sanitizeBagGiftsRecord(remoteBag)),
       });
     };
 
@@ -880,14 +949,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         users,
         rooms,
         roomBackgrounds,
-        gifts,
-        storeItems,
+        gifts: sanitizeRealGifts(gifts),
+        storeItems: sanitizeRealStoreItems(storeItems),
         agencies,
         agents,
         staff,
         transactions,
         luckyConfig,
-        bagGifts,
+        bagGifts: sanitizeBagGiftsRecord(bagGifts),
         agoraConfig,
       });
       setCloudMessage(res.message);
@@ -896,6 +965,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } finally {
       setIsCloudSyncing(false);
     }
+  };
+
+  const purgeMockCatalogs = async (): Promise<string> => {
+    setGifts((prev) => {
+      const clean = sanitizeRealGifts(prev);
+      return clean.length > 0 ? clean : [STARTER_DEFAULT_GIFT];
+    });
+    setStoreItems((prev) => sanitizeRealStoreItems(prev));
+    setBagGifts((prev) => sanitizeBagGiftsRecord(prev));
+    setUsers((prev) => prev.map((u) => stripLegacyMockCosmetics(u)));
+
+    if (!firebaseUser) {
+      return 'تم تنظيف الهدايا والمتجر والحقيبة الوهمية محلياً (سجّل الدخول بالمسؤول لتنظيف Firestore أيضاً).';
+    }
+
+    const res = await purgeLegacyMockCatalogFromFirestore(
+      LEGACY_MOCK_GIFT_IDS,
+      LEGACY_MOCK_STORE_IDS
+    );
+    const msg = `تم تنظيف السيرفر بنجاح: حذف ${res.removedGifts} هدية وهمية و ${res.removedStore} عنصر متجر وهمي وتصفير الحقيبة الوهمية.`;
+    setCloudMessage(msg);
+    return msg;
   };
 
   const updateLuckyConfig = (updates: Partial<LuckyGiftConfig>) => {
@@ -2551,7 +2642,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adminCreateGift = (gift: GiftItem) => {
-    setGifts((prev) => [gift, ...prev]);
+    setGifts((prev) => [
+      gift,
+      ...prev.filter((g) => !g.isStarterDefault && g.id !== STARTER_DEFAULT_GIFT_ID),
+    ]);
     void persistAuraGift(gift).catch(() => {});
   };
 
@@ -2560,7 +2654,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       prev.map((g) => {
         if (g.id === giftId) {
           const updated = { ...g, ...updates };
-          void persistAuraGift(updated).catch(() => {});
+          if (!updated.isStarterDefault && updated.id !== STARTER_DEFAULT_GIFT_ID) {
+            void persistAuraGift(updated).catch(() => {});
+          }
           return updated;
         }
         return g;
@@ -2569,7 +2665,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adminDeleteGift = (giftId: string) => {
-    setGifts((prev) => prev.filter((g) => g.id !== giftId));
+    if (giftId === STARTER_DEFAULT_GIFT_ID) return;
+    setGifts((prev) => {
+      const remaining = prev.filter(
+        (g) => g.id !== giftId && !g.isStarterDefault && g.id !== STARTER_DEFAULT_GIFT_ID
+      );
+      return remaining.length > 0 ? remaining : [STARTER_DEFAULT_GIFT];
+    });
     void removeAuraGift(giftId).catch(() => {});
   };
 
@@ -2771,6 +2873,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         signOutCloud,
         testCloudConnection,
         syncAllDataToCloud,
+        purgeMockCatalogs,
       }}
     >
       {children}

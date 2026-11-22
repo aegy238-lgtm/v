@@ -166,7 +166,7 @@ interface RocketTierConfig {
   icon: string;
   targetCoins: number;
   rewardCoins: number;
-  rewardBagGifts: { giftId: string; count: number }[];
+  giftCounts: number[];
   accent: string;
 }
 
@@ -177,11 +177,7 @@ const ROCKET_TIERS: RocketTierConfig[] = [
     icon: '🚀',
     targetCoins: 10000,
     rewardCoins: 5000,
-    rewardBagGifts: [
-      { giftId: 'gift_lollipop_lucky', count: 10 },
-      { giftId: 'gift_rose', count: 15 },
-      { giftId: 'gift_coffee', count: 5 },
-    ],
+    giftCounts: [10, 15, 5],
     accent: 'from-sky-400 to-indigo-500',
   },
   {
@@ -190,11 +186,7 @@ const ROCKET_TIERS: RocketTierConfig[] = [
     icon: '🛸',
     targetCoins: 25000,
     rewardCoins: 15000,
-    rewardBagGifts: [
-      { giftId: 'gift_lollipop_lucky', count: 25 },
-      { giftId: 'gift_pink_perfume', count: 5 },
-      { giftId: 'gift_heart', count: 8 },
-    ],
+    giftCounts: [25, 5, 8],
     accent: 'from-amber-400 to-orange-500',
   },
   {
@@ -203,11 +195,7 @@ const ROCKET_TIERS: RocketTierConfig[] = [
     icon: '☄️',
     targetCoins: 50000,
     rewardCoins: 35000,
-    rewardBagGifts: [
-      { giftId: 'gift_halloween_candy', count: 5 },
-      { giftId: 'gift_car', count: 2 },
-      { giftId: 'gift_teddy', count: 6 },
-    ],
+    giftCounts: [5, 2, 6],
     accent: 'from-violet-400 to-indigo-600',
   },
   {
@@ -216,11 +204,7 @@ const ROCKET_TIERS: RocketTierConfig[] = [
     icon: '🌌',
     targetCoins: 100000,
     rewardCoins: 75000,
-    rewardBagGifts: [
-      { giftId: 'gift_yacht', count: 2 },
-      { giftId: 'gift_helicopter', count: 1 },
-      { giftId: 'gift_treat_or_trick', count: 2 },
-    ],
+    giftCounts: [2, 1, 2],
     accent: 'from-rose-400 to-purple-600',
   },
   {
@@ -229,14 +213,48 @@ const ROCKET_TIERS: RocketTierConfig[] = [
     icon: '👑',
     targetCoins: 250000,
     rewardCoins: 200000,
-    rewardBagGifts: [
-      { giftId: 'gift_dragon', count: 2 },
-      { giftId: 'gift_palace', count: 2 },
-      { giftId: 'gift_scorpion', count: 1 },
-    ],
+    giftCounts: [2, 2, 1],
     accent: 'from-amber-300 to-red-600',
   },
 ];
+
+function resolveRocketBagGifts(
+  tierLevel: number,
+  liveGifts: GiftItem[]
+): { giftId: string; count: number; gift: GiftItem }[] {
+  if (!liveGifts || liveGifts.length === 0) return [];
+  const tier = ROCKET_TIERS.find((t) => t.level === tierLevel) || ROCKET_TIERS[0];
+  const sorted = [...liveGifts].sort((a, b) => a.coinPrice - b.coinPrice);
+  const startIdx = Math.min(Math.max(0, tierLevel - 1), Math.max(0, sorted.length - 1));
+  return tier.giftCounts.map((count, i) => {
+    const gift = sorted[(startIdx + i) % sorted.length];
+    return { giftId: gift.id, count, gift };
+  });
+}
+
+function resolveLuckyBagRewards(
+  tierIndex: number,
+  liveGifts: GiftItem[]
+): { giftId: string; nameAr: string; icon: string; count: number }[] {
+  if (!liveGifts || liveGifts.length === 0) return [];
+  const sorted = [...liveGifts].sort((a, b) => a.coinPrice - b.coinPrice);
+  const luckyFirst = [...sorted.filter((g) => g.isLucky || g.category === 'lucky'), ...sorted];
+  const countsByTier = [
+    [5, 5],
+    [12, 4],
+    [2, 30],
+  ];
+  const counts = countsByTier[tierIndex] || countsByTier[0];
+  return counts.map((count, idx) => {
+    const picked = luckyFirst[(tierIndex + idx) % luckyFirst.length] || sorted[0];
+    return {
+      giftId: picked.id,
+      nameAr: picked.nameAr,
+      icon: picked.icon,
+      count,
+    };
+  });
+}
 
 export const VoiceRoomView: React.FC = () => {
   const {
@@ -422,7 +440,7 @@ export const VoiceRoomView: React.FC = () => {
   const [giftDrawerTab, setGiftDrawerTab] = useState<
     'all' | 'classic' | 'luxury' | 'lucky' | 'bag'
   >('all');
-  const [selectedGiftId, setSelectedGiftId] = useState<string>('gift_rose');
+  const [selectedGiftId, setSelectedGiftId] = useState<string>(gifts[0]?.id || '');
   const [giftCount, setGiftCount] = useState<number>(1);
   const [selectedRecipientSeats, setSelectedRecipientSeats] = useState<number[]>([]);
 
@@ -529,6 +547,9 @@ export const VoiceRoomView: React.FC = () => {
 
   // Prioritize warming currently selected gift media & audio as soon as drawer opens or selection changes
   useEffect(() => {
+    if (gifts.length > 0 && !gifts.some((g) => g.id === selectedGiftId)) {
+      setSelectedGiftId(gifts[0].id);
+    }
     if (activeBottomDrawer !== 'gift') return;
     const selected = gifts.find((g) => g.id === selectedGiftId);
     if (!selected) return;
@@ -658,11 +679,11 @@ export const VoiceRoomView: React.FC = () => {
   useEffect(() => {
     if (!activeRoom?.id || !currentUser.id) return;
     setDismissedVoiceErrorKey(null);
-    void agoraVoice.joinRoom(activeRoom.id, currentUser.id);
+    void agoraVoice.joinRoom(activeRoom.id, currentUser.id, currentUser.displayName);
     return () => {
       void agoraVoice.leaveRoom();
     };
-  }, [activeRoom?.id, currentUser.id]);
+  }, [activeRoom?.id, currentUser.id, currentUser.displayName]);
 
   const myLiveRoomSeat = activeRoom?.seats.find((s) => s.userId === currentUser.id);
   const isSeatedInAgora = Boolean(myLiveRoomSeat);
@@ -862,18 +883,17 @@ export const VoiceRoomView: React.FC = () => {
   const completeRocketTier = (tierToComplete: RocketTierConfig, carryOverCoins = 0) => {
     rechargeCoins(tierToComplete.rewardCoins, `مكافأة ${tierToComplete.nameAr}`);
 
-    const wonGiftsSummary: { nameAr: string; icon: string; count: number }[] = [];
-    addBagGifts(tierToComplete.rewardBagGifts);
-    tierToComplete.rewardBagGifts.forEach((rg) => {
-      const giftMeta = gifts.find((g) => g.id === rg.giftId);
-      if (giftMeta) {
-        wonGiftsSummary.push({
-          nameAr: giftMeta.nameAr,
-          icon: giftMeta.icon,
-          count: rg.count,
-        });
-      }
-    });
+    const resolvedRewards = resolveRocketBagGifts(tierToComplete.level, gifts);
+    const wonGiftsSummary: { nameAr: string; icon: string; count: number }[] = resolvedRewards.map(
+      (rg) => ({
+        nameAr: rg.gift.nameAr,
+        icon: rg.gift.icon,
+        count: rg.count,
+      })
+    );
+    if (resolvedRewards.length > 0) {
+      addBagGifts(resolvedRewards.map((rg) => ({ giftId: rg.giftId, count: rg.count })));
+    }
 
     setRocketRewardPopup({
       level: tierToComplete.level,
@@ -1782,7 +1802,11 @@ export const VoiceRoomView: React.FC = () => {
                       void agoraVoice.reconnectActiveRoom();
                     }
                   }}
-                  title={`قناة Agora (${agoraStatus.channel || agoraStatus.appId})`}
+                  title={
+                    agoraStatus.provider === 'self_hosted'
+                      ? `السيرفر الصوتي الخاص (${agoraStatus.channel || activeRoom.id})`
+                      : `قناة Agora (${agoraStatus.channel || agoraStatus.appId})`
+                  }
                   className={`h-7 px-2 rounded-lg border flex items-center gap-1 text-[10px] font-bold transition-colors ${
                     agoraStatus.state === 'connecting'
                       ? 'bg-amber-500/15 border-amber-400/40 text-amber-200'
@@ -2570,11 +2594,13 @@ export const VoiceRoomView: React.FC = () => {
               </div>
 
               {/* 3. Crisp 4-Column Gift Grid */}
-              {giftDrawerTab === 'bag' && filteredDrawerGifts.length === 0 ? (
+              {filteredDrawerGifts.length === 0 ? (
                 <div className="py-10 text-center space-y-2.5">
-                  <div className="text-3xl opacity-80">🎒</div>
+                  <div className="text-3xl opacity-80">{giftDrawerTab === 'bag' ? '🎒' : '🎁'}</div>
                   <p className="text-xs text-slate-400">
-                    الحقيبة فارغة حالياً — يمكنك الحصول على هدايا مجانية من صاروخ الغرفة أو كيس الحظ.
+                    {giftDrawerTab === 'bag'
+                      ? 'الحقيبة فارغة حالياً — يمكنك الحصول على هدايا مجانية من صاروخ الغرفة أو كيس الحظ.'
+                      : 'لا توجد هدايا مرفوعة في هذا التصنيف حالياً.'}
                   </p>
                 </div>
               ) : (
@@ -3619,20 +3645,17 @@ export const VoiceRoomView: React.FC = () => {
                     +{previewRocketTier.rewardCoins.toLocaleString()}
                   </span>
                 </div>
-                {previewRocketTier.rewardBagGifts.map((rg, idx) => {
-                  const gMeta = gifts.find((g) => g.id === rg.giftId);
-                  return (
-                    <div
-                      key={idx}
-                      className="p-2 rounded-xl bg-white/[0.04] border border-white/8 flex flex-col items-center"
-                    >
-                      <span className="text-xl">{gMeta?.icon || '🎁'}</span>
-                      <span className="text-[10px] font-mono tabular-nums text-emerald-400 mt-1">
-                        ×{rg.count}
-                      </span>
-                    </div>
-                  );
-                })}
+                {resolveRocketBagGifts(previewRocketTier.level, gifts).map((rg, idx) => (
+                  <div
+                    key={idx}
+                    className="p-2 rounded-xl bg-white/[0.04] border border-white/8 flex flex-col items-center"
+                  >
+                    <span className="text-xl">{rg.gift.icon || '🎁'}</span>
+                    <span className="text-[10px] font-mono tabular-nums text-emerald-400 mt-1">
+                      ×{rg.count}
+                    </span>
+                  </div>
+                ))}
               </div>
 
               <button
@@ -3674,28 +3697,19 @@ export const VoiceRoomView: React.FC = () => {
                     tierName: 'كيس الحظ السريع',
                     cost: 0,
                     poolCoins: 1500,
-                    gifts: [
-                      { giftId: 'gift_lollipop_lucky', nameAr: 'مصاصة الحظ', icon: '🍭', count: 5 },
-                      { giftId: 'gift_rose', nameAr: 'وردة جوري', icon: '🌹', count: 5 },
-                    ],
+                    gifts: resolveLuckyBagRewards(0, gifts),
                   },
                   {
                     tierName: 'كيس الحظ الذهبي',
                     cost: 2000,
                     poolCoins: 3500,
-                    gifts: [
-                      { giftId: 'gift_lollipop_lucky', nameAr: 'مصاصة الحظ', icon: '🍭', count: 12 },
-                      { giftId: 'gift_pink_perfume', nameAr: 'عطر فرنسي', icon: '🧴', count: 4 },
-                    ],
+                    gifts: resolveLuckyBagRewards(1, gifts),
                   },
                   {
                     tierName: 'كيس الحظ الملكي',
                     cost: 10000,
                     poolCoins: 18000,
-                    gifts: [
-                      { giftId: 'gift_car', nameAr: 'سيارة فيراري', icon: '🏎️', count: 2 },
-                      { giftId: 'gift_lollipop_lucky', nameAr: 'مصاصة الحظ', icon: '🍭', count: 30 },
-                    ],
+                    gifts: resolveLuckyBagRewards(2, gifts),
                   },
                 ].map((bag, i) => (
                   <div

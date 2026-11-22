@@ -16,16 +16,29 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
   const { gifts, activeRoom, currentUser, sendGift, evaluateLuckyGiftWin, setActiveModal } =
     useApp();
 
-  const [activeTab, setActiveTab] = useState<GiftCategory>('lucky');
-  const [selectedGiftId, setSelectedGiftId] = useState<string>(gifts[0]?.id || 'gift_rose');
+  const [activeTab, setActiveTab] = useState<'all' | GiftCategory>('all');
+  const [selectedGiftId, setSelectedGiftId] = useState<string>(gifts[0]?.id || '');
   const [comboCount, setComboCount] = useState<number>(1);
   const [targetType, setTargetType] = useState<'speaker' | 'seat' | 'all'>('speaker');
   const [selectedSeatIndex, setSelectedSeatIndex] = useState<number>(0);
   const [vipNotice, setVipNotice] = useState<string | null>(null);
 
   const occupiedSeats = activeRoom?.seats.filter((s) => Boolean(s.userId)) || [];
-  const filteredGifts = gifts.filter((g) => g.category === activeTab);
-  const selectedGift = gifts.find((g) => g.id === selectedGiftId) || gifts[0];
+  const filteredGifts =
+    activeTab === 'all' ? gifts : gifts.filter((g) => g.category === activeTab);
+  const selectedGift =
+    filteredGifts.find((g) => g.id === selectedGiftId) ||
+    gifts.find((g) => g.id === selectedGiftId) ||
+    filteredGifts[0] ||
+    gifts[0];
+
+  useEffect(() => {
+    if (filteredGifts.length > 0 && !filteredGifts.some((g) => g.id === selectedGiftId)) {
+      setSelectedGiftId(filteredGifts[0].id);
+    } else if (filteredGifts.length === 0 && gifts.length > 0 && !gifts.some((g) => g.id === selectedGiftId)) {
+      setSelectedGiftId(gifts[0].id);
+    }
+  }, [filteredGifts, gifts, selectedGiftId]);
 
   useEffect(() => {
     if (!isOpen || !selectedGift) return;
@@ -109,6 +122,7 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
         {/* Categories Bar */}
         <div className="flex items-center gap-2 px-4 py-2.5 bg-[#090d17] border-b border-white/8 overflow-x-auto no-scrollbar">
           {[
+            { id: 'all', label: `الكل (${gifts.length})` },
             { id: 'lucky', label: 'هدايا الحظ 🍭' },
             { id: 'classic', label: 'كلاسيكية 🌹' },
             { id: 'luxury', label: 'فاخرة 🏎️' },
@@ -118,7 +132,7 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
           ].map((cat) => (
             <button
               key={cat.id}
-              onClick={() => setActiveTab(cat.id as GiftCategory)}
+              onClick={() => setActiveTab(cat.id as 'all' | GiftCategory)}
               className={`min-h-[36px] px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
                 activeTab === cat.id
                   ? 'bg-amber-400 text-slate-950 shadow-md'
@@ -131,8 +145,14 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
         </div>
 
         {/* Gift Grid */}
-        <div className="p-4 grid grid-cols-3 sm:grid-cols-4 gap-2.5 overflow-y-auto max-h-72">
-          {filteredGifts.map((gift) => {
+        {filteredGifts.length === 0 ? (
+          <div className="p-8 text-center text-xs text-slate-400 space-y-1.5">
+            <div className="text-3xl">🎁</div>
+            <div>لا توجد هدايا مرفوعة في هذا التصنيف حالياً.</div>
+          </div>
+        ) : (
+          <div className="p-4 grid grid-cols-3 sm:grid-cols-4 gap-2.5 overflow-y-auto max-h-72">
+            {filteredGifts.map((gift) => {
             const isSelected = selectedGiftId === gift.id;
             const isVipLocked = gift.vipMinLevel && currentUser.vipLevel < gift.vipMinLevel;
 
@@ -189,7 +209,8 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
               </button>
             );
           })}
-        </div>
+          </div>
+        )}
 
         {/* Recipient & Combo Controls */}
         <div className="p-4 bg-[#090d17] border-t border-white/10 flex flex-col gap-3">

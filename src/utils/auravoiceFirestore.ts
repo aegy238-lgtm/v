@@ -92,9 +92,7 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
   try {
     const roomsSnap = await getDocs(query(collection(db, COLLECTIONS.rooms), limit(1)));
     const usersSnap = await getDocs(query(collection(db, COLLECTIONS.users), limit(1)));
-    const giftsSnap = await getDocs(query(collection(db, COLLECTIONS.gifts), limit(1)));
-
-    if (!roomsSnap.empty && !usersSnap.empty && !giftsSnap.empty) {
+    if (!roomsSnap.empty && !usersSnap.empty) {
       return true;
     }
 
@@ -125,41 +123,14 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
     }
 
     if (hasMemberOps) {
-      memberBatch.set(
-        doc(db, COLLECTIONS.config, 'bag_gifts'),
-        stripUndefinedForFirestore({ items: seed.bagGifts, updatedAt: nowIso }),
-        { merge: true }
-      );
       await memberBatch.commit();
     }
 
-    // Seed admin-controlled catalogs & configs independently so non-admin logins never block member bootstrap
+    // Seed only operational admin collections (agencies, agents, staff, transactions, lucky/agora configs)
+    // NEVER seed mock gifts, mock store items, or mock bag items.
     try {
       const adminBatch = writeBatch(db);
       let hasAdminOps = false;
-
-      if (giftsSnap.empty) {
-        seed.gifts.forEach((g) => {
-          adminBatch.set(
-            doc(db, COLLECTIONS.gifts, g.id),
-            stripUndefinedForFirestore({ ...g, updatedAt: nowIso }),
-            { merge: true }
-          );
-          hasAdminOps = true;
-        });
-      }
-
-      const storeSnap = await getDocs(query(collection(db, COLLECTIONS.storeItems), limit(1)));
-      if (storeSnap.empty) {
-        seed.storeItems.forEach((item) => {
-          adminBatch.set(
-            doc(db, COLLECTIONS.storeItems, item.id),
-            stripUndefinedForFirestore({ ...item, updatedAt: nowIso }),
-            { merge: true }
-          );
-          hasAdminOps = true;
-        });
-      }
 
       const agenciesSnap = await getDocs(query(collection(db, COLLECTIONS.agencies), limit(1)));
       if (agenciesSnap.empty) {
@@ -295,14 +266,16 @@ export async function syncAllAuraVoiceToFirestore(data: {
       count++;
     });
 
-    data.gifts.forEach((g) => {
-      batch.set(
-        doc(db, COLLECTIONS.gifts, g.id),
-        stripUndefinedForFirestore({ ...g, updatedAt: nowIso }),
-        { merge: true }
-      );
-      count++;
-    });
+    data.gifts
+      .filter((g) => !g.isStarterDefault && g.id !== 'gift_starter_default')
+      .forEach((g) => {
+        batch.set(
+          doc(db, COLLECTIONS.gifts, g.id),
+          stripUndefinedForFirestore({ ...g, updatedAt: nowIso }),
+          { merge: true }
+        );
+        count++;
+      });
 
     data.storeItems.forEach((item) => {
       batch.set(
@@ -426,9 +399,11 @@ export function subscribeToPublicAuraCollections(handlers: {
       const list: GiftItem[] = [];
       snap.forEach((d) => {
         const data = d.data() as GiftItem;
-        if (data?.id && data?.nameAr) list.push(data);
+        if (data?.id && data?.nameAr && !data.isStarterDefault && data.id !== 'gift_starter_default') {
+          list.push(data);
+        }
       });
-      if (list.length > 0) handlers.onGifts(list);
+      handlers.onGifts(list);
     },
     (error) => handleFirestoreError(error, OperationType.LIST, COLLECTIONS.gifts)
   );
@@ -441,7 +416,7 @@ export function subscribeToPublicAuraCollections(handlers: {
         const data = d.data() as StoreItem;
         if (data?.id && data?.nameAr) list.push(data);
       });
-      if (list.length > 0) handlers.onStoreItems(list);
+      handlers.onStoreItems(list);
     },
     (error) => handleFirestoreError(error, OperationType.LIST, COLLECTIONS.storeItems)
   );
@@ -836,4 +811,44 @@ export async function persistJackpotBanner(banner: GlobalJackpotBannerState): Pr
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
+}
+
+export async function purgeLegacyMockCatalogFromFirestore(
+  legacyGiftIds: string[],
+  legacyStoreIds: string[]
+): Promise<{ removedGifts: number; removedStore: number }> {
+  if (!auth.currentUser) {
+    throw new Error('يرجى تسجيل الدخول بحساب المسؤول أولاً.');
+  }
+
+  let removedGifts = 0;
+  let removedStore = 0;
+  const batch = writeBatch(db);
+  const legacyGiftSet = new Set(legacyGiftIds);
+  const legacyStoreSet = new Set(legacyStoreIds);
+
+  const giftsSnap = await getDocs(collection(db, COLLECTIONS.gifts));
+  giftsSnap.forEach((d) => {
+    if (legacyGiftSet.has(d.id) || d.id === 'gift_starter_default') {
+      batch.delete(d.ref);
+      removedGifts++;
+    }
+  });
+
+  const storeSnap = await getDocs(collection(db, COLLECTIONS.storeItems));
+  storeSnap.forEach((d) => {
+    if (legacyStoreSet.has(d.id)) {
+      batch.delete(d.ref);
+      removedStore++;
+    }
+  });
+
+  batch.set(
+    doc(db, COLLECTIONS.config, 'bag_gifts'),
+    stripUndefinedForFirestore({ items: {}, updatedAt: new Date().toISOString() }),
+    { merge: true }
+  );
+
+  await batch.commit();
+  return { removedGifts, removedStore };
 }

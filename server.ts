@@ -1,88 +1,429 @@
+import "dotenv/config";
+import http from "http";
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
+import fs from "fs";
 import crypto from "crypto";
-import zlib from "zlib";
 import { fileURLToPath } from "url";
+import { WebSocketServer, WebSocket } from "ws";
+import agoraTokenPkg from "agora-token";
+
+const { RtcRole, RtcTokenBuilder } = agoraTokenPkg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DEFAULT_AGORA_APP_ID = "d5c272d82b094c2f86ccc75df0819dfe";
+const ADMIN_ALLOWLIST_EMAILS = new Set([
+  "iejehdgdig@gmail.com",
+  "hhsiggidfhkgogfc@gmail.com",
+  "uhbijnokmpl098900@gmail.com",
+]);
 
-function packU16(v: number): Buffer {
-  const b = Buffer.allocUnsafe(2);
-  b.writeUInt16LE(v, 0);
-  return b;
-}
-
-function packU32(v: number): Buffer {
-  const b = Buffer.allocUnsafe(4);
-  b.writeUInt32LE(v >>> 0, 0);
-  return b;
-}
-
-function packStr(s: string): Buffer {
-  const raw = Buffer.from(s, "utf8");
-  return Buffer.concat([packU16(raw.length), raw]);
-}
-
-function packMapU32(entries: [number, number][]): Buffer {
-  const parts: Buffer[] = [packU16(entries.length)];
-  for (const [k, v] of entries) {
-    parts.push(packU16(k), packU32(v));
+function readFirebaseWebApiKey(): string {
+  try {
+    const cfgPath = path.join(__dirname, "firebase-applet-config.json");
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw) as { apiKey?: string };
+    return typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "";
+  } catch {
+    return "";
   }
-  return Buffer.concat(parts);
 }
 
-function buildAgoraRtcToken007(
-  appId: string,
-  appCertificate: string,
-  channelName: string,
-  uid: string,
-  expireSeconds = 86400
-): string {
-  const issueTs = Math.floor(Date.now() / 1000);
-  const salt = crypto.randomInt(1, 99999999);
-  const expireTs = issueTs + expireSeconds;
+const FIREBASE_WEB_API_KEY = readFirebaseWebApiKey();
 
-  const servicePayload = Buffer.concat([
-    packU16(1),
-    packMapU32([
-      [1, expireTs],
-      [2, expireTs],
-      [3, expireTs],
-      [4, expireTs],
-    ]),
-    packStr(channelName),
-    packStr(uid),
-  ]);
+function isValidHex32(val: string): boolean {
+  return /^[a-f0-9]{32}$/i.test(val.trim());
+}
 
-  const signing = Buffer.concat([
-    packStr(appId),
-    packU32(issueTs),
-    packU32(expireSeconds),
-    packU32(salt),
-    packU16(1),
-    servicePayload,
-  ]);
+// Server-only in-memory state for optional Agora Cloud mode (never written to disk or exposed in GETs)
+let runtimeAgoraAppId = isValidHex32(process.env.VITE_AGORA_APP_ID || "")
+  ? (process.env.VITE_AGORA_APP_ID || "").trim()
+  : DEFAULT_AGORA_APP_ID;
+let runtimeAgoraCertificate = isValidHex32(process.env.AGORA_APP_CERTIFICATE || "")
+  ? (process.env.AGORA_APP_CERTIFICATE || "").trim()
+  : "";
 
-  let sigKey = crypto.createHmac("sha256", packU32(issueTs)).update(appCertificate).digest();
-  sigKey = crypto.createHmac("sha256", packU32(salt)).update(sigKey).digest();
-  const signature = crypto.createHmac("sha256", sigKey).update(signing).digest();
+async function verifyAdminFirebaseToken(
+  authHeader: string | undefined
+): Promise<{ ok: boolean; email?: string; error?: string }> {
+  const token = (authHeader || "").replace(/^Bearer\s+/i, "").trim();
+  if (!token) {
+    return { ok: false, error: "مطلوب توكن مصادقة Firebase Admin." };
+  }
+  if (!FIREBASE_WEB_API_KEY) {
+    return { ok: false, error: "إعدادات Firebase API غير متوفرة على الخادم." };
+  }
 
-  const content = Buffer.concat([packU16(signature.length), signature, signing]);
-  const compressed = zlib.deflateSync(content);
-  return `007${compressed.toString("base64")}`;
+  try {
+    const resp = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(FIREBASE_WEB_API_KEY)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idToken: token }),
+      }
+    );
+    if (!resp.ok) {
+      return { ok: false, error: "جلسة المصادقة غير صالحة أو منتهية." };
+    }
+    const data = (await resp.json()) as {
+      users?: { email?: string; emailVerified?: boolean }[];
+    };
+    const user = data.users?.[0];
+    const email = (user?.email || "").toLowerCase().trim();
+    if (!email || !user?.emailVerified || !ADMIN_ALLOWLIST_EMAILS.has(email)) {
+      return { ok: false, error: "هذا الحساب لا يملك صلاحية المسؤول العليا." };
+    }
+    return { ok: true, email };
+  } catch {
+    return { ok: false, error: "تعذر التحقق من جلسة المسؤول." };
+  }
+}
+
+// =============================================================================
+// SELF-HOSTED REAL-TIME VOICE SERVER (WebSocket Signaling + Room State)
+// =============================================================================
+interface VoicePeerSession {
+  peerId: string;
+  userId: string;
+  displayName: string;
+  roomId: string;
+  onSeat: boolean;
+  muted: boolean;
+  ws: WebSocket;
+  isAlive: boolean;
+  joinedAt: number;
+}
+
+interface PublicVoicePeer {
+  peerId: string;
+  userId: string;
+  displayName: string;
+  onSeat: boolean;
+  muted: boolean;
+}
+
+function getIceServers() {
+  const envServers = process.env.VOICE_ICE_SERVERS?.trim();
+  if (envServers) {
+    try {
+      const parsed = JSON.parse(envServers);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {
+      // Fallback to default STUN servers
+    }
+  }
+  return [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
+  ];
+}
+
+function sanitizeRoomKey(raw: unknown): string {
+  const clean = String(raw || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .slice(0, 64);
+  return clean;
+}
+
+function sanitizeShortString(raw: unknown, maxLen: number): string {
+  return String(raw || "").trim().slice(0, maxLen);
+}
+
+function toPublicPeer(peer: VoicePeerSession): PublicVoicePeer {
+  return {
+    peerId: peer.peerId,
+    userId: peer.userId,
+    displayName: peer.displayName,
+    onSeat: peer.onSeat,
+    muted: peer.muted,
+  };
+}
+
+function safeWsSend(ws: WebSocket, payload: unknown): void {
+  if (ws.readyState !== WebSocket.OPEN) return;
+  try {
+    ws.send(JSON.stringify(payload));
+  } catch {
+    // Ignore closed socket send errors
+  }
 }
 
 async function startServer() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: "256kb" }));
+  const server = http.createServer(app);
   const PORT = 3000;
+  const startedAt = Date.now();
 
-  // API routes
-  app.get("/api/health", (req, res) => {
+  // Authoritative voice rooms registry
+  const voiceRooms = new Map<string, Map<string, VoicePeerSession>>();
+  const socketToSession = new Map<WebSocket, VoicePeerSession>();
+
+  const broadcastToRoom = (
+    roomId: string,
+    payload: unknown,
+    excludePeerId?: string
+  ) => {
+    const room = voiceRooms.get(roomId);
+    if (!room) return;
+    room.forEach((peer) => {
+      if (excludePeerId && peer.peerId === excludePeerId) return;
+      safeWsSend(peer.ws, payload);
+    });
+  };
+
+  const removePeerSession = (session: VoicePeerSession | undefined) => {
+    if (!session) return;
+    socketToSession.delete(session.ws);
+    const room = voiceRooms.get(session.roomId);
+    if (!room) return;
+    const existing = room.get(session.peerId);
+    if (existing !== session) return;
+
+    room.delete(session.peerId);
+    if (room.size === 0) {
+      voiceRooms.delete(session.roomId);
+    } else {
+      broadcastToRoom(session.roomId, {
+        type: "voice:peer_left",
+        roomId: session.roomId,
+        peerId: session.peerId,
+        userId: session.userId,
+      });
+    }
+  };
+
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
+
+  server.on("upgrade", (request, socket, head) => {
+    try {
+      const reqUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+      if (reqUrl.pathname === "/ws/voice") {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit("connection", ws, request);
+        });
+      }
+      // Leave all non-/ws/voice upgrades untouched
+    } catch {
+      socket.destroy();
+    }
+  });
+
+  wss.on("connection", (ws: WebSocket) => {
+    let session: VoicePeerSession | undefined;
+
+    ws.on("pong", () => {
+      if (session) session.isAlive = true;
+    });
+
+    ws.on("message", (raw) => {
+      let msg: Record<string, unknown>;
+      try {
+        const text = typeof raw === "string" ? raw : raw.toString("utf8");
+        const parsed = JSON.parse(text);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+        msg = parsed as Record<string, unknown>;
+      } catch {
+        return;
+      }
+
+      const type = String(msg.type || "");
+
+      if (type === "voice:ping") {
+        if (session) session.isAlive = true;
+        safeWsSend(ws, { type: "voice:pong", ts: Date.now() });
+        return;
+      }
+
+      if (type === "voice:join") {
+        const roomId = sanitizeRoomKey(msg.roomId);
+        const userId = sanitizeShortString(msg.userId, 64);
+        const displayName = sanitizeShortString(msg.displayName, 64) || userId;
+        const onSeat = Boolean(msg.onSeat);
+        const muted = Boolean(msg.muted);
+
+        if (!roomId || !userId) {
+          safeWsSend(ws, {
+            type: "voice:error",
+            message: "بيانات الغرفة أو المستخدم غير صالحة.",
+          });
+          return;
+        }
+
+        // Remove any previous session for this socket
+        if (session) {
+          removePeerSession(session);
+        }
+
+        let room = voiceRooms.get(roomId);
+        if (!room) {
+          room = new Map<string, VoicePeerSession>();
+          voiceRooms.set(roomId, room);
+        }
+
+        // Replace stale connection from same userId in the same room to prevent ghost duplicates
+        const stalePeers: VoicePeerSession[] = [];
+        room.forEach((p) => {
+          if (p.userId === userId) stalePeers.push(p);
+        });
+        stalePeers.forEach((p) => {
+          removePeerSession(p);
+          try {
+            p.ws.close(1000, "replaced_by_new_session");
+          } catch {
+            // ignore
+          }
+        });
+
+        // Re-ensure room exists if stale cleanup emptied it
+        room = voiceRooms.get(roomId);
+        if (!room) {
+          room = new Map<string, VoicePeerSession>();
+          voiceRooms.set(roomId, room);
+        }
+
+        const peerId = `${userId}__${crypto.randomBytes(4).toString("hex")}`;
+        session = {
+          peerId,
+          userId,
+          displayName,
+          roomId,
+          onSeat,
+          muted,
+          ws,
+          isAlive: true,
+          joinedAt: Date.now(),
+        };
+
+        room.set(peerId, session);
+        socketToSession.set(ws, session);
+
+        const existingPeers: PublicVoicePeer[] = [];
+        room.forEach((p) => {
+          if (p.peerId !== peerId) existingPeers.push(toPublicPeer(p));
+        });
+
+        safeWsSend(ws, {
+          type: "voice:room_state",
+          roomId,
+          selfPeerId: peerId,
+          peers: existingPeers,
+          iceServers: getIceServers(),
+        });
+
+        broadcastToRoom(
+          roomId,
+          {
+            type: "voice:peer_joined",
+            roomId,
+            peer: toPublicPeer(session),
+          },
+          peerId
+        );
+        return;
+      }
+
+      if (!session) return;
+
+      if (type === "voice:leave") {
+        removePeerSession(session);
+        session = undefined;
+        return;
+      }
+
+      if (type === "voice:mic_state") {
+        session.onSeat = Boolean(msg.onSeat);
+        session.muted = Boolean(msg.muted);
+        broadcastToRoom(
+          session.roomId,
+          {
+            type: "voice:peer_updated",
+            roomId: session.roomId,
+            peer: toPublicPeer(session),
+          },
+          session.peerId
+        );
+        return;
+      }
+
+      if (type === "voice:speaking") {
+        const level = Math.max(0, Math.min(100, Math.round(Number(msg.level) || 0)));
+        broadcastToRoom(
+          session.roomId,
+          {
+            type: "voice:speaking",
+            roomId: session.roomId,
+            userId: session.userId,
+            peerId: session.peerId,
+            level,
+          },
+          session.peerId
+        );
+        return;
+      }
+
+      if (type === "voice:offer" || type === "voice:answer" || type === "voice:ice") {
+        const targetPeerId = sanitizeShortString(msg.targetPeerId, 96);
+        if (!targetPeerId) return;
+        const room = voiceRooms.get(session.roomId);
+        const targetPeer = room?.get(targetPeerId);
+        if (!targetPeer) return;
+
+        safeWsSend(targetPeer.ws, {
+          type,
+          roomId: session.roomId,
+          fromPeerId: session.peerId,
+          fromUserId: session.userId,
+          sdp: msg.sdp,
+          candidate: msg.candidate,
+        });
+      }
+    });
+
+    ws.on("close", () => {
+      removePeerSession(session);
+      session = undefined;
+    });
+
+    ws.on("error", () => {
+      removePeerSession(session);
+      session = undefined;
+    });
+  });
+
+  const heartbeatInterval = setInterval(() => {
+    socketToSession.forEach((sess) => {
+      if (!sess.isAlive) {
+        try {
+          sess.ws.terminate();
+        } catch {
+          // ignore
+        }
+        removePeerSession(sess);
+        return;
+      }
+      sess.isAlive = false;
+      try {
+        sess.ws.ping();
+      } catch {
+        removePeerSession(sess);
+      }
+    });
+  }, 25000);
+
+  server.on("close", () => {
+    clearInterval(heartbeatInterval);
+  });
+
+  // REST API routes
+  app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });
   });
 
@@ -91,21 +432,91 @@ async function startServer() {
     res.json({ ip });
   });
 
-  app.get("/api/agora/status", (req, res) => {
-    const appId = (process.env.VITE_AGORA_APP_ID || DEFAULT_AGORA_APP_ID).trim();
-    const hasCertificate = Boolean(process.env.AGORA_APP_CERTIFICATE?.trim());
+  app.get("/api/voice-server/status", (_req, res) => {
+    let activePeersCount = 0;
+    let activeSpeakersCount = 0;
+    const roomsSummary: { roomId: string; peersCount: number; speakersCount: number }[] = [];
+
+    voiceRooms.forEach((peers, roomId) => {
+      let speakers = 0;
+      peers.forEach((p) => {
+        activePeersCount++;
+        if (p.onSeat && !p.muted) {
+          activeSpeakersCount++;
+          speakers++;
+        }
+      });
+      roomsSummary.push({ roomId, peersCount: peers.size, speakersCount: speakers });
+    });
+
     res.json({
-      appId,
+      status: "online",
+      engine: "self_hosted_webrtc",
+      wsPath: "/ws/voice",
+      activeRoomsCount: voiceRooms.size,
+      activePeersCount,
+      activeSpeakersCount,
+      uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
+      rooms: roomsSummary,
+    });
+  });
+
+  // Optional Agora Cloud endpoints (kept clean & secure via official agora-token)
+  app.get("/api/agora/status", (_req, res) => {
+    const envCert = isValidHex32(process.env.AGORA_APP_CERTIFICATE || "");
+    const hasCertificate = isValidHex32(runtimeAgoraCertificate);
+    res.json({
+      appId: runtimeAgoraAppId,
       hasCertificate,
+      certificateSource: envCert ? "env" : hasCertificate ? "runtime" : "none",
+      mode: hasCertificate ? "secured_token" : "testing_app_id",
+    });
+  });
+
+  app.post("/api/agora/certificate", async (req, res) => {
+    const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
+    if (!authCheck.ok) {
+      res.status(403).json({ error: authCheck.error || "غير مصرح" });
+      return;
+    }
+
+    const body = (req.body || {}) as { appId?: unknown; appCertificate?: unknown };
+    const nextCert = typeof body.appCertificate === "string" ? body.appCertificate.trim() : "";
+    const nextAppId = typeof body.appId === "string" ? body.appId.trim() : "";
+
+    if (nextAppId && !isValidHex32(nextAppId)) {
+      res.status(400).json({ error: "معرّف App ID يجب أن يكون 32 حرفاً سداسياً (hex)." });
+      return;
+    }
+    if (nextCert && !isValidHex32(nextCert)) {
+      res.status(400).json({ error: "شهادة App Certificate يجب أن تكون 32 حرفاً سداسياً (hex)." });
+      return;
+    }
+
+    if (nextAppId) runtimeAgoraAppId = nextAppId;
+    runtimeAgoraCertificate = nextCert;
+
+    const envCert = isValidHex32(process.env.AGORA_APP_CERTIFICATE || "");
+    const hasCertificate = isValidHex32(runtimeAgoraCertificate);
+    res.json({
+      ok: true,
+      appId: runtimeAgoraAppId,
+      hasCertificate,
+      certificateSource: envCert && nextCert === (process.env.AGORA_APP_CERTIFICATE || "").trim()
+        ? "env"
+        : hasCertificate
+        ? "runtime"
+        : "none",
       mode: hasCertificate ? "secured_token" : "testing_app_id",
     });
   });
 
   app.get("/api/agora/token", (req, res) => {
-    const appId = (process.env.VITE_AGORA_APP_ID || DEFAULT_AGORA_APP_ID).trim();
-    const appCertificate = process.env.AGORA_APP_CERTIFICATE?.trim() || "";
-    const channel = String(req.query.channel || "").trim();
-    const uid = String(req.query.uid || "0").trim();
+    const queryAppId = typeof req.query.appId === "string" ? req.query.appId.trim() : "";
+    const appId = isValidHex32(queryAppId) ? queryAppId : runtimeAgoraAppId;
+    const appCertificate = isValidHex32(runtimeAgoraCertificate) ? runtimeAgoraCertificate : "";
+    const channel = sanitizeRoomKey(req.query.channel);
+    const uid = sanitizeShortString(req.query.uid || "0", 64) || "0";
 
     if (!channel) {
       res.status(400).json({ error: "channel is required" });
@@ -117,7 +528,18 @@ async function startServer() {
       return;
     }
 
-    const token = buildAgoraRtcToken007(appId, appCertificate, channel, uid, 86400);
+    const tokenExpire = 86400;
+    const privilegeExpire = 86400;
+    const token = RtcTokenBuilder.buildTokenWithUserAccount(
+      appId,
+      appCertificate,
+      channel,
+      uid,
+      RtcRole.PUBLISHER,
+      tokenExpire,
+      privilegeExpire
+    );
+
     res.json({ mode: "secured", appId, token });
   });
 
@@ -129,15 +551,14 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // Serve static files in production
     app.use(express.static(path.join(__dirname, "dist")));
-    app.get("*", (req, res) => {
+    app.get("*", (_req, res) => {
       res.sendFile(path.join(__dirname, "dist", "index.html"));
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server + Self-Hosted Voice Server running on http://0.0.0.0:${PORT}`);
   });
 }
 

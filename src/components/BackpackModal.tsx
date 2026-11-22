@@ -199,12 +199,8 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                     equippedFrame?.previewUrl
                       ? 'w-11 h-11 rounded-full overflow-hidden'
                       : `w-12 h-12 rounded-full overflow-hidden p-0.5 border-2 ${
-                          currentUser.activeFrameId === 'frame_gold_wings'
+                          currentUser.activeFrameId
                             ? 'border-amber-400'
-                            : currentUser.activeFrameId === 'frame_neon_cyber'
-                            ? 'border-cyan-400'
-                            : currentUser.activeFrameId === 'frame_ruby_emperor'
-                            ? 'border-rose-500'
                             : 'border-white/15'
                         }`
                   }
@@ -398,6 +394,14 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
 
           {/* TAB 1: FRAMES */}
           {activeTab === 'frames' && (
+            frames.length === 0 ? (
+              <div className="p-10 rounded-3xl bg-white/[0.03] border border-white/8 text-center space-y-2.5">
+                <div className="text-4xl">🖼️</div>
+                <p className="text-xs text-slate-300">
+                  لا توجد إطارات مرفوعة من السيرفر حالياً — يمكنك إضافتها من لوحة الإدارة.
+                </p>
+              </div>
+            ) : (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {frames.map((frame) => {
                 const isEquipped = currentUser.activeFrameId === frame.id;
@@ -471,6 +475,7 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                 );
               })}
             </div>
+            )
           )}
 
           {/* TAB 2: ENTRANCES */}
@@ -497,6 +502,14 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                   </div>
                 )}
 
+              {entrances.length === 0 ? (
+                <div className="p-10 rounded-3xl bg-white/[0.03] border border-white/8 text-center space-y-2.5">
+                  <div className="text-4xl">🚘</div>
+                  <p className="text-xs text-slate-300">
+                    لا توجد دخوليات مرفوعة من السيرفر حالياً — يمكنك إضافتها من لوحة الإدارة.
+                  </p>
+                </div>
+              ) : (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {entrances.map((ent) => {
                   const isEquipped = currentUser.activeEntranceId === ent.id;
@@ -576,11 +589,20 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                   );
                 })}
               </div>
+              )}
             </div>
           )}
 
           {/* TAB 3: BADGES */}
           {activeTab === 'badges' && (
+            badges.length === 0 ? (
+              <div className="p-10 rounded-3xl bg-white/[0.03] border border-white/8 text-center space-y-2.5">
+                <div className="text-4xl">🎖️</div>
+                <p className="text-xs text-slate-300">
+                  لا توجد أوسمة مرفوعة من السيرفر حالياً — يمكنك إضافتها من لوحة الإدارة.
+                </p>
+              </div>
+            ) : (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {badges.map((badge) => {
                 const isEquipped = currentUser.activeBadgeId === badge.id;
@@ -644,6 +666,7 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                 );
               })}
             </div>
+            )
           )}
 
           {/* TAB 3B: CHAT BUBBLES */}
@@ -739,6 +762,15 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                 ))}
               </div>
 
+              {storeItems.filter((item) => storeCategory === 'all' || item.type === storeCategory)
+                .length === 0 ? (
+                <div className="p-10 rounded-3xl bg-white/[0.03] border border-white/8 text-center space-y-2.5">
+                  <div className="text-4xl">🛍️</div>
+                  <p className="text-xs text-slate-300">
+                    لا توجد عناصر متجر مرفوعة من السيرفر حالياً — ارفع الإطارات أو الدخوليات أو الأوسمة من لوحة الإدارة لتظهر هنا فوراً.
+                  </p>
+                </div>
+              ) : (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {storeItems
                   .filter((item) => storeCategory === 'all' || item.type === storeCategory)
@@ -869,6 +901,7 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                     );
                   })}
               </div>
+              )}
             </div>
           )}
         </div>

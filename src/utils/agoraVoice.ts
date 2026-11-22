@@ -6,6 +6,13 @@ import type {
   IAgoraRTCRemoteUser,
 } from 'agora-rtc-sdk-ng';
 import type { AgoraVoiceConfig } from '../types';
+import {
+  selfHostedVoice,
+  fetchVoiceServerStatus,
+  VoiceServerStatusSnapshot,
+} from './selfHostedVoice';
+
+export { fetchVoiceServerStatus, type VoiceServerStatusSnapshot };
 
 export const DEFAULT_AGORA_APP_ID = 'd5c272d82b094c2f86ccc75df0819dfe';
 const LEGACY_PLACEHOLDER_APP_ID = '467d6372146f4670b6c37a0364fb5fdd';
@@ -29,6 +36,7 @@ export interface ParsedAgoraTokenInfo {
 
 export interface AgoraConnectionStatus {
   state: 'idle' | 'connecting' | 'connected' | 'error';
+  provider?: 'self_hosted' | 'agora';
   appId: string;
   channel: string | null;
   remoteUsersCount: number;
@@ -37,6 +45,13 @@ export interface AgoraConnectionStatus {
   micError: string | null;
   errorMessage: string | null;
   requiresToken?: boolean;
+}
+
+export interface ServerAgoraStatus {
+  appId: string;
+  hasCertificate: boolean;
+  certificateSource: 'env' | 'runtime' | 'none';
+  mode: 'secured_token' | 'testing_app_id';
 }
 
 export function isValidAgoraAppId(value: string): boolean {
@@ -225,6 +240,7 @@ export function getAgoraConfig(): AgoraVoiceConfig {
       ? String(import.meta.env.VITE_AGORA_TOKEN).trim() || undefined
       : undefined;
   return {
+    provider: stored.provider === 'agora' ? 'agora' : 'self_hosted',
     appId: getAgoraAppId(),
     rtcToken: stored.rtcToken?.trim() || envToken,
     note: stored.note,
@@ -242,6 +258,47 @@ export function sanitizeAgoraUid(userId: string): string {
   return cleaned || 'guest_user';
 }
 
+export async function fetchServerAgoraStatus(): Promise<ServerAgoraStatus | null> {
+  if (typeof fetch === 'undefined' || typeof window === 'undefined') return null;
+  try {
+    const res = await fetch('/api/agora/status');
+    if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) return null;
+    return (await res.json()) as ServerAgoraStatus;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveServerAgoraCertificate(
+  firebaseIdToken: string,
+  appCertificate: string,
+  appId?: string
+): Promise<{ ok: boolean; status?: ServerAgoraStatus; error?: string }> {
+  if (typeof fetch === 'undefined') {
+    return { ok: false, error: 'Fetch API unavailable' };
+  }
+  try {
+    const res = await fetch('/api/agora/certificate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${firebaseIdToken}`,
+      },
+      body: JSON.stringify({
+        appCertificate: appCertificate.trim(),
+        appId: appId?.trim() || undefined,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || 'تعذر حفظ الشهادة على الخادم.' };
+    }
+    return { ok: true, status: data as ServerAgoraStatus };
+  } catch {
+    return { ok: false, error: 'تعذر الاتصال بالخادم.' };
+  }
+}
+
 type VolumeListener = (volumes: Record<string, number>) => void;
 type NoticeListener = (message: string) => void;
 type MicStatusListener = (isLiveMicActive: boolean) => void;
@@ -254,11 +311,6 @@ class AgoraVoiceEngine {
   private probeAudioTrack: IMicrophoneAudioTrack | null = null;
   private probeTimer: number | null = null;
 
-  // Lightweight local browser mic meter fallback when Agora project requires an RTC Token
-  private localFallbackStream: MediaStream | null = null;
-  private localFallbackAudioCtx: AudioContext | null = null;
-  private localFallbackTimer: number | null = null;
-
   private remoteTracks = new Map<string, IRemoteAudioTrack>();
   private remoteUserIds = new Set<string>();
   private tokenRequiredCache = new Map<string, string>();
@@ -267,6 +319,7 @@ class AgoraVoiceEngine {
   private activeChannel: string | null = null;
   private activeRoomId: string | null = null;
   private activeRawUserId: string | null = null;
+  private activeDisplayName: string | undefined = undefined;
   private activeUid: string | null = null;
   private currentRole: 'audience' | 'host' = 'audience';
   private remoteMuted = false;
@@ -284,10 +337,10 @@ class AgoraVoiceEngine {
 
   private isLiveMicActive = false;
   private autoplayBlocked = false;
-  private lastJoinFailureMsg: string | null = null;
   private status: AgoraConnectionStatus = {
     state: 'idle',
-    appId: getAgoraAppId(),
+    provider: this.runtimeConfig.provider || 'self_hosted',
+    appId: this.runtimeConfig.provider === 'agora' ? getAgoraAppId() : 'self_hosted_webrtc',
     channel: null,
     remoteUsersCount: 0,
     autoplayBlocked: false,
@@ -297,11 +350,45 @@ class AgoraVoiceEngine {
     requiresToken: false,
   };
 
+  constructor() {
+    selfHostedVoice.subscribeVolumes((vols) => {
+      if (this.isSelfHosted()) {
+        this.emitVolumes(vols);
+      }
+    });
+    selfHostedVoice.subscribeNotices((msg) => {
+      if (this.isSelfHosted()) {
+        this.emitNotice(msg);
+      }
+    });
+    selfHostedVoice.subscribeMicStatus((active) => {
+      if (this.isSelfHosted()) {
+        this.setLiveMicActive(active);
+      }
+    });
+    selfHostedVoice.subscribeStatus((st) => {
+      if (this.isSelfHosted()) {
+        this.status = {
+          ...st,
+          provider: 'self_hosted',
+        };
+        this.statusListeners.forEach((cb) => cb({ ...this.status }));
+      }
+    });
+  }
+
+  private isSelfHosted(): boolean {
+    return (this.runtimeConfig.provider || 'self_hosted') === 'self_hosted';
+  }
+
   private updateStatus(patch: Partial<AgoraConnectionStatus>) {
     this.status = {
       ...this.status,
       ...patch,
-      appId: this.runtimeConfig.appId || getAgoraAppId(),
+      provider: this.runtimeConfig.provider || 'self_hosted',
+      appId: this.isSelfHosted()
+        ? 'self_hosted_webrtc'
+        : this.runtimeConfig.appId || getAgoraAppId(),
       micActive: this.isLiveMicActive,
       autoplayBlocked: this.autoplayBlocked,
       remoteUsersCount: this.remoteUserIds.size,
@@ -321,7 +408,9 @@ class AgoraVoiceEngine {
     if (this.isLiveMicActive === active) return;
     this.isLiveMicActive = active;
     this.micStatusListeners.forEach((cb) => cb(active));
-    this.updateStatus({});
+    if (!this.isSelfHosted()) {
+      this.updateStatus({});
+    }
   }
 
   public getConfig(): AgoraVoiceConfig {
@@ -329,6 +418,8 @@ class AgoraVoiceEngine {
   }
 
   public setConfig(next: Partial<AgoraVoiceConfig>, persistLocal = true): AgoraVoiceConfig {
+    const prevProvider = this.runtimeConfig.provider || 'self_hosted';
+    const nextProvider = next.provider || prevProvider;
     const validNextId = normalizeAppId(next.appId);
     const cleanAppId = validNextId || this.runtimeConfig.appId || DEFAULT_AGORA_APP_ID;
     const cleanToken =
@@ -341,6 +432,7 @@ class AgoraVoiceEngine {
 
     this.tokenRequiredCache.clear();
     this.runtimeConfig = {
+      provider: nextProvider,
       appId: cleanAppId,
       rtcToken: cleanToken,
       note: next.note ?? this.runtimeConfig.note,
@@ -351,10 +443,14 @@ class AgoraVoiceEngine {
       writeStoredAgoraConfig(this.runtimeConfig);
     }
 
-    this.updateStatus({ appId: cleanAppId, requiresToken: false });
+    this.updateStatus({
+      provider: nextProvider,
+      appId: nextProvider === 'self_hosted' ? 'self_hosted_webrtc' : cleanAppId,
+      requiresToken: false,
+    });
 
     if (
-      (prevAppId !== cleanAppId || prevToken !== cleanToken) &&
+      (prevProvider !== nextProvider || prevAppId !== cleanAppId || prevToken !== cleanToken) &&
       this.activeRoomId &&
       this.activeRawUserId
     ) {
@@ -368,11 +464,16 @@ class AgoraVoiceEngine {
     writeStoredAgoraConfig(null);
     this.tokenRequiredCache.clear();
     this.runtimeConfig = {
-      appId: getAgoraAppId(),
+      provider: 'self_hosted',
+      appId: DEFAULT_AGORA_APP_ID,
       rtcToken: undefined,
       updatedAt: new Date().toISOString(),
     };
-    this.updateStatus({ appId: this.runtimeConfig.appId, requiresToken: false });
+    this.updateStatus({
+      provider: 'self_hosted',
+      appId: 'self_hosted_webrtc',
+      requiresToken: false,
+    });
     if (this.activeRoomId && this.activeRawUserId) {
       void this.reconnectActiveRoom();
     }
@@ -413,7 +514,6 @@ class AgoraVoiceEngine {
     if (this.sdk) return this.sdk;
     const mod = await import('agora-rtc-sdk-ng');
     const sdk = mod.default;
-    // Level 4 (NONE) suppresses raw SDK console.error spam; all failures are caught and surfaced cleanly in UI.
     sdk.setLogLevel(4);
     sdk.onAutoplayFailed = () => {
       this.autoplayBlocked = true;
@@ -442,16 +542,16 @@ class AgoraVoiceEngine {
     const combined = `${code} ${msg}`;
 
     if (this.isTokenRequirementError(err)) {
-      return 'مشروع Agora مفعّل عليه وضع الشهادة (Token). فعّل Testing Mode (App ID فقط) في لوحة Agora أو أضف RTC Token في لوحة الإدارة ← الصوت المباشر Agora.';
+      return 'مشروع Agora مفعّل عليه وضع الشهادة (Token). أضف App Certificate على السيرفر أو فعّل السيرفر الصوتي الخاص.';
     }
     if (combined.includes('UID_CONFLICT')) {
-      return 'نفس الحساب متصل حالياً من جهاز أو تبويب آخر (UID_CONFLICT). سجّل بحساب مختلف للتجربة.';
+      return 'نفس الحساب متصل حالياً من جهاز أو تبويب آخر (UID_CONFLICT).';
     }
     if (combined.includes('INVALID_VENDOR_KEY') || combined.includes('INVALID_PARAMS')) {
-      return 'معرّف Agora App ID غير صالح (تأكد من وضع App ID وليس App Certificate).';
+      return 'معرّف Agora App ID غير صالح.';
     }
     if (combined.includes('CAN_NOT_GET_GATEWAY_SERVER')) {
-      return 'تعذر الوصول إلى خوادم Agora (تحقق من صحة App ID أو تفعيل Testing Mode أو الشبكة).';
+      return 'تعذر الوصول إلى خوادم Agora (تحقق من صحة App ID أو الشهادة على السيرفر).';
     }
     return `تعذر الاتصال بغرفة الصوت المباشر (${code || 'خطأ اتصال'}).`;
   }
@@ -479,9 +579,9 @@ class AgoraVoiceEngine {
     if (typeof fetch !== 'undefined' && typeof window !== 'undefined') {
       try {
         const controller = new AbortController();
-        const timer = window.setTimeout(() => controller.abort(), 1600);
+        const timer = window.setTimeout(() => controller.abort(), 2500);
         const res = await fetch(
-          `/api/agora/token?channel=${encodeURIComponent(channel)}&uid=${encodeURIComponent(uid)}`,
+          `/api/agora/token?appId=${encodeURIComponent(appId)}&channel=${encodeURIComponent(channel)}&uid=${encodeURIComponent(uid)}`,
           { signal: controller.signal }
         );
         window.clearTimeout(timer);
@@ -492,7 +592,7 @@ class AgoraVoiceEngine {
           }
         }
       } catch {
-        // Static Vite / Vercel build without Express token server -> Testing Mode (null)
+        // Fallback when Express token route is unavailable
       }
     }
 
@@ -541,13 +641,7 @@ class AgoraVoiceEngine {
         this.updateStatus({ state: 'error', errorMessage: msg });
       } else if (curState === 'CONNECTED') {
         this.updateStatus({ state: 'connected', errorMessage: null, requiresToken: false });
-      } else if (curState === 'DISCONNECTED' && reason && reason !== 'LEAVE') {
-        console.warn('[AgoraVoice] disconnected:', reason);
       }
-    });
-
-    client.on('exception', (evt) => {
-      console.warn('[AgoraVoice] exception:', evt);
     });
 
     client.on('volume-indicator', (volumes) => {
@@ -565,82 +659,7 @@ class AgoraVoiceEngine {
     });
   }
 
-  private async startLocalFallbackMic(uidStr: string): Promise<void> {
-    this.stopLocalFallbackMic();
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-      this.localFallbackStream = stream;
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (AudioCtx) {
-        const ctx = new AudioCtx();
-        if (ctx.state === 'suspended') {
-          await ctx.resume().catch(() => {});
-        }
-        const source = ctx.createMediaStreamSource(stream);
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
-        source.connect(analyser);
-        const data = new Uint8Array(analyser.frequencyBinCount);
-        this.localFallbackAudioCtx = ctx;
-        this.localFallbackTimer = window.setInterval(() => {
-          analyser.getByteTimeDomainData(data);
-          let sum = 0;
-          for (let i = 0; i < data.length; i++) {
-            const v = (data[i] - 128) / 128;
-            sum += v * v;
-          }
-          const rms = Math.sqrt(sum / data.length);
-          const level = Math.min(100, Math.round(rms * 260));
-          this.emitVolumes({ [uidStr]: level });
-        }, 120);
-      }
-      this.updateStatus({ micError: null });
-      this.setLiveMicActive(true);
-    } catch (err) {
-      const errName = (err as { name?: string })?.name || '';
-      if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
-        this.updateStatus({
-          micError: 'يرجى السماح بصلاحية الميكروفون في المتصفح لتشغيل الصوت.',
-        });
-      }
-      this.setLiveMicActive(false);
-    }
-  }
-
-  private stopLocalFallbackMic(): void {
-    if (this.localFallbackTimer !== null && typeof window !== 'undefined') {
-      window.clearInterval(this.localFallbackTimer);
-      this.localFallbackTimer = null;
-    }
-    if (this.localFallbackAudioCtx) {
-      this.localFallbackAudioCtx.close().catch(() => {});
-      this.localFallbackAudioCtx = null;
-    }
-    if (this.localFallbackStream) {
-      this.localFallbackStream.getTracks().forEach((t) => {
-        try {
-          t.stop();
-        } catch {
-          // Ignore track stop errors
-        }
-      });
-      this.localFallbackStream = null;
-    }
-  }
-
   private async teardownLocalMic(client: IAgoraRTCClient | null): Promise<void> {
-    this.stopLocalFallbackMic();
     const track = this.localAudioTrack;
     this.localAudioTrack = null;
     this.setLiveMicActive(false);
@@ -650,14 +669,14 @@ class AgoraVoiceEngine {
         try {
           await client.unpublish([track]);
         } catch {
-          // Ignore if already unpublished or left
+          // ignore
         }
       }
       try {
         track.stop();
         track.close();
       } catch {
-        // Ignore cleanup errors
+        // ignore
       }
     }
 
@@ -666,24 +685,15 @@ class AgoraVoiceEngine {
         await client.setClientRole('audience');
         this.currentRole = 'audience';
       } catch {
-        // Ignore role revert errors
+        // ignore
       }
     }
   }
 
   private async applyMicState(onSeat: boolean, muted: boolean, capturedEpoch: number): Promise<void> {
     if (capturedEpoch !== this.joinEpoch) return;
-
-    // If Agora channel isn't connected yet (e.g. token required), still activate local mic meter cleanly when unmuted
     if (!this.client || !this.activeChannel) {
-      if (!onSeat || muted) {
-        this.stopLocalFallbackMic();
-        this.setLiveMicActive(false);
-        return;
-      }
-      if (this.status.state === 'error' && this.activeRawUserId) {
-        await this.startLocalFallbackMic(this.activeRawUserId);
-      }
+      if (!onSeat || muted) this.setLiveMicActive(false);
       return;
     }
 
@@ -740,7 +750,6 @@ class AgoraVoiceEngine {
         this.setLiveMicActive(!muted);
       }
     } catch (err: unknown) {
-      console.warn('[AgoraVoice] mic/publish failed:', err);
       const errName = (err as { code?: string; name?: string })?.code || (err instanceof Error ? err.name : '');
       let msg = `تعذر تشغيل الميكروفون المباشر (${errName || 'خطأ بث'}).`;
       if (
@@ -749,7 +758,7 @@ class AgoraVoiceEngine {
         errName === 'DEVICE_NOT_FOUND' ||
         errName === 'NotFoundError'
       ) {
-        msg = 'يرجى السماح بصلاحية الميكروفون أو التأكد من توصيله (افتح الرابط في نافذة مستقلة إذا كان محجوباً داخل المعاينة).';
+        msg = 'يرجى السماح بصلاحية الميكروفون أو التأكد من توصيله.';
       } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
         msg = 'الميكروفون مستخدم من تطبيق آخر حالياً.';
       } else if (errName === 'NOT_SUPPORTED' || errName === 'SecurityError') {
@@ -761,16 +770,23 @@ class AgoraVoiceEngine {
     }
   }
 
-  public joinRoom(roomId: string, userId: string): Promise<void> {
+  public joinRoom(roomId: string, userId: string, displayName?: string): Promise<void> {
+    this.activeRoomId = roomId;
+    this.activeRawUserId = userId.trim() || sanitizeAgoraUid(userId);
+    this.activeDisplayName = displayName;
+
+    if (this.isSelfHosted()) {
+      void this.internalLeave(false);
+      return selfHostedVoice.joinRoom(roomId, userId, displayName);
+    }
+
     const channel = formatAgoraChannelName(roomId);
     const uid = sanitizeAgoraUid(userId);
     const rawUserId = userId.trim() || uid;
     const myEpoch = ++this.joinEpoch;
 
-    this.activeRoomId = roomId;
-    this.activeRawUserId = rawUserId;
-
     this.opChain = this.opChain.then(async () => {
+      await selfHostedVoice.leaveRoom();
       if (myEpoch !== this.joinEpoch) return;
       if (this.activeChannel === channel && this.activeUid === uid && this.client) return;
 
@@ -783,11 +799,9 @@ class AgoraVoiceEngine {
       const { token: joinToken, joinUid } = await this.resolveJoinParams(appId, channel, uid);
       if (myEpoch !== this.joinEpoch) return;
 
-      // Avoid repeating gateway join requests if this App ID already reported Secured Mode without a token
       const cacheKey = `${appId}:${joinToken ? 'tok' : 'notok'}`;
       const cachedNotice = this.tokenRequiredCache.get(cacheKey);
       if (cachedNotice) {
-        this.lastJoinFailureMsg = cachedNotice;
         this.updateStatus({
           state: 'error',
           appId,
@@ -795,9 +809,6 @@ class AgoraVoiceEngine {
           requiresToken: true,
           errorMessage: cachedNotice,
         });
-        if (this.desiredOnSeat && !this.desiredMuted) {
-          await this.startLocalFallbackMic(rawUserId);
-        }
         return;
       }
 
@@ -830,8 +841,6 @@ class AgoraVoiceEngine {
 
         this.activeChannel = channel;
         this.activeUid = uid;
-        this.lastJoinFailureMsg = null;
-        this.stopLocalFallbackMic();
         client.enableAudioVolumeIndicator();
         this.updateStatus({
           state: 'connected',
@@ -845,13 +854,11 @@ class AgoraVoiceEngine {
           await this.applyMicState(this.desiredOnSeat, this.desiredMuted, myEpoch);
         }
       } catch (err: unknown) {
-        console.warn('[AgoraVoice] joinRoom notice:', err);
         const notice = this.translateAgoraJoinError(err);
         const requiresToken = this.isTokenRequirementError(err);
         if (requiresToken) {
           this.tokenRequiredCache.set(cacheKey, notice);
         }
-        this.lastJoinFailureMsg = notice;
         this.emitNotice(notice);
         await this.internalLeave(false);
         this.updateStatus({
@@ -860,9 +867,6 @@ class AgoraVoiceEngine {
           requiresToken,
           errorMessage: notice,
         });
-        if (this.desiredOnSeat && !this.desiredMuted) {
-          await this.startLocalFallbackMic(rawUserId);
-        }
       }
     });
 
@@ -873,17 +877,25 @@ class AgoraVoiceEngine {
     if (!this.activeRoomId || !this.activeRawUserId) {
       return Promise.resolve();
     }
+    if (this.isSelfHosted()) {
+      void this.internalLeave(false);
+      return selfHostedVoice.reconnectActiveRoom();
+    }
     this.tokenRequiredCache.clear();
     const roomId = this.activeRoomId;
     const userId = this.activeRawUserId;
+    const displayName = this.activeDisplayName;
     ++this.joinEpoch;
     this.opChain = this.opChain.then(async () => {
       await this.internalLeave(false);
     });
-    return this.joinRoom(roomId, userId);
+    return this.joinRoom(roomId, userId, displayName);
   }
 
   public retryMicPublish(): Promise<void> {
+    if (this.isSelfHosted()) {
+      return selfHostedVoice.retryMicPublish();
+    }
     const capturedEpoch = this.joinEpoch;
     this.opChain = this.opChain.then(async () => {
       if (this.desiredOnSeat) {
@@ -896,27 +908,33 @@ class AgoraVoiceEngine {
   public syncMicState(onSeat: boolean, muted: boolean): Promise<void> {
     this.desiredOnSeat = onSeat;
     this.desiredMuted = muted;
+    if (this.isSelfHosted()) {
+      return selfHostedVoice.syncMicState(onSeat, muted);
+    }
     const capturedEpoch = this.joinEpoch;
-
     this.opChain = this.opChain.then(async () => {
       await this.applyMicState(onSeat, muted, capturedEpoch);
     });
-
     return this.opChain;
   }
 
   public setRemoteAudioMuted(muted: boolean): void {
     this.remoteMuted = muted;
+    selfHostedVoice.setRemoteAudioMuted(muted);
     this.remoteTracks.forEach((track) => {
       try {
         track.setVolume(muted ? 0 : 100);
       } catch {
-        // Ignore remote volume update errors
+        // ignore
       }
     });
   }
 
   public resumeRemoteAudio(force = false): void {
+    if (this.isSelfHosted()) {
+      selfHostedVoice.resumeRemoteAudio(force);
+      return;
+    }
     if (this.remoteMuted) return;
     if (!force && !this.autoplayBlocked) return;
     this.autoplayBlocked = false;
@@ -925,19 +943,23 @@ class AgoraVoiceEngine {
         track.setVolume(100);
         track.play();
       } catch {
-        // Ignore remote play resume errors
+        // ignore
       }
     });
     this.updateStatus({});
   }
 
-  public async testConnection(roomId = 'room_1', userId = 'admin_tester'): Promise<{
+  public async testConnection(roomId = 'room_tyy', userId = 'admin_tester'): Promise<{
     ok: boolean;
     message: string;
     appId: string;
     channel: string;
     requiresToken?: boolean;
   }> {
+    if (this.isSelfHosted()) {
+      return selfHostedVoice.testConnection(roomId);
+    }
+
     const appId = normalizeAppId(this.runtimeConfig.appId) || getAgoraAppId();
     const channel = formatAgoraChannelName(roomId);
     const uid = sanitizeAgoraUid(`${userId}_${Date.now() % 10000}`);
@@ -967,37 +989,11 @@ class AgoraVoiceEngine {
   }
 
   public async startMicProbe(onLevel: (level: number) => void): Promise<{ ok: boolean; message: string }> {
-    this.stopMicProbe();
-    try {
-      const AgoraRTC = await this.ensureSdk();
-      const track = await AgoraRTC.createMicrophoneAudioTrack({
-        AEC: true,
-        ANS: true,
-        AGC: true,
-      });
-      this.probeAudioTrack = track;
-      this.probeTimer = window.setInterval(() => {
-        if (!this.probeAudioTrack) return;
-        const raw = this.probeAudioTrack.getVolumeLevel();
-        onLevel(Math.min(100, Math.round(raw * 100)));
-      }, 100);
-      return {
-        ok: true,
-        message: 'الميكروفون يعمل بنجاح! تحدث الآن لمشاهدة مؤشر الصوت الحي.',
-      };
-    } catch (err) {
-      const errName = (err as { code?: string; name?: string })?.code || (err instanceof Error ? err.name : '');
-      return {
-        ok: false,
-        message:
-          errName === 'PERMISSION_DENIED' || errName === 'NotAllowedError'
-            ? 'تم رفض إذن الميكروفون في المتصفح — اسمح بالوصول للميكروفون من شريط العنوان.'
-            : `تعذر الوصول للميكروفون (${errName || 'تأكد من توصيل المايك'}).`,
-      };
-    }
+    return selfHostedVoice.startMicProbe(onLevel);
   }
 
   public stopMicProbe(): void {
+    selfHostedVoice.stopMicProbe();
     if (this.probeTimer !== null && typeof window !== 'undefined') {
       window.clearInterval(this.probeTimer);
       this.probeTimer = null;
@@ -1007,7 +1003,7 @@ class AgoraVoiceEngine {
         this.probeAudioTrack.stop();
         this.probeAudioTrack.close();
       } catch {
-        // Ignore probe cleanup
+        // ignore
       }
       this.probeAudioTrack = null;
     }
@@ -1021,7 +1017,7 @@ class AgoraVoiceEngine {
       try {
         track.stop();
       } catch {
-        // Ignore stop errors
+        // ignore
       }
     });
     this.remoteTracks.clear();
@@ -1032,7 +1028,7 @@ class AgoraVoiceEngine {
         client.removeAllListeners();
         await client.leave();
       } catch {
-        // Ignore leave errors
+        // ignore
       }
     }
 
@@ -1042,24 +1038,27 @@ class AgoraVoiceEngine {
     if (resetRoomTracking) {
       this.activeRoomId = null;
       this.activeRawUserId = null;
+      this.activeDisplayName = undefined;
       this.desiredOnSeat = false;
       this.desiredMuted = false;
     }
     this.currentRole = 'audience';
     this.autoplayBlocked = false;
-    this.emitVolumes({});
-    this.updateStatus({
-      state: 'idle',
-      channel: null,
-      micError: null,
-      errorMessage: null,
-    });
+    if (!this.isSelfHosted()) {
+      this.emitVolumes({});
+      this.updateStatus({
+        state: 'idle',
+        channel: null,
+        micError: null,
+        errorMessage: null,
+      });
+    }
   }
 
   public leaveRoom(): Promise<void> {
     ++this.joinEpoch;
     this.opChain = this.opChain.then(async () => {
-      await this.internalLeave(true);
+      await Promise.all([this.internalLeave(true), selfHostedVoice.leaveRoom()]);
     });
     return this.opChain;
   }

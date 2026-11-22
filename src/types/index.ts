@@ -130,6 +130,7 @@ export interface GiftItem {
   soundEffect: SoundEffectType;
   vipMinLevel?: number;
   isLucky?: boolean;
+  isStarterDefault?: boolean;
   descriptionAr: string;
 }
 
@@ -295,6 +296,7 @@ export interface StaffMember {
 }
 
 export interface AgoraVoiceConfig {
+  provider?: 'self_hosted' | 'agora';
   appId: string;
   rtcToken?: string;
   note?: string;

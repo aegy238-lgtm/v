@@ -44,12 +44,15 @@ async function run() {
   unsubMic();
 
   let connState: string | null = null;
+  let connProvider: string | undefined;
   let requiresToken: boolean | undefined;
   const unsubStatus = agoraVoice.subscribeStatus((st) => {
     connState = st.state;
+    connProvider = st.provider;
     requiresToken = st.requiresToken;
   });
   assert.equal(connState, 'idle');
+  assert.equal(connProvider, 'self_hosted');
   assert.equal(requiresToken, false);
   unsubStatus();
 

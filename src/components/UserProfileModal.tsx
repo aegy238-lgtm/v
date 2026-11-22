@@ -75,12 +75,8 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
                 userFrame?.previewUrl
                   ? 'w-[72px] h-[72px] rounded-full overflow-hidden shadow-2xl'
                   : `w-24 h-24 rounded-full p-1 border-4 ${
-                      viewingProfileUser.activeFrameId === 'frame_gold_wings'
-                        ? 'border-amber-400 ring-2 ring-yellow-300'
-                        : viewingProfileUser.activeFrameId === 'frame_ruby_emperor'
-                        ? 'border-rose-500 ring-2 ring-red-400'
-                        : viewingProfileUser.activeFrameId
-                        ? 'border-cyan-400'
+                      viewingProfileUser.activeFrameId
+                        ? 'border-amber-400'
                         : 'border-white/20'
                     } shadow-2xl`
               }
