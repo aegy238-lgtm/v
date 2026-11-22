@@ -21,6 +21,11 @@ export function formatAgoraChannelName(roomId: string): string {
   return `auravoice_${cleaned || 'main'}`;
 }
 
+export function sanitizeAgoraUid(userId: string): string {
+  const cleaned = userId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  return cleaned || 'guest_user';
+}
+
 type VolumeListener = (volumes: Record<string, number>) => void;
 type NoticeListener = (message: string) => void;
 type MicStatusListener = (isLiveMicActive: boolean) => void;
@@ -86,6 +91,9 @@ class AgoraVoiceEngine {
     const mod = await import('agora-rtc-sdk-ng');
     const sdk = mod.default;
     sdk.setLogLevel(3); // Warning & Error only
+    sdk.onAutoplayFailed = () => {
+      this.emitNotice('اضغط في أي مكان داخل الغرفة لتفعيل سماع الصوت المباشر.');
+    };
     this.sdk = sdk;
     return sdk;
   }
@@ -158,7 +166,8 @@ class AgoraVoiceEngine {
 
   public joinRoom(roomId: string, userId: string): Promise<void> {
     const channel = formatAgoraChannelName(roomId);
-    const uid = userId.trim() || `user_${Date.now()}`;
+    const uid = sanitizeAgoraUid(userId);
+    const rawUserId = userId.trim() || uid;
     const myEpoch = ++this.joinEpoch;
 
     this.opChain = this.opChain.then(async () => {
@@ -177,7 +186,7 @@ class AgoraVoiceEngine {
 
         const client = AgoraRTC.createClient({ mode: 'live', codec: 'vp8' });
         this.client = client;
-        this.attachClientEvents(client, uid);
+        this.attachClientEvents(client, rawUserId);
 
         await client.setClientRole('audience');
         this.currentRole = 'audience';
@@ -198,9 +207,19 @@ class AgoraVoiceEngine {
         this.activeUid = uid;
         client.enableAudioVolumeIndicator();
       } catch (err: unknown) {
+        const code = (err as { code?: string })?.code || '';
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('DYNAMIC_USE_STATIC_KEY') || msg.includes('INVALID_TOKEN')) {
-          this.emitNotice('سيرفر Agora يتطلب تفعيل وضع App ID أو تمرير Token صالح.');
+        const combined = `${code} ${msg}`;
+        if (
+          combined.includes('DYNAMIC_USE_STATIC_KEY') ||
+          combined.includes('INVALID_TOKEN') ||
+          combined.includes('dynamic use static key')
+        ) {
+          this.emitNotice('سيرفر Agora يتطلب تفعيل وضع App ID (بدون شهادة) أو توفير Token.');
+        } else if (combined.includes('INVALID_VENDOR_KEY')) {
+          this.emitNotice('معرّف تطبيق Agora (App ID) غير صالح.');
+        } else if (combined.includes('CAN_NOT_GET_GATEWAY_SERVER')) {
+          this.emitNotice('تعذر الاتصال بخوادم Agora الصوتية، تحقق من الشبكة أو إعدادات App ID.');
         }
         await this.internalLeave();
       }
