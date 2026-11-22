@@ -4,6 +4,7 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import crypto from "crypto";
 import dns from "dns/promises";
 import net from "net";
@@ -26,9 +27,11 @@ const ADMIN_ALLOWLIST_EMAILS = new Set([
 ]);
 
 // =============================================================================
-// PERSISTENT SERVER DATA STORAGE (Admin Auth + Authoritative Real-Time Catalog)
+// PERSISTENT SERVER DATA STORAGE (Outside Git Workspace for Clean GitHub Push)
 // =============================================================================
-const SERVER_DATA_DIR = path.join(__dirname, "data");
+const SERVER_DATA_DIR =
+  (process.env.FOKASHAT_DATA_DIR || "").trim() ||
+  path.join(os.tmpdir(), "fokashat-runtime-data");
 const ADMIN_AUTH_FILE = path.join(SERVER_DATA_DIR, "admin-auth.json");
 const CATALOG_FILE = path.join(SERVER_DATA_DIR, "catalog.json");
 
@@ -455,18 +458,129 @@ function verifyAdminSessionToken(
   }
 }
 
-function readFirebaseWebApiKey(): string {
+function readFirebaseAppletConfig(): { apiKey: string; projectId: string } {
   try {
     const cfgPath = path.join(__dirname, "firebase-applet-config.json");
     const raw = fs.readFileSync(cfgPath, "utf8");
-    const parsed = JSON.parse(raw) as { apiKey?: string };
-    return typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "";
+    const parsed = JSON.parse(raw) as { apiKey?: string; projectId?: string };
+    return {
+      apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "",
+      projectId: typeof parsed.projectId === "string" ? parsed.projectId.trim() : "",
+    };
   } catch {
-    return "";
+    return { apiKey: "", projectId: "" };
   }
 }
 
-const FIREBASE_WEB_API_KEY = readFirebaseWebApiKey();
+const FIREBASE_APPLET_CFG = readFirebaseAppletConfig();
+const FIREBASE_WEB_API_KEY = FIREBASE_APPLET_CFG.apiKey;
+const FIREBASE_PROJECT_ID = FIREBASE_APPLET_CFG.projectId;
+
+function decodeFirestoreValue(val: Record<string, unknown> | undefined): unknown {
+  if (!val || typeof val !== "object") return undefined;
+  if ("stringValue" in val) return String(val.stringValue);
+  if ("integerValue" in val) return Number(val.integerValue);
+  if ("doubleValue" in val) return Number(val.doubleValue);
+  if ("booleanValue" in val) return Boolean(val.booleanValue);
+  if ("nullValue" in val) return null;
+  if ("arrayValue" in val) {
+    const arr = (val.arrayValue as { values?: Record<string, unknown>[] })?.values || [];
+    return arr.map((v) => decodeFirestoreValue(v));
+  }
+  if ("mapValue" in val) {
+    const fields =
+      (val.mapValue as { fields?: Record<string, Record<string, unknown>> })?.fields || {};
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(fields)) {
+      out[k] = decodeFirestoreValue(v);
+    }
+    return out;
+  }
+  return undefined;
+}
+
+async function fetchPublicFirestoreCollection(
+  collectionName: string
+): Promise<Record<string, unknown>[]> {
+  if (!FIREBASE_PROJECT_ID) return [];
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      FIREBASE_PROJECT_ID
+    )}/databases/(default)/documents/${encodeURIComponent(collectionName)}?pageSize=200`;
+    const resp = await fetch(url, { method: "GET" });
+    if (!resp.ok) return [];
+    const data = (await resp.json()) as {
+      documents?: { name?: string; fields?: Record<string, Record<string, unknown>> }[];
+    };
+    const docs = Array.isArray(data.documents) ? data.documents : [];
+    return docs.map((d) => {
+      const obj: Record<string, unknown> = {};
+      if (d.fields) {
+        for (const [k, v] of Object.entries(d.fields)) {
+          obj[k] = decodeFirestoreValue(v);
+        }
+      }
+      if (!obj.id && typeof d.name === "string") {
+        obj.id = d.name.split("/").pop() || "";
+      }
+      return obj;
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function hydrateCatalogFromFirestoreIfEmpty(): Promise<void> {
+  if (
+    serverCatalog.gifts.length > 0 &&
+    serverCatalog.storeItems.length > 0 &&
+    serverCatalog.roomBackgrounds.length > 0
+  ) {
+    return;
+  }
+  const [fsGifts, fsStore, fsBgs] = await Promise.all([
+    serverCatalog.gifts.length === 0 ? fetchPublicFirestoreCollection("auravoice_gifts") : [],
+    serverCatalog.storeItems.length === 0
+      ? fetchPublicFirestoreCollection("auravoice_store_items")
+      : [],
+    serverCatalog.roomBackgrounds.length === 0
+      ? fetchPublicFirestoreCollection("auravoice_room_backgrounds")
+      : [],
+  ]);
+
+  let changed = false;
+  if (serverCatalog.gifts.length === 0 && fsGifts.length > 0) {
+    const clean = fsGifts
+      .map(sanitizeCatalogGift)
+      .filter((x): x is Record<string, unknown> => Boolean(x));
+    if (clean.length > 0) {
+      serverCatalog.gifts = clean;
+      changed = true;
+    }
+  }
+  if (serverCatalog.storeItems.length === 0 && fsStore.length > 0) {
+    const clean = fsStore
+      .map(sanitizeCatalogStoreItem)
+      .filter((x): x is Record<string, unknown> => Boolean(x));
+    if (clean.length > 0) {
+      serverCatalog.storeItems = clean;
+      changed = true;
+    }
+  }
+  if (serverCatalog.roomBackgrounds.length === 0 && fsBgs.length > 0) {
+    const clean = fsBgs
+      .map(sanitizeCatalogBackground)
+      .filter((x): x is Record<string, unknown> => Boolean(x));
+    if (clean.length > 0) {
+      serverCatalog.roomBackgrounds = clean;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    persistAndBroadcastCatalog();
+  }
+}
 
 function isValidHex32(val: string): boolean {
   return /^[a-f0-9]{32}$/i.test(val.trim());
@@ -1129,7 +1243,19 @@ async function startServer() {
 
   // REST API routes
   app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok" });
+    res.json({
+      status: "ok",
+      firebaseProjectId: FIREBASE_PROJECT_ID || null,
+      catalogVersion: serverCatalog.version,
+      catalogCounts: {
+        gifts: serverCatalog.gifts.length,
+        storeItems: serverCatalog.storeItems.length,
+        roomBackgrounds: serverCatalog.roomBackgrounds.length,
+      },
+      liveCatalogSubscribers: catalogSseClients.size,
+      activeVoiceRooms: voiceRooms.size,
+      uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
+    });
   });
 
   // Admin Email + Password Auth Routes (First-run claim + scrypt verification + Bearer token)
@@ -1843,6 +1969,8 @@ async function startServer() {
       res.sendFile(path.join(__dirname, "dist", "index.html"));
     });
   }
+
+  void hydrateCatalogFromFirestoreIfEmpty().catch(() => {});
 
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server + Self-Hosted Voice Server running on http://0.0.0.0:${PORT}`);

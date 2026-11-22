@@ -20,6 +20,7 @@ import {
   Trash2,
   ArrowLeft,
   RefreshCw,
+  Crown,
 } from 'lucide-react';
 import { StoreItem } from '../types';
 import { SmartMediaView } from './SmartMediaView';
@@ -36,9 +37,9 @@ type BackpackCategory = 'frames' | 'entrances' | 'badges' | 'bubbles' | 'lucky_b
 type SortMode = 'default' | 'price_asc' | 'price_desc';
 
 const TYPE_LABELS: Record<StoreItem['type'], string> = {
-  frame: 'إطار صورة',
-  entrance: 'دخولية غرفة',
-  badge: 'وسام ملكي',
+  frame: 'إطار ملكي',
+  entrance: 'دخولية فاخرة',
+  badge: 'وسام شرف',
   bubble: 'فقاعة دردشة',
 };
 
@@ -218,7 +219,7 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
       showFeedback(
         alreadyOwned
           ? `تم تمديد ملكية (${item.nameAr}) +${item.durationDays} يوم داخل حقيبتك بنجاح.`
-          : `تم شراء (${item.nameAr}) بنجاح ونقله إلى حقيبتك! افتح الحقيبة للارتداء أو الإزالة وقتما تشاء.`,
+          : `تم شراء (${item.nameAr}) ونقله إلى حقيبتك الملكية بنجاح! افتح الحقيبة للارتداء أو الإزالة.`,
         'success',
         targetTab
       );
@@ -231,7 +232,7 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
       showFeedback('يجب شراء العنصر من المتجر أولاً قبل ارتدائه.', 'warning');
       return;
     }
-    showFeedback(`تم ارتداء (${item.nameAr}) بنجاح — يظهر الآن على حسابك وفي الغرف.`, 'success');
+    showFeedback(`تم ارتداء (${item.nameAr}) بنجاح — يظهر الآن على صورتك وفي الغرف.`, 'success');
   };
 
   const handleUnequipItem = (type: StoreItem['type'], label: string) => {
@@ -309,21 +310,30 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
     );
   };
 
-  const renderItemArtwork = (item: StoreItem) => {
+  // Large, museum-grade centered artwork inside every square pedestal
+  const renderSquareArtwork = (item: StoreItem) => {
     if (item.type === 'frame' && item.previewUrl) {
       return (
-        <div className="relative w-24 h-24 flex items-center justify-center">
+        <div className="relative w-28 h-28 sm:w-36 sm:h-36 flex items-center justify-center">
+          {/* Subtle golden back halo */}
+          <div
+            className="pointer-events-none absolute inset-4 rounded-full blur-xl opacity-45"
+            style={{
+              background:
+                'radial-gradient(circle, rgba(245, 197, 66, 0.55), transparent 70%)',
+            }}
+          />
           <img
             src={currentUser.avatar}
             alt={item.nameAr}
             referrerPolicy="no-referrer"
-            className="w-14 h-14 rounded-full object-cover ring-1 ring-white/10"
+            className="w-16 h-16 sm:w-20 sm:h-20 rounded-full object-cover ring-1 ring-amber-300/25 shadow-inner"
           />
           <img
             src={item.previewUrl}
             alt={item.nameAr}
             referrerPolicy="no-referrer"
-            className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[96px] h-[96px] object-contain z-20"
+            className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[112px] h-[112px] sm:w-[144px] sm:h-[144px] object-contain z-20 drop-shadow-[0_6px_18px_rgba(245,180,45,0.28)]"
           />
         </div>
       );
@@ -336,8 +346,8 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
           url={item.videoUrl || item.previewUrl}
           preferVideo={Boolean(item.videoUrl)}
           alt={item.nameAr}
-          className="w-full h-full object-contain p-2"
-          fallback={<span className="text-5xl">{item.icon}</span>}
+          className="w-full h-full object-contain p-3 sm:p-4 drop-shadow-[0_8px_22px_rgba(245,180,45,0.22)]"
+          fallback={<span className="text-5xl sm:text-6xl">{item.icon}</span>}
         />
       );
     }
@@ -348,15 +358,16 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
           mode="thumbnail"
           url={item.previewUrl}
           alt={item.nameAr}
-          className="w-full h-full object-contain p-3"
-          fallback={<span className="text-5xl">{item.icon}</span>}
+          className="w-full h-full object-contain p-4 sm:p-5 drop-shadow-[0_6px_18px_rgba(245,180,45,0.25)]"
+          fallback={<span className="text-5xl sm:text-6xl">{item.icon}</span>}
         />
       );
     }
 
-    return <span className="text-5xl">{item.icon}</span>;
+    return <span className="text-5xl sm:text-6xl">{item.icon}</span>;
   };
 
+  // Luxury 2-Column Square Grid for Owned Backpack Items (Strictly 2 Side-by-Side)
   const renderOwnedCategoryGrid = (
     items: StoreItem[],
     emptyTitle: string,
@@ -365,55 +376,61 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
   ) => {
     if (items.length === 0) {
       return (
-        <div className="py-12 px-6 rounded-3xl bg-[#0c111e] border border-white/8 text-center space-y-4">
-          <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-400/10 border border-amber-400/25 flex items-center justify-center text-amber-300">
-            <ShoppingBag className="w-7 h-7" />
+        <div className="py-12 px-5 rounded-3xl bg-gradient-to-b from-[#0e1424] to-[#080c17] border border-amber-400/15 text-center space-y-4">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-tr from-amber-500/20 to-yellow-300/10 border border-amber-400/35 flex items-center justify-center text-amber-300 shadow-lg shadow-amber-500/10">
+            <Crown className="w-8 h-8" />
           </div>
           <div className="space-y-1.5 max-w-md mx-auto">
-            <h4 className="text-sm font-black text-white">{emptyTitle}</h4>
+            <h4 className="text-sm sm:text-base font-black text-white">{emptyTitle}</h4>
             <p className="text-xs text-slate-400 leading-relaxed">{emptyHint}</p>
           </div>
           <button
             type="button"
             onClick={() => jumpToStoreCategory(storeTargetCategory)}
-            className="min-h-[42px] px-5 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 hover:brightness-105 text-slate-950 font-black text-xs inline-flex items-center gap-2 shadow-lg shadow-amber-500/15 transition-all"
+            className="min-h-[44px] px-6 rounded-xl bg-gradient-to-r from-[#f7d36a] via-[#eab308] to-[#d97706] hover:brightness-105 text-slate-950 font-black text-xs inline-flex items-center gap-2 shadow-lg shadow-amber-500/20 transition-all"
           >
             <ShoppingBag className="w-4 h-4" />
-            <span>تصفح المتجر للشراء</span>
+            <span>تصفح المتجر الملكي للشراء</span>
           </button>
         </div>
       );
     }
 
     return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4">
         {items.map((item) => {
           const equipped = isItemEquipped(item);
           const remainingDays = getRemainingDays(item.id);
           return (
             <div
               key={item.id}
-              className={`rounded-2xl border overflow-hidden flex flex-col justify-between transition-all ${
+              className={`group rounded-2xl sm:rounded-3xl border overflow-hidden flex flex-col justify-between transition-all ${
                 equipped
-                  ? 'bg-[#151c2e] border-amber-400/70 shadow-lg shadow-amber-500/10'
-                  : 'bg-[#111726] border-white/10 hover:border-white/20'
+                  ? 'bg-gradient-to-b from-[#171d32] to-[#0c101e] border-amber-400/75 shadow-[0_0_28px_rgba(245,197,66,0.16)]'
+                  : 'bg-gradient-to-b from-[#12182b] to-[#0a0f1c] border-amber-300/15 hover:border-amber-400/45'
               }`}
             >
-              {/* Product Stage */}
+              {/* Square Luxury Showcase Pedestal */}
               <div
-                className="relative h-36 flex items-center justify-center overflow-hidden border-b border-white/8"
+                className="relative aspect-square w-full flex items-center justify-center overflow-hidden border-b border-amber-300/12"
                 style={{
                   background:
-                    'radial-gradient(circle at 50% 45%, rgba(245, 158, 11, 0.12), rgba(7, 10, 18, 0.96) 74%)',
+                    'radial-gradient(circle at 50% 44%, rgba(245, 197, 66, 0.16), rgba(9, 13, 25, 0.96) 72%)',
                 }}
               >
-                {renderItemArtwork(item)}
+                {/* Fine gold corner luxury lines */}
+                <span className="pointer-events-none absolute top-2 right-2 w-3 h-3 border-t border-r border-amber-400/40 rounded-tr-sm" />
+                <span className="pointer-events-none absolute top-2 left-2 w-3 h-3 border-t border-l border-amber-400/40 rounded-tl-sm" />
+                <span className="pointer-events-none absolute bottom-2 right-2 w-3 h-3 border-b border-r border-amber-400/40 rounded-br-sm" />
+                <span className="pointer-events-none absolute bottom-2 left-2 w-3 h-3 border-b border-l border-amber-400/40 rounded-bl-sm" />
+
+                {renderSquareArtwork(item)}
 
                 {item.type === 'entrance' && (item.videoUrl || item.previewUrl) && (
                   <button
                     type="button"
                     onClick={() => setPreviewEntrance(item)}
-                    className="absolute bottom-2.5 left-2.5 px-2.5 py-1 rounded-lg bg-black/75 hover:bg-black border border-white/15 text-[11px] font-bold text-amber-300 flex items-center gap-1 transition-colors"
+                    className="absolute bottom-2.5 left-2.5 px-2.5 py-1 rounded-lg bg-black/75 hover:bg-black border border-amber-400/30 text-[10px] sm:text-[11px] font-bold text-amber-300 flex items-center gap-1 transition-colors"
                   >
                     <Play className="w-3 h-3" />
                     <span>معاينة</span>
@@ -421,46 +438,45 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                 )}
 
                 {equipped && (
-                  <div className="absolute top-2.5 right-2.5 flex items-center gap-1 text-[11px] font-black text-emerald-300 bg-black/70 px-2.5 py-1 rounded-lg border border-emerald-400/35">
-                    <Check className="w-3.5 h-3.5" />
-                    <span>مرتدى الآن</span>
+                  <div className="absolute top-2.5 right-2.5 flex items-center gap-1 text-[10px] sm:text-[11px] font-black text-emerald-300 bg-black/75 px-2 py-0.5 rounded-lg border border-emerald-400/40">
+                    <Check className="w-3 h-3" />
+                    <span>مرتدى</span>
                   </div>
                 )}
               </div>
 
-              {/* Metadata & Equip/Remove Actions */}
-              <div className="p-4 flex-1 flex flex-col justify-between gap-3.5">
+              {/* Luxury Metadata & Equip / Unequip Action */}
+              <div className="p-3 sm:p-4 flex-1 flex flex-col justify-between gap-2.5">
                 <div className="space-y-1 text-right">
-                  <div className="text-[11px] text-slate-400 flex items-center justify-between gap-2">
-                    <span>{TYPE_LABELS[item.type]}</span>
-                    <span className="inline-flex items-center gap-1 font-mono tabular-nums text-amber-300/90">
+                  <div className="text-[10px] sm:text-[11px] text-amber-200/75 flex items-center justify-between gap-1.5">
+                    <span className="truncate">{TYPE_LABELS[item.type]}</span>
+                    <span className="inline-flex items-center gap-1 font-mono tabular-nums text-amber-300 shrink-0">
                       <Clock className="w-3 h-3" />
-                      متبقي {remainingDays} يوم
+                      {remainingDays} يوم
                     </span>
                   </div>
-                  <h4 className="font-black text-sm text-white truncate">{item.nameAr}</h4>
-                  <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
-                    {item.descriptionAr}
-                  </p>
+                  <h4 className="font-black text-xs sm:text-sm text-white truncate">
+                    {item.nameAr}
+                  </h4>
                 </div>
 
-                <div className="pt-3 border-t border-white/8">
+                <div className="pt-2 border-t border-white/8">
                   {equipped ? (
                     <button
                       type="button"
                       onClick={() => handleUnequipItem(item.type, item.nameAr)}
-                      className="w-full min-h-[42px] rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/40 text-rose-200 font-black text-xs flex items-center justify-center gap-1.5 transition-colors"
+                      className="w-full min-h-[38px] sm:min-h-[42px] rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/45 text-rose-200 font-black text-[11px] sm:text-xs flex items-center justify-center gap-1.5 transition-colors"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
-                      <span>إزالة من الحساب</span>
+                      <span>إزالة</span>
                     </button>
                   ) : (
                     <button
                       type="button"
                       onClick={() => handleEquipOwnedItem(item)}
-                      className="w-full min-h-[42px] rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 hover:brightness-105 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-md shadow-amber-500/15 transition-all"
+                      className="w-full min-h-[38px] sm:min-h-[42px] rounded-xl bg-gradient-to-r from-[#f7d36a] via-[#eab308] to-[#d97706] hover:brightness-105 text-slate-950 font-black text-[11px] sm:text-xs flex items-center justify-center gap-1.5 shadow-md shadow-amber-500/20 transition-all"
                     >
-                      <Check className="w-4 h-4" />
+                      <Check className="w-3.5 h-3.5" />
                       <span>ارتداء الآن</span>
                     </button>
                   )}
@@ -475,47 +491,59 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200 font-tajawal"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/88 backdrop-blur-md animate-in fade-in duration-200 font-tajawal"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-5xl bg-[#0a0f1c] border border-white/12 rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[94dvh]"
+        className="w-full max-w-3xl bg-[#070b15] border border-amber-400/25 rounded-t-3xl sm:rounded-3xl shadow-[0_24px_80px_rgba(0,0,0,0.85)] overflow-hidden flex flex-col max-h-[95dvh] relative"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Top Boutique Header */}
-        <div className="px-4 sm:px-6 py-4 border-b border-white/10 bg-[#070b15] flex flex-wrap items-center justify-between gap-3">
+        {/* Subtle Ambient Royal Golden Top Glow */}
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 h-44 opacity-70"
+          style={{
+            background:
+              'radial-gradient(ellipse at 50% 0%, rgba(245, 197, 66, 0.16), transparent 72%)',
+          }}
+        />
+
+        {/* Top Luxury Salon Header */}
+        <div className="relative z-10 px-4 sm:px-6 py-4 border-b border-amber-400/15 bg-[#060912]/95 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <img
               src="/logo.png"
               alt="فوكاشات"
               referrerPolicy="no-referrer"
-              className="w-10 h-10 rounded-xl object-cover ring-1 ring-amber-400/50 shrink-0"
+              className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl object-cover ring-1 ring-amber-400/60 shadow-lg shadow-amber-500/20 shrink-0"
             />
             <div className="min-w-0">
-              <h2 className="text-base sm:text-lg font-black text-white truncate">
-                {section === 'store' ? 'متجر فوكاشات الملكي' : 'حقيبتي الشخصية'}
-              </h2>
-              <p className="text-[11px] sm:text-xs text-slate-400 truncate">
+              <div className="flex items-center gap-1.5">
+                <Crown className="w-4 h-4 text-amber-400 shrink-0" />
+                <h2 className="text-base sm:text-lg font-black bg-gradient-to-r from-amber-200 via-yellow-100 to-amber-300 bg-clip-text text-transparent truncate">
+                  {section === 'store' ? 'متجر فوكاشات الملكي' : 'حقيبتي الملكية'}
+                </h2>
+              </div>
+              <p className="text-[11px] text-slate-400 truncate">
                 {section === 'store'
-                  ? 'اشترِ الإطارات والدخوليات والأوسمة لتنتقل فوراً إلى حقيبتك'
-                  : 'ارتدِ مقتنياتك المشتراة أو أزلها وأرسل هدايا الحظ'}
+                  ? 'مقتنيات VIP حصرية · اشترِ لتنتقل فوراً إلى حقيبتك'
+                  : 'مقتنياتك المملوكة · ارتدِ وأزل بحرية في أي وقت'}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Wallet Balance & Quick Recharge */}
+          <div className="flex items-center gap-2">
+            {/* Golden Coin Wallet Chip */}
             <button
               type="button"
               onClick={() => setActiveModal('wallet')}
-              className="min-h-[38px] px-3 rounded-xl bg-[#111728] hover:bg-[#172038] border border-amber-400/30 flex items-center gap-2 transition-colors"
-              title="شحن العملات"
+              className="min-h-[38px] px-2.5 sm:px-3 rounded-xl bg-gradient-to-r from-[#1a1508] to-[#121626] hover:brightness-110 border border-amber-400/40 flex items-center gap-1.5 transition-all"
+              title="شحن العملات الذهبية"
             >
               <Coins className="w-4 h-4 text-amber-400 shrink-0" />
               <span className="font-mono tabular-nums text-xs sm:text-sm font-black text-amber-300">
                 {currentUser.coins.toLocaleString('en-US')}
               </span>
-              <span className="w-5 h-5 rounded-md bg-amber-400 text-slate-950 flex items-center justify-center">
+              <span className="w-5 h-5 rounded-md bg-gradient-to-tr from-amber-400 to-yellow-300 text-slate-950 flex items-center justify-center shrink-0">
                 <Plus className="w-3.5 h-3.5" />
               </span>
             </button>
@@ -524,30 +552,30 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
               type="button"
               onClick={onClose}
               aria-label="إغلاق"
-              className="w-9 h-9 rounded-xl bg-white/8 hover:bg-white/14 text-slate-300 hover:text-white flex items-center justify-center shrink-0 transition-colors"
+              className="w-9 h-9 rounded-xl bg-white/8 hover:bg-white/15 border border-white/10 text-slate-300 hover:text-white flex items-center justify-center shrink-0 transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        {/* Master Switcher: Store vs Backpack */}
-        <div className="px-4 sm:px-6 py-3 bg-[#090d19] border-b border-white/8 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-[#050811] border border-white/10 w-full sm:w-auto sm:min-w-[320px]">
+        {/* Velvet Master Switcher: Store vs Backpack */}
+        <div className="relative z-10 px-4 sm:px-6 py-3 bg-[#080d1a] border-b border-amber-400/12">
+          <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-[#04070f] border border-amber-400/20">
             <button
               type="button"
               onClick={() => {
                 setSection('store');
                 setTryOnFrame(null);
               }}
-              className={`min-h-[42px] px-4 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all ${
+              className={`min-h-[42px] px-3 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all ${
                 section === 'store'
-                  ? 'bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 shadow'
-                  : 'text-slate-300 hover:text-white'
+                  ? 'bg-gradient-to-r from-[#f7d36a] via-[#eab308] to-[#d97706] text-slate-950 shadow-lg shadow-amber-500/20'
+                  : 'text-slate-300 hover:text-amber-200'
               }`}
             >
               <ShoppingBag className="w-4 h-4 shrink-0" />
-              <span>المتجر ({storeItems.length})</span>
+              <span>المتجر الملكي ({storeItems.length})</span>
             </button>
             <button
               type="button"
@@ -555,37 +583,29 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                 setSection('backpack');
                 setTryOnFrame(null);
               }}
-              className={`min-h-[42px] px-4 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all ${
+              className={`min-h-[42px] px-3 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all ${
                 section === 'backpack'
-                  ? 'bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 shadow'
-                  : 'text-slate-300 hover:text-white'
+                  ? 'bg-gradient-to-r from-[#f7d36a] via-[#eab308] to-[#d97706] text-slate-950 shadow-lg shadow-amber-500/20'
+                  : 'text-slate-300 hover:text-amber-200'
               }`}
             >
               <Backpack className="w-4 h-4 shrink-0" />
-              <span>الحقيبة ({totalOwnedWearablesCount + totalBagGiftsCount})</span>
+              <span>حقيبتي ({totalOwnedWearablesCount + totalBagGiftsCount})</span>
             </button>
-          </div>
-
-          <div className="hidden sm:flex items-center gap-2 text-xs text-slate-400">
-            <span>المقتنيات المملوكة:</span>
-            <strong className="font-mono tabular-nums text-white">{totalOwnedWearablesCount}</strong>
-            <span>·</span>
-            <span>هدايا الحقيبة:</span>
-            <strong className="font-mono tabular-nums text-emerald-400">{totalBagGiftsCount}</strong>
           </div>
         </div>
 
-        {/* Scrollable Content Body */}
-        <div className="p-4 sm:p-6 overflow-y-auto space-y-5 flex-1">
+        {/* Scrollable Luxury Gallery Body */}
+        <div className="relative z-10 p-3.5 sm:p-5 overflow-y-auto space-y-4 flex-1">
           {/* Action Feedback Banner */}
           {feedback && (
             <div
               className={`p-3.5 rounded-2xl border flex flex-wrap items-center justify-between gap-3 text-xs font-bold ${
                 feedback.tone === 'success'
-                  ? 'bg-emerald-500/12 border-emerald-400/40 text-emerald-200'
+                  ? 'bg-emerald-500/12 border-emerald-400/45 text-emerald-200'
                   : feedback.tone === 'warning'
-                  ? 'bg-amber-500/12 border-amber-400/40 text-amber-200'
-                  : 'bg-sky-500/12 border-sky-400/40 text-sky-200'
+                  ? 'bg-amber-500/12 border-amber-400/45 text-amber-200'
+                  : 'bg-sky-500/12 border-sky-400/45 text-sky-200'
               }`}
             >
               <span>{feedback.message}</span>
@@ -599,23 +619,37 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                   }}
                   className="min-h-[34px] px-3.5 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-black text-xs inline-flex items-center gap-1.5 shrink-0 transition-colors"
                 >
-                  <span>فتح الحقيبة للارتداء</span>
+                  <span>الانتقال للحقيبة للارتداء</span>
                   <ArrowLeft className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
           )}
 
-          {/* Live Avatar Showcase & Active Loadout Strip */}
-          <div className="p-4 rounded-2xl bg-[#111728] border border-white/10 flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-4 text-right w-full md:w-auto">
-              <div className="relative w-18 h-18 shrink-0 flex items-center justify-center">
+          {/* Royal VIP Live Try-On & Active Loadout Stage */}
+          <div
+            className="p-4 rounded-2xl sm:rounded-3xl border border-amber-400/25 flex flex-col sm:flex-row items-center justify-between gap-4 relative overflow-hidden"
+            style={{
+              background:
+                'linear-gradient(135deg, rgba(24, 19, 10, 0.92) 0%, rgba(13, 19, 36, 0.95) 55%, rgba(9, 13, 25, 0.98) 100%)',
+            }}
+          >
+            <div className="flex items-center gap-3.5 text-right w-full sm:w-auto">
+              {/* Illuminated Avatar + Active/Preview Frame */}
+              <div className="relative w-20 h-20 shrink-0 flex items-center justify-center">
+                <div
+                  className="pointer-events-none absolute inset-1 rounded-full blur-lg opacity-50"
+                  style={{
+                    background:
+                      'radial-gradient(circle, rgba(245, 197, 66, 0.45), transparent 70%)',
+                  }}
+                />
                 <div
                   className={
                     displayedShowcaseFrame?.previewUrl
                       ? 'w-12 h-12 rounded-full overflow-hidden'
                       : `w-14 h-14 rounded-full overflow-hidden p-0.5 border-2 ${
-                          displayedShowcaseFrame ? 'border-amber-400' : 'border-white/15'
+                          displayedShowcaseFrame ? 'border-amber-400' : 'border-amber-300/25'
                         }`
                   }
                 >
@@ -631,7 +665,7 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                     src={displayedShowcaseFrame.previewUrl}
                     alt={displayedShowcaseFrame.nameAr}
                     referrerPolicy="no-referrer"
-                    className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[78px] h-[78px] object-contain z-20"
+                    className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[84px] h-[84px] object-contain z-20"
                   />
                 )}
               </div>
@@ -643,35 +677,31 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                     VIP {currentUser.vipLevel}
                   </span>
                   {section === 'store' && tryOnFrame && (
-                    <span className="text-[11px] text-sky-300 font-bold">
-                      · معاينة مباشرة: {tryOnFrame.nameAr}
+                    <span className="text-[11px] text-amber-200 font-bold">
+                      · تجربة مباشرة: {tryOnFrame.nameAr}
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-slate-400">
+                <div className="text-[11px] sm:text-xs text-slate-300/85">
                   {equippedFrame ? `الإطار: ${equippedFrame.nameAr}` : 'بدون إطار'} ·{' '}
-                  {equippedEntrance ? `الدخولية: ${equippedEntrance.nameAr}` : 'بدون دخولية'} ·{' '}
-                  حظ الهدايا <strong className="text-emerald-400 font-mono">{luckyConfig.winRatePercent}%</strong>
+                  {equippedEntrance ? `الدخولية: ${equippedEntrance.nameAr}` : 'بدون دخولية'}
                 </div>
 
-                {/* Quick Unequip Controls */}
                 {section === 'store' && tryOnFrame ? (
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setTryOnFrame(null)}
-                      className="text-[11px] font-bold text-slate-300 hover:text-white underline underline-offset-4"
-                    >
-                      إنهاء معاينة الإطار والعودة لمظهري الحالي
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTryOnFrame(null)}
+                    className="text-[11px] font-bold text-amber-300 hover:text-amber-200 underline underline-offset-4"
+                  >
+                    إنهاء التجربة والعودة لإطاري الحالي
+                  </button>
                 ) : (
                   (currentUser.activeFrameId ||
                     currentUser.activeEntranceId ||
                     currentUser.activeBadgeId ||
                     currentUser.activeBubbleId ||
                     (currentUser.vipLevel >= 1 && currentUser.activeEntranceId !== '')) && (
-                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                       {currentUser.activeFrameId && (
                         <button
                           type="button"
@@ -723,42 +753,47 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
               </div>
             </div>
 
-            {section === 'store' ? (
-              <button
-                type="button"
-                onClick={() => setSection('backpack')}
-                className="min-h-[40px] px-4 rounded-xl bg-white/6 hover:bg-white/12 border border-white/12 text-xs font-bold text-slate-200 flex items-center gap-2 shrink-0 w-full md:w-auto justify-center transition-colors"
-              >
-                <Backpack className="w-4 h-4 text-amber-400" />
-                <span>عرض مقتنياتي في الحقيبة ({totalOwnedWearablesCount})</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setSection('store')}
-                className="min-h-[40px] px-4 rounded-xl bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/35 text-xs font-black text-amber-300 flex items-center gap-2 shrink-0 w-full md:w-auto justify-center transition-colors"
-              >
-                <ShoppingBag className="w-4 h-4" />
-                <span>شراء عناصر جديدة من المتجر</span>
-              </button>
-            )}
+            <div className="flex items-center justify-between sm:flex-col sm:items-end gap-1.5 w-full sm:w-auto border-t sm:border-t-0 border-amber-400/12 pt-2.5 sm:pt-0 shrink-0">
+              <div className="text-[11px] text-slate-400">
+                مقتنياتك: <strong className="font-mono text-amber-300">{totalOwnedWearablesCount}</strong> · حظ الهدايا{' '}
+                <strong className="font-mono text-emerald-400">{luckyConfig.winRatePercent}%</strong>
+              </div>
+              {section === 'store' ? (
+                <button
+                  type="button"
+                  onClick={() => setSection('backpack')}
+                  className="px-3 py-1.5 rounded-xl bg-white/8 hover:bg-white/14 border border-amber-400/25 text-[11px] font-bold text-amber-200 flex items-center gap-1.5 transition-colors"
+                >
+                  <Backpack className="w-3.5 h-3.5 text-amber-400" />
+                  <span>فتح الحقيبة</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setSection('store')}
+                  className="px-3 py-1.5 rounded-xl bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/35 text-[11px] font-black text-amber-300 flex items-center gap-1.5 transition-colors"
+                >
+                  <ShoppingBag className="w-3.5 h-3.5" />
+                  <span>تسوق الآن</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {/* ========================================================== */}
-          {/* SECTION 1: PROFESSIONAL BOUTIQUE STORE                     */}
+          {/* SECTION 1: ROYAL 2-COLUMN SQUARE LUXURY STORE              */}
           {/* ========================================================== */}
           {section === 'store' && (
             <div className="space-y-4">
-              {/* Store Filters, Search & Sort Toolbar */}
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                {/* Category Tabs */}
+              {/* Category Strip + Search/Sort */}
+              <div className="space-y-2.5">
                 <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 text-xs">
                   {[
                     { id: 'all', label: `الكل (${storeItems.length})` },
                     { id: 'frame', label: `إطارات الصور (${frames.length})` },
-                    { id: 'entrance', label: `دخوليات الغرف (${entrances.length})` },
+                    { id: 'entrance', label: `الدخوليات (${entrances.length})` },
                     { id: 'badge', label: `الأوسمة (${badges.length})` },
-                    { id: 'bubble', label: `فقاعات الدردشة (${bubbles.length})` },
+                    { id: 'bubble', label: `الفقاعات (${bubbles.length})` },
                   ].map((cat) => (
                     <button
                       key={cat.id}
@@ -766,8 +801,8 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                       onClick={() => setStoreCategory(cat.id as typeof storeCategory)}
                       className={`min-h-[38px] px-3.5 rounded-xl font-bold whitespace-nowrap transition-all ${
                         storeCategory === cat.id
-                          ? 'bg-amber-400 text-slate-950 shadow'
-                          : 'bg-[#111728] text-slate-300 hover:text-white border border-white/8'
+                          ? 'bg-gradient-to-r from-[#f7d36a] to-[#eab308] text-slate-950 shadow-md shadow-amber-500/15'
+                          : 'bg-[#101628] text-slate-300 hover:text-amber-200 border border-amber-400/12'
                       }`}
                     >
                       {cat.label}
@@ -775,27 +810,26 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                   ))}
                 </div>
 
-                {/* Search & Price Sort */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <div className="relative flex-1 sm:w-48">
-                    <Search className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <div className="grid grid-cols-12 gap-2">
+                  <div className="relative col-span-7 sm:col-span-8">
+                    <Search className="w-3.5 h-3.5 text-amber-300/70 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <input
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="ابحث في المتجر..."
-                      className="w-full min-h-[38px] rounded-xl bg-[#111728] border border-white/10 pr-8 pl-3 text-xs text-white placeholder:text-slate-500 focus:border-amber-400 focus:outline-none"
+                      placeholder="ابحث عن إطار أو دخولية..."
+                      className="w-full min-h-[38px] rounded-xl bg-[#0e1424] border border-amber-400/15 pr-9 pl-3 text-xs text-white placeholder:text-slate-500 focus:border-amber-400 focus:outline-none"
                     />
                   </div>
-                  <div className="relative">
+                  <div className="relative col-span-5 sm:col-span-4">
                     <ArrowUpDown className="w-3.5 h-3.5 text-amber-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <select
                       value={sortMode}
                       onChange={(e) => setSortMode(e.target.value as SortMode)}
                       aria-label="ترتيب المنتجات"
-                      className="min-h-[38px] rounded-xl bg-[#111728] border border-white/10 pr-8 pl-3 text-xs text-slate-200 focus:border-amber-400 focus:outline-none"
+                      className="w-full min-h-[38px] rounded-xl bg-[#0e1424] border border-amber-400/15 pr-8 pl-2 text-xs text-slate-200 focus:border-amber-400 focus:outline-none"
                     >
-                      <option value="default">الترتيب الافتراضي</option>
+                      <option value="default">الأحدث</option>
                       <option value="price_asc">الأقل سعراً</option>
                       <option value="price_desc">الأعلى سعراً</option>
                     </select>
@@ -803,21 +837,21 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                 </div>
               </div>
 
-              {/* Store Product Grid */}
+              {/* 2-BY-2 SQUARE ROYAL STORE GRID (Always 2 items side-by-side) */}
               {filteredStoreItems.length === 0 ? (
-                <div className="py-12 px-6 rounded-3xl bg-[#0d1220] border border-white/8 text-center space-y-4">
-                  <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-400/10 border border-amber-400/25 flex items-center justify-center text-amber-300">
-                    <ShoppingBag className="w-7 h-7" />
+                <div className="py-12 px-5 rounded-3xl bg-gradient-to-b from-[#0e1424] to-[#080c17] border border-amber-400/15 text-center space-y-4">
+                  <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-300">
+                    <ShoppingBag className="w-8 h-8" />
                   </div>
                   <div className="space-y-1.5 max-w-md mx-auto">
                     <h4 className="text-sm font-black text-white">
                       {storeItems.length === 0
-                        ? 'المتجر جاهز لإضافة عناصر جديدة'
+                        ? 'المتجر الملكي جاهز لاستقبال مقتنياتك'
                         : 'لا توجد نتائج مطابقة للبحث'}
                     </h4>
                     <p className="text-xs text-slate-400 leading-relaxed">
                       {storeItems.length === 0
-                        ? 'ارفع الإطارات أو الدخوليات أو الأوسمة أو الفقاعات من لوحة تحكم المدير لتظهر هنا فوراً بشكل احترافي وجاهز للشراء.'
+                        ? 'ارفع الإطارات أو الدخوليات أو الأوسمة من لوحة المدير لتظهر هنا فوراً لجميع المستخدمين.'
                         : 'جرّب تغيير كلمة البحث أو استعراض كل الأقسام.'}
                     </p>
                   </div>
@@ -828,15 +862,15 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                         onClose();
                         setCurrentView('admin_dashboard');
                       }}
-                      className="min-h-[42px] px-5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs inline-flex items-center gap-2 transition-colors"
+                      className="min-h-[42px] px-5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-black text-xs inline-flex items-center gap-2 transition-all"
                     >
                       <Shield className="w-4 h-4" />
-                      <span>فتح لوحة المدير لإضافة عناصر للمتجر</span>
+                      <span>فتح لوحة المدير لإضافة عناصر</span>
                     </button>
                   )}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 gap-3 sm:gap-4">
                   {filteredStoreItems.map((item) => {
                     const owned = isStoreItemOwned(item.id);
                     const remainingDays = owned ? getRemainingDays(item.id) : 0;
@@ -846,30 +880,36 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                     return (
                       <div
                         key={item.id}
-                        className={`rounded-2xl border overflow-hidden flex flex-col justify-between transition-all ${
+                        className={`group rounded-2xl sm:rounded-3xl border overflow-hidden flex flex-col justify-between transition-all ${
                           owned
-                            ? 'bg-[#12192c] border-emerald-400/35'
+                            ? 'bg-gradient-to-b from-[#111c29] to-[#0a101b] border-emerald-400/45 shadow-[0_0_24px_rgba(16,185,129,0.12)]'
                             : isPreviewingFrame
-                            ? 'bg-[#131b30] border-amber-400/65 shadow-lg shadow-amber-500/10'
-                            : 'bg-[#111726] border-white/10 hover:border-amber-400/35'
+                            ? 'bg-gradient-to-b from-[#1a1829] to-[#0c101d] border-amber-400/80 shadow-[0_0_30px_rgba(245,197,66,0.2)]'
+                            : 'bg-gradient-to-b from-[#12182b] to-[#0a0f1c] border-amber-300/18 hover:border-amber-400/55 hover:shadow-[0_10px_30px_rgba(245,180,45,0.12)]'
                         }`}
                       >
-                        {/* Image-led Boutique Stage (~60% visual weight) */}
+                        {/* Square Royal Boutique Pedestal */}
                         <div
-                          className="relative h-40 flex items-center justify-center overflow-hidden border-b border-white/8"
+                          className="relative aspect-square w-full flex items-center justify-center overflow-hidden border-b border-amber-300/12"
                           style={{
                             background:
-                              'radial-gradient(circle at 50% 42%, rgba(245, 158, 11, 0.13), rgba(7, 10, 18, 0.96) 75%)',
+                              'radial-gradient(circle at 50% 42%, rgba(245, 197, 66, 0.17), rgba(8, 12, 23, 0.97) 73%)',
                           }}
                         >
-                          {renderItemArtwork(item)}
+                          {/* Subtle Luxury Gold Corner Accents */}
+                          <span className="pointer-events-none absolute top-2 right-2 w-3 h-3 border-t border-r border-amber-400/45 rounded-tr-sm" />
+                          <span className="pointer-events-none absolute top-2 left-2 w-3 h-3 border-t border-l border-amber-400/45 rounded-tl-sm" />
+                          <span className="pointer-events-none absolute bottom-2 right-2 w-3 h-3 border-b border-r border-amber-400/45 rounded-br-sm" />
+                          <span className="pointer-events-none absolute bottom-2 left-2 w-3 h-3 border-b border-l border-amber-400/45 rounded-bl-sm" />
 
-                          {/* Live Preview Action */}
+                          {renderSquareArtwork(item)}
+
+                          {/* Try-On / Cinematic Preview Trigger */}
                           {item.type === 'entrance' && (item.videoUrl || item.previewUrl) ? (
                             <button
                               type="button"
                               onClick={() => setPreviewEntrance(item)}
-                              className="absolute bottom-2.5 left-2.5 px-2.5 py-1 rounded-lg bg-black/75 hover:bg-black border border-white/15 text-[11px] font-bold text-amber-300 flex items-center gap-1 transition-colors"
+                              className="absolute bottom-2.5 left-2.5 px-2.5 py-1 rounded-lg bg-black/80 hover:bg-black border border-amber-400/35 text-[10px] sm:text-[11px] font-bold text-amber-300 flex items-center gap-1 transition-colors"
                             >
                               <Play className="w-3 h-3" />
                               <span>معاينة</span>
@@ -880,93 +920,86 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                               onClick={() =>
                                 setTryOnFrame((prev) => (prev?.id === item.id ? null : item))
                               }
-                              className={`absolute bottom-2.5 left-2.5 px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition-colors ${
+                              className={`absolute bottom-2.5 left-2.5 px-2.5 py-1 rounded-lg border text-[10px] sm:text-[11px] font-bold flex items-center gap-1 transition-colors ${
                                 isPreviewingFrame
                                   ? 'bg-amber-400 text-slate-950 border-amber-300'
-                                  : 'bg-black/75 hover:bg-black text-slate-200 border-white/15'
+                                  : 'bg-black/80 hover:bg-black text-amber-200 border-amber-400/30'
                               }`}
                             >
                               <Eye className="w-3 h-3" />
-                              <span>{isPreviewingFrame ? 'قيد المعاينة' : 'تجربة'}</span>
+                              <span>{isPreviewingFrame ? 'مُجرّب' : 'تجربة'}</span>
                             </button>
                           ) : null}
 
                           {owned && (
-                            <div className="absolute top-2.5 right-2.5 flex items-center gap-1 text-[11px] font-black text-emerald-300 bg-black/75 px-2.5 py-1 rounded-lg border border-emerald-400/35">
-                              <Check className="w-3.5 h-3.5" />
-                              <span>في الحقيبة</span>
+                            <div className="absolute top-2.5 right-2.5 flex items-center gap-1 text-[10px] sm:text-[11px] font-black text-emerald-300 bg-black/80 px-2 py-0.5 rounded-lg border border-emerald-400/40">
+                              <Check className="w-3 h-3" />
+                              <span>بالحقيبة</span>
                             </div>
                           )}
                         </div>
 
-                        {/* Clean Unboxed Metadata & Purchase Controls */}
-                        <div className="p-4 flex-1 flex flex-col justify-between gap-3.5">
+                        {/* Refined Royal Metadata & Price Footer */}
+                        <div className="p-3 sm:p-4 flex-1 flex flex-col justify-between gap-2.5">
                           <div className="space-y-1 text-right">
-                            <div className="text-[11px] text-slate-400 flex items-center justify-between gap-2">
-                              <span>
+                            <div className="text-[10px] sm:text-[11px] text-amber-200/75 flex items-center justify-between gap-1">
+                              <span className="truncate">
                                 {TYPE_LABELS[item.type]} · {item.durationDays} يوم
                               </span>
                               {owned && (
-                                <span className="font-mono tabular-nums text-emerald-300">
-                                  متبقي {remainingDays} يوم
+                                <span className="font-mono tabular-nums text-emerald-300 shrink-0">
+                                  {remainingDays}ي
                                 </span>
                               )}
                             </div>
-                            <h4 className="font-black text-sm text-white truncate">
+                            <h4 className="font-black text-xs sm:text-sm text-white truncate">
                               {item.nameAr}
                             </h4>
-                            <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
-                              {item.descriptionAr}
-                            </p>
                           </div>
 
-                          <div className="pt-3 border-t border-white/8 space-y-2.5">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="flex items-center gap-1.5 font-mono tabular-nums font-black text-sm text-amber-300">
-                                <Coins className="w-4 h-4 text-amber-400 shrink-0" />
+                          <div className="pt-2 border-t border-amber-400/12 space-y-2">
+                            <div className="flex items-center justify-between gap-1">
+                              <div className="flex items-center gap-1 font-mono tabular-nums font-black text-xs sm:text-sm text-amber-300">
+                                <Coins className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
                                 <span>{item.priceCoins.toLocaleString('en-US')}</span>
-                                <span className="text-[11px] font-tajawal font-semibold text-amber-300/80">
-                                  عملة
-                                </span>
                               </div>
                               {!canAfford && !owned && (
-                                <span className="text-[11px] font-bold text-rose-300">
-                                  رصيد غير كافٍ
+                                <span className="text-[10px] font-bold text-rose-300">
+                                  اشحن
                                 </span>
                               )}
                             </div>
 
                             {owned ? (
-                              <div className="grid grid-cols-12 gap-2">
+                              <div className="grid grid-cols-12 gap-1.5">
                                 <button
                                   type="button"
                                   onClick={() => {
                                     setBackpackTab(TYPE_TO_BAG_TAB[item.type]);
                                     setSection('backpack');
                                   }}
-                                  className="col-span-8 min-h-[40px] rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/40 text-emerald-200 font-black text-xs flex items-center justify-center gap-1.5 transition-colors"
+                                  className="col-span-8 min-h-[38px] rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/45 text-emerald-200 font-black text-[10px] sm:text-xs flex items-center justify-center gap-1 transition-colors"
                                 >
-                                  <Backpack className="w-3.5 h-3.5" />
-                                  <span>الارتداء من الحقيبة</span>
+                                  <Backpack className="w-3.5 h-3.5 shrink-0" />
+                                  <span className="truncate">للحقيبة</span>
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => handleBuyStoreItem(item)}
                                   title={`تمديد +${item.durationDays} يوم`}
-                                  className="col-span-4 min-h-[40px] rounded-xl bg-white/8 hover:bg-white/14 border border-white/12 text-slate-200 font-bold text-xs flex items-center justify-center gap-1 transition-colors"
+                                  className="col-span-4 min-h-[38px] rounded-xl bg-white/8 hover:bg-white/14 border border-white/12 text-amber-200 font-bold text-[10px] sm:text-xs flex items-center justify-center transition-colors"
                                 >
-                                  <RefreshCw className="w-3 h-3" />
-                                  <span>تمديد</span>
+                                  <RefreshCw className="w-3.5 h-3.5" />
                                 </button>
                               </div>
                             ) : (
                               <button
                                 type="button"
                                 onClick={() => handleBuyStoreItem(item)}
-                                className="w-full min-h-[42px] rounded-xl bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 hover:brightness-105 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-md shadow-amber-500/15 transition-all"
+                                className="w-full min-h-[38px] sm:min-h-[42px] rounded-xl bg-gradient-to-r from-[#f7d36a] via-[#eab308] to-[#d97706] hover:brightness-105 text-slate-950 font-black text-[11px] sm:text-xs flex items-center justify-center gap-1.5 shadow-md shadow-amber-500/20 transition-all"
                               >
-                                <ShoppingBag className="w-3.5 h-3.5" />
-                                <span>شراء ونقل للحقيبة</span>
+                                <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
+                                <span>شراء للحقيبة</span>
                               </button>
                             )}
                           </div>
@@ -991,7 +1024,7 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                   { id: 'entrances', label: `دخولياتي (${ownedEntrances.length})` },
                   { id: 'badges', label: `أوسمتي (${ownedBadges.length})` },
                   { id: 'bubbles', label: `فقاعاتي (${ownedBubbles.length})` },
-                  { id: 'lucky_bag', label: `هدايا الحظ والحقيبة (${totalBagGiftsCount})` },
+                  { id: 'lucky_bag', label: `هدايا الحظ (${totalBagGiftsCount})` },
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -999,8 +1032,8 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                     onClick={() => setBackpackTab(tab.id as BackpackCategory)}
                     className={`min-h-[38px] px-3.5 rounded-xl font-bold whitespace-nowrap transition-all ${
                       backpackTab === tab.id
-                        ? 'bg-amber-400 text-slate-950 shadow'
-                        : 'bg-[#111728] text-slate-300 hover:text-white border border-white/8'
+                        ? 'bg-gradient-to-r from-[#f7d36a] to-[#eab308] text-slate-950 shadow-md shadow-amber-500/15'
+                        : 'bg-[#101628] text-slate-300 hover:text-amber-200 border border-amber-400/12'
                     }`}
                   >
                     {tab.label}
@@ -1008,16 +1041,16 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                 ))}
               </div>
 
-              {/* Owned Frames */}
+              {/* Owned Frames (2-Column Square Grid) */}
               {backpackTab === 'frames' &&
                 renderOwnedCategoryGrid(
                   ownedFrames,
                   'لا تملك أي إطارات في حقيبتك حالياً',
-                  'اشترِ إطار الصورة المفضل لديك من المتجر لينتقل فوراً إلى حقيبتك، وبعدها يمكنك ارتداؤه وإزالته في أي وقت.',
+                  'اشترِ إطارك الملكي من المتجر لينتقل فوراً إلى حقيبتك، وتستطيع ارتداءه أو إزالته في أي وقت.',
                   'frame'
                 )}
 
-              {/* Owned Entrances */}
+              {/* Owned Entrances (2-Column Square Grid) */}
               {backpackTab === 'entrances' && (
                 <div className="space-y-4">
                   {currentUser.vipLevel >= 1 &&
@@ -1040,13 +1073,13 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                   {renderOwnedCategoryGrid(
                     ownedEntrances,
                     'لا تملك أي دخوليات في حقيبتك حالياً',
-                    'اشترِ دخولية غرفة ملكية من المتجر لتنتقل إلى حقيبتك وتتحكم في ارتدائها وإزالتها.',
+                    'اشترِ دخولية غرفة فاخرة من المتجر لتنتقل إلى حقيبتك وتتحكم في ارتدائها وإزالتها.',
                     'entrance'
                   )}
                 </div>
               )}
 
-              {/* Owned Badges */}
+              {/* Owned Badges (2-Column Square Grid) */}
               {backpackTab === 'badges' &&
                 renderOwnedCategoryGrid(
                   ownedBadges,
@@ -1055,12 +1088,12 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                   'badge'
                 )}
 
-              {/* Owned Bubbles */}
+              {/* Owned Bubbles (2-Column Square Grid) */}
               {backpackTab === 'bubbles' &&
                 renderOwnedCategoryGrid(
                   ownedBubbles,
                   'لا تملك أي فقاعات دردشة في حقيبتك حالياً',
-                  'اشترِ فقاعات الدردشة المميزة من المتجر لتنتقل إلى حقيبتك وتستخدمها في الغرف.',
+                  'اشترِ فقاعات الدردشة الفاخرة من المتجر لتنتقل إلى حقيبتك وتستخدمها في الغرف.',
                   'bubble'
                 )}
 
@@ -1091,48 +1124,48 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                   </div>
 
                   {ownedBagGiftEntries.length === 0 ? (
-                    <div className="p-10 rounded-3xl bg-[#0d1220] border border-white/8 text-center space-y-3">
+                    <div className="p-10 rounded-3xl bg-[#0d1220] border border-amber-400/12 text-center space-y-3">
                       <div className="text-4xl">🎒</div>
                       <p className="text-xs text-slate-300">
                         لا توجد هدايا في حقيبتك حالياً — يمكنك الحصول عليها من صاروخ الغرفة أو كيس الحظ.
                       </p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                    <div className="grid grid-cols-2 gap-3 sm:gap-4">
                       {ownedBagGiftEntries.map(({ gift, count }) => {
                         const isLucky = gift.isLucky || gift.category === 'lucky';
                         return (
                           <div
                             key={gift.id}
-                            className={`p-4 rounded-2xl border flex flex-col justify-between gap-3 ${
+                            className={`p-3.5 sm:p-4 rounded-2xl border flex flex-col justify-between gap-3 ${
                               isLucky
                                 ? 'bg-gradient-to-br from-[#231229] to-[#121626] border-pink-400/35'
-                                : 'bg-[#111726] border-white/10'
+                                : 'bg-[#111726] border-amber-400/15'
                             }`}
                           >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="flex items-center gap-3 min-w-0">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center gap-2.5 min-w-0">
                                 {gift.imageUrl ? (
                                   <img
                                     src={gift.imageUrl}
                                     alt={gift.nameAr}
                                     referrerPolicy="no-referrer"
-                                    className="w-12 h-12 rounded-xl object-cover border border-white/15 shrink-0"
+                                    className="w-11 h-11 rounded-xl object-cover border border-white/15 shrink-0"
                                   />
                                 ) : (
-                                  <div className="w-12 h-12 rounded-xl bg-white/8 flex items-center justify-center text-3xl shrink-0">
+                                  <div className="w-11 h-11 rounded-xl bg-white/8 flex items-center justify-center text-2xl shrink-0">
                                     {gift.icon}
                                   </div>
                                 )}
                                 <div className="min-w-0 text-right">
-                                  <div className="text-sm font-bold text-white truncate">
+                                  <div className="text-xs sm:text-sm font-bold text-white truncate">
                                     {gift.nameAr}
                                   </div>
-                                  <div className="text-[11px] text-slate-400 flex items-center gap-1.5 mt-0.5">
+                                  <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
                                     {isLucky && (
                                       <span className="text-pink-300 font-semibold flex items-center gap-0.5">
                                         <Sparkles className="w-3 h-3" />
-                                        هدية حظ
+                                        حظ
                                       </span>
                                     )}
                                     {(gift.videoUrl || gift.imageUrl) && (
@@ -1150,24 +1183,20 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                               </span>
                             </div>
 
-                            <p className="text-[11px] text-slate-400 leading-relaxed">
-                              {gift.descriptionAr}
-                            </p>
-
                             <button
                               type="button"
                               onClick={() => handleUseBagGiftInRoom(gift.id, count)}
-                              className="w-full min-h-[40px] rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 transition-colors"
+                              className="w-full min-h-[38px] rounded-xl bg-gradient-to-r from-[#f7d36a] to-[#eab308] hover:brightness-105 text-slate-950 font-black text-[11px] sm:text-xs flex items-center justify-center gap-1.5 transition-all"
                             >
                               {activeRoom ? (
                                 <>
                                   <Send className="w-3.5 h-3.5 rtl:rotate-180" />
-                                  <span>إرسال ×{Math.min(count, selectedBagCount)} في الغرفة</span>
+                                  <span>إرسال ×{Math.min(count, selectedBagCount)}</span>
                                 </>
                               ) : (
                                 <>
                                   <Radio className="w-3.5 h-3.5" />
-                                  <span>دخول الغرفة لاستخدام الهدية</span>
+                                  <span>دخول الغرفة</span>
                                 </>
                               )}
                             </button>
@@ -1186,21 +1215,21 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
       {/* Fullscreen Store Entrance Effect Preview Overlay */}
       {previewEntrance && (
         <div
-          className="fixed inset-0 z-[60] bg-black/85 backdrop-blur-md flex items-center justify-center p-4"
+          className="fixed inset-0 z-[60] bg-black/88 backdrop-blur-md flex items-center justify-center p-4"
           onClick={(e) => {
             e.stopPropagation();
             setPreviewEntrance(null);
           }}
         >
           <div
-            className="relative w-full max-w-sm aspect-[9/16] max-h-[82dvh] rounded-3xl overflow-hidden bg-[#0a0e1a] border border-amber-400/50 shadow-2xl flex flex-col items-center justify-center"
+            className="relative w-full max-w-sm aspect-[9/16] max-h-[82dvh] rounded-3xl overflow-hidden bg-[#0a0e1a] border border-amber-400/60 shadow-2xl flex flex-col items-center justify-center"
             onClick={(e) => e.stopPropagation()}
           >
             <button
               type="button"
               onClick={() => setPreviewEntrance(null)}
               aria-label="إغلاق المعاينة"
-              className="absolute top-3 left-3 z-30 w-9 h-9 rounded-full bg-black/65 text-white flex items-center justify-center"
+              className="absolute top-3 left-3 z-30 w-9 h-9 rounded-full bg-black/70 border border-white/15 text-white flex items-center justify-center"
             >
               <X className="w-5 h-5" />
             </button>
@@ -1220,7 +1249,7 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
               }
               return <span className="text-7xl animate-bounce">{previewEntrance.icon}</span>;
             })()}
-            <div className="relative z-20 mt-auto mb-8 px-4 py-2.5 rounded-2xl bg-gradient-to-r from-[#1d1408]/95 via-[#31210d]/95 to-[#1d1408]/95 border border-amber-400/60 flex items-center gap-3 shadow-2xl">
+            <div className="relative z-20 mt-auto mb-8 px-4 py-2.5 rounded-2xl bg-gradient-to-r from-[#1d1408]/95 via-[#31210d]/95 to-[#1d1408]/95 border border-amber-400/65 flex items-center gap-3 shadow-2xl">
               <img
                 src={currentUser.avatar}
                 alt={currentUser.displayName}
