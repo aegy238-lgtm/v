@@ -2657,8 +2657,8 @@ export const AdminDashboard: React.FC = () => {
                               {parsedAgoraToken.serviceLabel}
                             </span>
                             {!parsedAgoraToken.isRtcToken && (
-                              <span className="text-rose-300 block mt-0.5">
-                                ملاحظة: هذا توكن شات/تطبيق وليس RTC Voice Token — تم استخراج App ID وتفعيله للعمل بوضع Testing Mode (App ID فقط)، أو أضف RTC Token / App Certificate للوضع المحمي.
+                              <span className="text-rose-300 block mt-0.5 leading-relaxed">
+                                تنبيه هام: التوكن الذي أنشأته هو توكن محادثات نصية (Chat App Token) وليس توكن صوت (RTC Voice Token). لتشغيل الصوت في الغرف: افتح مشروعك في console.agora.io ← Config ← عطّل Primary Certificate (وضع Testing Mode: APP ID only)، أو أنشئ توكن من قسم Temp Token for Audio/Video Call وأدخل اسم القناة مثل auravoice_room_tyy.
                               </span>
                             )}
                           </div>

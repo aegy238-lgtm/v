@@ -14,6 +14,7 @@ import {
 import {
   auth,
   db,
+  firebaseConfig,
   handleFirestoreError,
   OperationType,
   stripUndefinedForFirestore,
@@ -22,6 +23,7 @@ import {
   Agency,
   AgoraVoiceConfig,
   GiftItem,
+  GlobalJackpotBannerState,
   LuckyGiftConfig,
   RechargeAgent,
   RoomBackground,
@@ -83,6 +85,7 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
   transactions: Transaction[];
   luckyConfig: LuckyGiftConfig;
   bagGifts: Record<string, number>;
+  agoraConfig?: AgoraVoiceConfig;
 }): Promise<boolean> {
   if (!auth.currentUser) return false;
 
@@ -95,116 +98,148 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
       return true;
     }
 
-    const batch = writeBatch(db);
+    const memberBatch = writeBatch(db);
+    let hasMemberOps = false;
     const nowIso = new Date().toISOString();
 
     if (usersSnap.empty) {
       seed.users.forEach((u) => {
-        batch.set(
+        memberBatch.set(
           doc(db, COLLECTIONS.users, u.id),
           stripUndefinedForFirestore({ ...u, updatedAt: nowIso }),
           { merge: true }
         );
+        hasMemberOps = true;
       });
     }
 
     if (roomsSnap.empty) {
       seed.rooms.forEach((r) => {
-        batch.set(
+        memberBatch.set(
           doc(db, COLLECTIONS.rooms, r.id),
           stripUndefinedForFirestore({ ...r, updatedAt: nowIso }),
           { merge: true }
         );
+        hasMemberOps = true;
       });
     }
 
-    if (giftsSnap.empty) {
-      seed.gifts.forEach((g) => {
-        batch.set(
-          doc(db, COLLECTIONS.gifts, g.id),
-          stripUndefinedForFirestore({ ...g, updatedAt: nowIso }),
+    if (hasMemberOps) {
+      memberBatch.set(
+        doc(db, COLLECTIONS.config, 'bag_gifts'),
+        stripUndefinedForFirestore({ items: seed.bagGifts, updatedAt: nowIso }),
+        { merge: true }
+      );
+      await memberBatch.commit();
+    }
+
+    // Seed admin-controlled catalogs & configs independently so non-admin logins never block member bootstrap
+    try {
+      const adminBatch = writeBatch(db);
+      let hasAdminOps = false;
+
+      if (giftsSnap.empty) {
+        seed.gifts.forEach((g) => {
+          adminBatch.set(
+            doc(db, COLLECTIONS.gifts, g.id),
+            stripUndefinedForFirestore({ ...g, updatedAt: nowIso }),
+            { merge: true }
+          );
+          hasAdminOps = true;
+        });
+      }
+
+      const storeSnap = await getDocs(query(collection(db, COLLECTIONS.storeItems), limit(1)));
+      if (storeSnap.empty) {
+        seed.storeItems.forEach((item) => {
+          adminBatch.set(
+            doc(db, COLLECTIONS.storeItems, item.id),
+            stripUndefinedForFirestore({ ...item, updatedAt: nowIso }),
+            { merge: true }
+          );
+          hasAdminOps = true;
+        });
+      }
+
+      const agenciesSnap = await getDocs(query(collection(db, COLLECTIONS.agencies), limit(1)));
+      if (agenciesSnap.empty) {
+        seed.agencies.forEach((ag) => {
+          adminBatch.set(
+            doc(db, COLLECTIONS.agencies, ag.id),
+            stripUndefinedForFirestore({ ...ag, updatedAt: nowIso }),
+            { merge: true }
+          );
+          hasAdminOps = true;
+        });
+      }
+
+      const agentsSnap = await getDocs(query(collection(db, COLLECTIONS.agents), limit(1)));
+      if (agentsSnap.empty) {
+        seed.agents.forEach((agent) => {
+          adminBatch.set(
+            doc(db, COLLECTIONS.agents, agent.id),
+            stripUndefinedForFirestore({ ...agent, updatedAt: nowIso }),
+            { merge: true }
+          );
+          hasAdminOps = true;
+        });
+      }
+
+      const staffSnap = await getDocs(query(collection(db, COLLECTIONS.staff), limit(1)));
+      if (staffSnap.empty) {
+        seed.staff.forEach((member) => {
+          adminBatch.set(
+            doc(db, COLLECTIONS.staff, member.id),
+            stripUndefinedForFirestore({ ...member, updatedAt: nowIso }),
+            { merge: true }
+          );
+          hasAdminOps = true;
+        });
+      }
+
+      const txSnap = await getDocs(query(collection(db, COLLECTIONS.transactions), limit(1)));
+      if (txSnap.empty) {
+        seed.transactions.slice(0, 50).forEach((tx) => {
+          adminBatch.set(
+            doc(db, COLLECTIONS.transactions, tx.id),
+            stripUndefinedForFirestore({ ...tx, updatedAt: nowIso }),
+            { merge: true }
+          );
+          hasAdminOps = true;
+        });
+      }
+
+      adminBatch.set(
+        doc(db, COLLECTIONS.config, 'lucky'),
+        stripUndefinedForFirestore({ ...seed.luckyConfig, updatedAt: nowIso }),
+        { merge: true }
+      );
+      hasAdminOps = true;
+
+      if (seed.agoraConfig?.appId) {
+        adminBatch.set(
+          doc(db, COLLECTIONS.config, 'agora'),
+          stripUndefinedForFirestore({ ...seed.agoraConfig, updatedAt: nowIso }),
           { merge: true }
         );
-      });
+      }
+
+      if (hasAdminOps) {
+        await adminBatch.commit();
+      }
+    } catch (adminSeedErr) {
+      console.warn('AuraVoice admin catalog bootstrap notice:', adminSeedErr);
     }
 
-    const storeSnap = await getDocs(query(collection(db, COLLECTIONS.storeItems), limit(1)));
-    if (storeSnap.empty) {
-      seed.storeItems.forEach((item) => {
-        batch.set(
-          doc(db, COLLECTIONS.storeItems, item.id),
-          stripUndefinedForFirestore({ ...item, updatedAt: nowIso }),
-          { merge: true }
-        );
-      });
-    }
-
-    const agenciesSnap = await getDocs(query(collection(db, COLLECTIONS.agencies), limit(1)));
-    if (agenciesSnap.empty) {
-      seed.agencies.forEach((ag) => {
-        batch.set(
-          doc(db, COLLECTIONS.agencies, ag.id),
-          stripUndefinedForFirestore({ ...ag, updatedAt: nowIso }),
-          { merge: true }
-        );
-      });
-    }
-
-    const agentsSnap = await getDocs(query(collection(db, COLLECTIONS.agents), limit(1)));
-    if (agentsSnap.empty) {
-      seed.agents.forEach((agent) => {
-        batch.set(
-          doc(db, COLLECTIONS.agents, agent.id),
-          stripUndefinedForFirestore({ ...agent, updatedAt: nowIso }),
-          { merge: true }
-        );
-      });
-    }
-
-    const staffSnap = await getDocs(query(collection(db, COLLECTIONS.staff), limit(1)));
-    if (staffSnap.empty) {
-      seed.staff.forEach((member) => {
-        batch.set(
-          doc(db, COLLECTIONS.staff, member.id),
-          stripUndefinedForFirestore({ ...member, updatedAt: nowIso }),
-          { merge: true }
-        );
-      });
-    }
-
-    const txSnap = await getDocs(query(collection(db, COLLECTIONS.transactions), limit(1)));
-    if (txSnap.empty) {
-      seed.transactions.slice(0, 50).forEach((tx) => {
-        batch.set(
-          doc(db, COLLECTIONS.transactions, tx.id),
-          stripUndefinedForFirestore({ ...tx, updatedAt: nowIso }),
-          { merge: true }
-        );
-      });
-    }
-
-    batch.set(
-      doc(db, COLLECTIONS.config, 'lucky'),
-      stripUndefinedForFirestore({ ...seed.luckyConfig, updatedAt: nowIso }),
-      { merge: true }
-    );
-    batch.set(
-      doc(db, COLLECTIONS.config, 'bag_gifts'),
-      stripUndefinedForFirestore({ items: seed.bagGifts, updatedAt: nowIso }),
-      { merge: true }
-    );
-
-    await batch.commit();
     return true;
   } catch (error) {
-    // Non-admin users may not have write permissions on admin-only catalogs during bootstrap; log cleanly
     console.warn('AuraVoice Firestore bootstrap notice:', error);
     return false;
   }
 }
 
 /**
- * Full manual/automatic push of all AuraVoice VIP state into Firestore (shosho-chat-3e571).
+ * Full manual/automatic push of all AuraVoice VIP state into Firestore.
  */
 export async function syncAllAuraVoiceToFirestore(data: {
   users: User[];
@@ -218,6 +253,7 @@ export async function syncAllAuraVoiceToFirestore(data: {
   transactions: Transaction[];
   luckyConfig: LuckyGiftConfig;
   bagGifts: Record<string, number>;
+  agoraConfig?: AgoraVoiceConfig;
 }): Promise<{ success: boolean; count: number; message: string }> {
   if (!auth.currentUser) {
     return {
@@ -325,11 +361,20 @@ export async function syncAllAuraVoiceToFirestore(data: {
     );
     count += 2;
 
+    if (data.agoraConfig?.appId) {
+      batch.set(
+        doc(db, COLLECTIONS.config, 'agora'),
+        stripUndefinedForFirestore({ ...data.agoraConfig, updatedAt: nowIso }),
+        { merge: true }
+      );
+      count += 1;
+    }
+
     await batch.commit();
     return {
       success: true,
       count,
-      message: `تمت مزامنة ${count} سجل بنجاح مع قاعدة بيانات shosho-chat-3e571.`,
+      message: `تمت مزامنة ${count} سجل بنجاح مع قاعدة بيانات ${firebaseConfig.projectId}.`,
     };
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, COLLECTIONS.rooms);
@@ -347,6 +392,7 @@ export function subscribeToPublicAuraCollections(handlers: {
   onAgencies: (agencies: Agency[]) => void;
   onLuckyConfig: (cfg: LuckyGiftConfig) => void;
   onAgoraConfig?: (cfg: AgoraVoiceConfig) => void;
+  onJackpotBanner?: (banner: GlobalJackpotBannerState) => void;
 }): () => void {
   const unsubRooms = onSnapshot(
     collection(db, COLLECTIONS.rooms),
@@ -439,6 +485,19 @@ export function subscribeToPublicAuraCollections(handlers: {
     (error) => handleFirestoreError(error, OperationType.GET, `${COLLECTIONS.config}/agora`)
   );
 
+  const unsubJackpot = onSnapshot(
+    doc(db, COLLECTIONS.config, 'jackpot'),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as GlobalJackpotBannerState;
+        if (data?.id && typeof data.createdAt === 'number' && Date.now() - data.createdAt < 10000) {
+          handlers.onJackpotBanner?.(data);
+        }
+      }
+    },
+    (error) => handleFirestoreError(error, OperationType.GET, `${COLLECTIONS.config}/jackpot`)
+  );
+
   return () => {
     unsubRooms();
     unsubRoomBgs();
@@ -447,6 +506,7 @@ export function subscribeToPublicAuraCollections(handlers: {
     unsubAgencies();
     unsubLucky();
     unsubAgora();
+    unsubJackpot();
   };
 }
 
@@ -757,6 +817,20 @@ export async function persistAgoraConfig(cfg: AgoraVoiceConfig): Promise<void> {
     await setDoc(
       doc(db, COLLECTIONS.config, 'agora'),
       stripUndefinedForFirestore({ ...cfg, updatedAt: new Date().toISOString() }),
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function persistJackpotBanner(banner: GlobalJackpotBannerState): Promise<void> {
+  if (!auth.currentUser) return;
+  const path = `${COLLECTIONS.config}/jackpot`;
+  try {
+    await setDoc(
+      doc(db, COLLECTIONS.config, 'jackpot'),
+      stripUndefinedForFirestore({ ...banner, updatedAt: new Date().toISOString() }),
       { merge: true }
     );
   } catch (error) {

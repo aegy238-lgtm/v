@@ -29,6 +29,7 @@ service cloud.firestore {
     function isAdmin() {
       return isSignedIn() && (
         (request.auth.token.email_verified == true && (
+          request.auth.token.email == 'iejehdgdig@gmail.com' ||
           request.auth.token.email == 'hhsiggidfhkgogfc@gmail.com' ||
           request.auth.token.email == 'uhbijnokmpl098900@gmail.com'
         )) ||
@@ -185,7 +186,9 @@ service cloud.firestore {
     function isValidAuraConfig(data) {
       return data is map &&
         (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64)) &&
-        (!('winRatePercent' in data) || (data.winRatePercent is number && data.winRatePercent >= 0 && data.winRatePercent <= 100));
+        (!('winRatePercent' in data) || (data.winRatePercent is number && data.winRatePercent >= 0 && data.winRatePercent <= 100)) &&
+        (!('appId' in data) || (data.appId is string && data.appId.size() <= 64)) &&
+        (!('rtcToken' in data) || (data.rtcToken is string && data.rtcToken.size() <= 2048));
     }
 
     function isValidPlatformUser(data) {

@@ -57,6 +57,7 @@ import {
   persistAuraTransaction,
   persistAuraUser,
   persistBagGifts,
+  persistJackpotBanner,
   persistLuckyConfig,
   persistAgoraConfig,
   persistRoomMessage,
@@ -411,6 +412,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Global 3-Second Jackpot Ticker Banner across entire app & all rooms
   const [globalJackpotBanner, setGlobalJackpotBanner] = useState<GlobalJackpotBannerState | null>(null);
   const jackpotTimerRef = React.useRef<number | null>(null);
+  const lastJackpotIdRef = React.useRef<string | null>(null);
 
   // Modals
   const [activeModal, setActiveModal] = useState<'none' | 'wallet' | 'vip' | 'store' | 'backpack' | 'games' | 'agency' | 'profile' | 'create_room' | 'messages'>('none');
@@ -621,6 +623,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const applied = agoraVoice.setConfig(remoteAgora, true);
         setAgoraConfig(applied);
       },
+      onJackpotBanner: (remoteBanner) => {
+        if (lastJackpotIdRef.current === remoteBanner.id) return;
+        lastJackpotIdRef.current = remoteBanner.id;
+        if (jackpotTimerRef.current) {
+          window.clearTimeout(jackpotTimerRef.current);
+        }
+        sound.playLuckySplashJackpot();
+        setGlobalJackpotBanner(remoteBanner);
+        jackpotTimerRef.current = window.setTimeout(() => {
+          setGlobalJackpotBanner(null);
+          jackpotTimerRef.current = null;
+        }, 3000);
+      },
     });
     return () => {
       unsubPublic();
@@ -647,6 +662,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           transactions,
           luckyConfig,
           bagGifts,
+          agoraConfig,
         }).catch(() => {});
       }
       if (cancelled) return;
@@ -872,6 +888,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         transactions,
         luckyConfig,
         bagGifts,
+        agoraConfig,
       });
       setCloudMessage(res.message);
     } catch (err: any) {
@@ -932,15 +949,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     payload: Omit<GlobalJackpotBannerState, 'id' | 'createdAt'>
   ) => {
     const now = Date.now();
+    const banner: GlobalJackpotBannerState = {
+      ...payload,
+      id: `jackpot_${now}_${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: now,
+    };
+    lastJackpotIdRef.current = banner.id;
     if (jackpotTimerRef.current) {
       window.clearTimeout(jackpotTimerRef.current);
     }
     sound.playLuckySplashJackpot();
-    setGlobalJackpotBanner({
-      ...payload,
-      id: `jackpot_${now}_${Math.random()}`,
-      createdAt: now,
-    });
+    setGlobalJackpotBanner(banner);
+    void persistJackpotBanner(banner).catch(() => {});
     jackpotTimerRef.current = window.setTimeout(() => {
       setGlobalJackpotBanner(null);
       jackpotTimerRef.current = null;
