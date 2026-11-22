@@ -57,8 +57,9 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          globIgnores: ['**/AgoraRTC*', '**/AdminDashboard*', '**/assets/aistudio/**'],
           navigateFallbackDenylist: [/^\/api\//, /^\/ws\//],
-          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+          maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -103,14 +104,32 @@ export default defineConfig(() => {
     },
     build: {
       target: 'es2020',
+      minify: true,
       cssMinify: true,
+      cssCodeSplit: true,
       sourcemap: false,
+      assetsInlineLimit: 4096,
+      chunkSizeWarningLimit: 650,
       rolldownOptions: {
         output: {
           manualChunks(id) {
-            if (id.includes('node_modules/firebase')) return 'firebase';
+            if (id.includes('node_modules/@firebase/firestore') || id.includes('node_modules/firebase/firestore')) {
+              return 'firebase-db';
+            }
+            if (id.includes('node_modules/@firebase/auth') || id.includes('node_modules/firebase/auth')) {
+              return 'firebase-auth';
+            }
+            if (id.includes('node_modules/firebase') || id.includes('node_modules/@firebase')) {
+              return 'firebase-core';
+            }
             if (id.includes('node_modules/lucide-react')) return 'icons';
-            if (id.includes('node_modules/react')) return 'react-vendor';
+            if (
+              id.includes('node_modules/react/') ||
+              id.includes('node_modules/react-dom/') ||
+              id.includes('node_modules/scheduler/')
+            ) {
+              return 'react-vendor';
+            }
           },
         },
       },

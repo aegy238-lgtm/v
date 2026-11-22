@@ -22,6 +22,7 @@ const ADMIN_ALLOWLIST_EMAILS = new Set([
   "iejehdgdig@gmail.com",
   "hhsiggidfhkgogfc@gmail.com",
   "uhbijnokmpl098900@gmail.com",
+  (process.env.VITE_ADMIN_EMAIL || "aegy238@gmail.com").trim().toLowerCase(),
 ]);
 
 function readFirebaseWebApiKey(): string {
@@ -949,8 +950,14 @@ async function startServer() {
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
+    const disableHmr = process.env.DISABLE_HMR === "true";
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+        ws: disableHmr ? false : { server },
+        hmr: !disableHmr,
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
