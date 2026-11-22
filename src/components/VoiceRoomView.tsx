@@ -1723,9 +1723,9 @@ export const VoiceRoomView: React.FC = () => {
                 isOccupied &&
                 !seat.isMuted &&
                 (seat.userId === currentUser.id && agoraLiveMicActive
-                  ? (liveAgoraLevel ?? 0) > 8
+                  ? (liveAgoraLevel ?? 0) > 4
                   : liveAgoraLevel !== undefined
-                  ? liveAgoraLevel > 8
+                  ? liveAgoraLevel > 4
                   : seat.isSpeaking);
               const seatUserProfile = seat.userId
                 ? users.find((u) => u.id === seat.userId)
@@ -2252,8 +2252,12 @@ export const VoiceRoomView: React.FC = () => {
                   onClick={() => {
                     const nextMuted = !isRoomSoundMuted;
                     setIsRoomSoundMuted(nextMuted);
+                    agoraVoice.setRemoteAudioMuted(nextMuted);
                     if (nextMuted) {
                       sound.stopAllCustomAudio();
+                    } else {
+                      sound.unlockAudio();
+                      agoraVoice.resumeRemoteAudio();
                     }
                   }}
                   className="w-11 h-11 rounded-xl bg-white/8 hover:bg-white/12 border border-white/10 flex items-center justify-center text-slate-200 transition-colors"

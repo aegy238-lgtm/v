@@ -6,7 +6,7 @@ import type {
   IAgoraRTCRemoteUser,
 } from 'agora-rtc-sdk-ng';
 
-const DEFAULT_AGORA_APP_ID = '14ba16e76eb14104b4bc0657bb032137';
+const DEFAULT_AGORA_APP_ID = 'c7f17271e84547f286458e2040a38429';
 
 export function getAgoraAppId(): string {
   const envId =
@@ -125,8 +125,13 @@ class AgoraVoiceEngine {
 
     client.on('volume-indicator', (volumes) => {
       const next: Record<string, number> = {};
+      const sanitizedLocalUid = sanitizeAgoraUid(uidStr);
       volumes.forEach((item) => {
-        const key = item.uid === 0 || String(item.uid) === uidStr ? uidStr : String(item.uid);
+        const remoteId = String(item.uid);
+        const key =
+          item.uid === 0 || remoteId === uidStr || remoteId === sanitizedLocalUid
+            ? uidStr
+            : remoteId;
         next[key] = item.level;
       });
       this.emitVolumes(next);
@@ -299,6 +304,18 @@ class AgoraVoiceEngine {
         track.setVolume(muted ? 0 : 100);
       } catch {
         // Ignore remote volume update errors
+      }
+    });
+  }
+
+  public resumeRemoteAudio(): void {
+    if (this.remoteMuted) return;
+    this.remoteTracks.forEach((track) => {
+      try {
+        track.setVolume(100);
+        track.play();
+      } catch {
+        // Ignore remote play resume errors
       }
     });
   }
