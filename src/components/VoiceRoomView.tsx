@@ -27,8 +27,15 @@ import {
   Megaphone,
   Heart,
   Trash2,
+  Shield,
+  ShieldCheck,
+  KeyRound,
+  Ban,
+  UserMinus,
+  Search,
+  UserCheck,
 } from 'lucide-react';
-import { RoomSeat, GiftItem } from '../types';
+import { RoomSeat, GiftItem, VoiceRoom } from '../types';
 import { InteractiveGamesHub } from './InteractiveGamesHub';
 import { SmartMediaView } from './SmartMediaView';
 import {
@@ -36,6 +43,8 @@ import {
   resolveEntranceStageMedia,
   resolveGiftStageMedia,
 } from '../utils/mediaFormats';
+import { preloadMediaAssets } from '../utils/apngEngine';
+import { agoraVoice } from '../utils/agoraVoice';
 import { sound } from '../utils/audio';
 import midnightLoungeBg from '../assets/images/room_bg_midnight_lounge_1795294231147.jpg';
 import royalMajlisBg from '../assets/images/room_bg_royal_majlis_1795294234181.jpg';
@@ -117,9 +126,12 @@ interface ActiveStageGift {
   fallbackUrl?: string;
   preferVideo: boolean;
   durationMs: number;
+  hasExplicitDuration: boolean;
   comboPulseKey: number;
   giftName: string;
   senderName: string;
+  soundEffect: GiftItem['soundEffect'];
+  soundUrl?: string;
 }
 
 interface ActiveLuckyBagState {
@@ -248,6 +260,18 @@ export const VoiceRoomView: React.FC = () => {
     addBagGifts,
     consumeBagGift,
     evaluateLuckyGiftWin,
+    roomBackgrounds,
+    isRoomOwner,
+    isRoomModerator,
+    canManageRoom,
+    toggleAllSeatsLock,
+    toggleSeatMuteByModerator,
+    kickUserFromSeat,
+    clearSeatHeartPoints,
+    toggleRoomModerator,
+    banUserFromRoom,
+    unbanUserFromRoom,
+    updateRoomPrivacySettings,
     flyingGift,
     entranceBanner,
     clearEntranceBanner,
@@ -270,11 +294,23 @@ export const VoiceRoomView: React.FC = () => {
 
   // Room Theme & Settings State
   const [themeId, setThemeId] = useState<(typeof ROOM_THEMES)[number]['id']>('midnight');
+  const [roomSettingsTab, setRoomSettingsTab] = useState<'backgrounds' | 'privacy' | 'moderation'>('backgrounds');
   const [roomNotice, setRoomNotice] = useState<string>(
     activeRoom?.announcement || 'أهلاً بكم في الغرفة الصوتية — نرجو الالتزام بالأدب والاحترام.'
   );
   const [noticeDraft, setNoticeDraft] = useState<string>(roomNotice);
+  const [titleDraft, setTitleDraft] = useState<string>(activeRoom?.title || '');
+  const [privacyTypeDraft, setPrivacyTypeDraft] = useState<VoiceRoom['type']>(
+    activeRoom?.type || 'public'
+  );
+  const [passwordDraft, setPasswordDraft] = useState<string>(activeRoom?.password || '');
+  const [isLockedDraft, setIsLockedDraft] = useState<boolean>(Boolean(activeRoom?.isLocked));
+  const [modSearchQuery, setModSearchQuery] = useState<string>('');
+  const [settingsFeedback, setSettingsFeedback] = useState<string | null>(null);
   const [isRoomSoundMuted, setIsRoomSoundMuted] = useState(false);
+  const [agoraVolumes, setAgoraVolumes] = useState<Record<string, number>>({});
+  const [agoraLiveMicActive, setAgoraLiveMicActive] = useState(false);
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   const [idCopied, setIdCopied] = useState(false);
   const [chatClearedBeforeTs, setChatClearedBeforeTs] = useState<number>(0);
 
@@ -364,6 +400,8 @@ export const VoiceRoomView: React.FC = () => {
   const [activeStageGift, setActiveStageGift] = useState<ActiveStageGift | null>(null);
   const lastLocalGiftThrowTsRef = useRef<number>(0);
   const lastHandledFlyingIdRef = useRef<string | null>(null);
+  const lastPlayedStageSoundKeyRef = useRef<number | null>(null);
+  const stagePulseCounterRef = useRef<number>(0);
 
   // Room Event Logs
   const [roomEventLogs, setRoomEventLogs] = useState<RoomEventLog[]>([]);
@@ -388,13 +426,25 @@ export const VoiceRoomView: React.FC = () => {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const luxuryTimeoutRef = useRef<number | null>(null);
 
-  // Sync room notice when room changes
+  // Sync room notice & privacy drafts when active room changes
   useEffect(() => {
-    if (activeRoom?.announcement) {
+    if (!activeRoom) return;
+    if (activeRoom.announcement) {
       setRoomNotice(activeRoom.announcement);
       setNoticeDraft(activeRoom.announcement);
     }
-  }, [activeRoom?.id]);
+    setTitleDraft(activeRoom.title);
+    setPrivacyTypeDraft(activeRoom.type);
+    setPasswordDraft(activeRoom.password || '');
+    setIsLockedDraft(Boolean(activeRoom.isLocked));
+  }, [
+    activeRoom?.id,
+    activeRoom?.announcement,
+    activeRoom?.title,
+    activeRoom?.type,
+    activeRoom?.password,
+    activeRoom?.isLocked,
+  ]);
 
   // Auto-prune Gift Combo Track items after 3.2s of inactivity
   useEffect(() => {
@@ -415,18 +465,66 @@ export const VoiceRoomView: React.FC = () => {
 
     const stageMedia = resolveGiftStageMedia(flyingGift.gift);
     if (!stageMedia.mediaUrl) return;
+    const mediaUrl = stageMedia.mediaUrl;
     const now = Date.now();
-    setActiveStageGift({
-      id: `ext_${now}_${flyingGift.gift.id}`,
-      mediaUrl: stageMedia.mediaUrl,
-      fallbackUrl: stageMedia.fallbackUrl,
-      preferVideo: stageMedia.preferVideo,
-      durationMs: stageMedia.durationMs,
-      comboPulseKey: now,
-      giftName: flyingGift.gift.nameAr,
-      senderName: flyingGift.senderName,
+    const pulseKey = ++stagePulseCounterRef.current;
+    if (flyingGift.gift.soundUrl) {
+      sound.preloadAudioUrl(flyingGift.gift.soundUrl);
+    }
+    setActiveStageGift((prev) => {
+      if (prev && prev.mediaUrl === mediaUrl) {
+        return {
+          ...prev,
+          comboPulseKey: pulseKey,
+          giftName: flyingGift.gift.nameAr,
+          senderName: flyingGift.senderName,
+          soundEffect: flyingGift.gift.soundEffect,
+          soundUrl: flyingGift.gift.soundUrl,
+        };
+      }
+      return {
+        id: `ext_${now}_${flyingGift.gift.id}`,
+        mediaUrl,
+        fallbackUrl: stageMedia.fallbackUrl,
+        preferVideo: stageMedia.preferVideo,
+        durationMs: stageMedia.durationMs,
+        hasExplicitDuration: stageMedia.hasExplicitDuration,
+        comboPulseKey: pulseKey,
+        giftName: flyingGift.gift.nameAr,
+        senderName: flyingGift.senderName,
+        soundEffect: flyingGift.gift.soundEffect,
+        soundUrl: flyingGift.gift.soundUrl,
+      };
     });
   }, [flyingGift]);
+
+  // Warm-preload gift & entrance assets (all formats + custom gift audio) when inside a room so gifts play at 0ms
+  useEffect(() => {
+    const urls: Array<string | undefined> = [];
+    gifts.forEach((g) => {
+      if (g.videoUrl) urls.push(g.videoUrl);
+      if (g.imageUrl) urls.push(g.imageUrl);
+      if (g.soundUrl) sound.preloadAudioUrl(g.soundUrl);
+    });
+    storeItems.forEach((s) => {
+      if (s.type === 'entrance') {
+        if (s.videoUrl) urls.push(s.videoUrl);
+        if (s.previewUrl) urls.push(s.previewUrl);
+      }
+    });
+    preloadMediaAssets(urls);
+  }, [gifts, storeItems]);
+
+  // Prioritize warming currently selected gift media & audio as soon as drawer opens or selection changes
+  useEffect(() => {
+    if (activeBottomDrawer !== 'gift') return;
+    const selected = gifts.find((g) => g.id === selectedGiftId);
+    if (!selected) return;
+    preloadMediaAssets([selected.videoUrl, selected.imageUrl]);
+    if (selected.soundUrl) {
+      sound.preloadAudioUrl(selected.soundUrl);
+    }
+  }, [activeBottomDrawer, selectedGiftId, gifts]);
 
   // 10-Second Lucky Bag Countdown Timer
   useEffect(() => {
@@ -518,9 +616,68 @@ export const VoiceRoomView: React.FC = () => {
     });
   }, [occupiedIndicesKey]);
 
+  // Connect real-time Agora RTC Voice Engine for active room
+  useEffect(() => {
+    const unsubVol = agoraVoice.subscribeVolumes((vols) => {
+      setAgoraVolumes(vols);
+    });
+    const unsubMic = agoraVoice.subscribeMicStatus((active) => {
+      setAgoraLiveMicActive(active);
+    });
+    let noticeTimer: number | null = null;
+    const unsubNotice = agoraVoice.subscribeNotices((msg) => {
+      setVoiceNotice(msg);
+      if (noticeTimer) window.clearTimeout(noticeTimer);
+      noticeTimer = window.setTimeout(() => setVoiceNotice(null), 4500);
+    });
+
+    return () => {
+      unsubVol();
+      unsubMic();
+      unsubNotice();
+      if (noticeTimer) window.clearTimeout(noticeTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeRoom?.id || !currentUser.id) return;
+    void agoraVoice.joinRoom(activeRoom.id, currentUser.id);
+    return () => {
+      void agoraVoice.leaveRoom();
+    };
+  }, [activeRoom?.id, currentUser.id]);
+
+  const myLiveRoomSeat = activeRoom?.seats.find((s) => s.userId === currentUser.id);
+  const isSeatedInAgora = Boolean(myLiveRoomSeat);
+  const isMyMicMutedInAgora = Boolean(myLiveRoomSeat?.isMuted);
+
+  useEffect(() => {
+    if (!activeRoom?.id) return;
+    void agoraVoice.syncMicState(isSeatedInAgora, isMyMicMutedInAgora);
+  }, [activeRoom?.id, isSeatedInAgora, isMyMicMutedInAgora]);
+
+  useEffect(() => {
+    agoraVoice.setRemoteAudioMuted(isRoomSoundMuted);
+  }, [isRoomSoundMuted]);
+
   if (!activeRoom) return null;
 
-  const activeTheme = ROOM_THEMES.find((t) => t.id === themeId) || ROOM_THEMES[0];
+  const isOwner = isRoomOwner(activeRoom);
+  const isMod = isRoomModerator(activeRoom);
+  const canManage = canManageRoom(activeRoom);
+
+  const selectedAdminBg = activeRoom.backgroundId
+    ? roomBackgrounds.find((b) => b.id === activeRoom.backgroundId)
+    : undefined;
+  const matchedBuiltInTheme = activeRoom.backgroundId
+    ? ROOM_THEMES.find((t) => t.id === activeRoom.backgroundId)
+    : undefined;
+  const activeTheme =
+    matchedBuiltInTheme || ROOM_THEMES.find((t) => t.id === themeId) || ROOM_THEMES[0];
+  const resolvedRoomWallpaperUrl =
+    activeRoom.backgroundUrl || selectedAdminBg?.imageUrl || activeTheme.image;
+  const resolvedRoomWallpaperName =
+    selectedAdminBg?.nameAr || activeTheme.name;
 
   const isRocketLocked24h = Boolean(rocketCooldownUntil && rocketCooldownUntil > nowMs);
   const rocketCooldownRemainingMs = isRocketLocked24h
@@ -824,6 +981,7 @@ export const VoiceRoomView: React.FC = () => {
   ): boolean => {
     const finalTargets = targetSeats.filter((i) => i >= 0 && i < 8 && Boolean(seats8[i]?.userId));
     if (finalTargets.length === 0) return false;
+    sound.unlockAudio();
     const targetLabel = getTargetNamesLabel(finalTargets);
     const totalNeededCount = count * finalTargets.length;
     lastLocalGiftThrowTsRef.current = Date.now();
@@ -846,9 +1004,6 @@ export const VoiceRoomView: React.FC = () => {
       return next;
     });
 
-    // Play gift custom audio URL (if attached) or fallback synthesized gift sound
-    sound.playGiftHitAudio(gift.soundEffect, gift.soundUrl, isRoomSoundMuted);
-
     // Charge room rocket ONLY from coins spent on gifts
     const totalGiftValue = gift.coinPrice * count * finalTargets.length;
     if (!fromBag) {
@@ -859,13 +1014,25 @@ export const VoiceRoomView: React.FC = () => {
     triggerSubtleGiftGlide(gift, finalTargets, count);
 
     // 1b. Play full-room stage gift overlay seamlessly (MP4, WebM, GIF, WebP, PNG — any format URL)
+    // and sync sound + visual start via SmartMediaView.onReady (or play immediately for icon-only gifts)
     const now = Date.now();
+    const pulseKey = ++stagePulseCounterRef.current;
+    if (gift.soundUrl) {
+      sound.preloadAudioUrl(gift.soundUrl);
+    }
     const stageMedia = resolveGiftStageMedia(gift);
     if (stageMedia.mediaUrl) {
       const mediaUrl = stageMedia.mediaUrl;
       setActiveStageGift((prev) => {
         if (prev && prev.mediaUrl === mediaUrl) {
-          return { ...prev, comboPulseKey: now };
+          return {
+            ...prev,
+            comboPulseKey: pulseKey,
+            giftName: gift.nameAr,
+            senderName: currentUser.displayName,
+            soundEffect: gift.soundEffect,
+            soundUrl: gift.soundUrl,
+          };
         }
         return {
           id: `stage_${now}_${gift.id}`,
@@ -873,11 +1040,16 @@ export const VoiceRoomView: React.FC = () => {
           fallbackUrl: stageMedia.fallbackUrl,
           preferVideo: stageMedia.preferVideo,
           durationMs: stageMedia.durationMs,
-          comboPulseKey: now,
+          hasExplicitDuration: stageMedia.hasExplicitDuration,
+          comboPulseKey: pulseKey,
           giftName: gift.nameAr,
           senderName: currentUser.displayName,
+          soundEffect: gift.soundEffect,
+          soundUrl: gift.soundUrl,
         };
       });
+    } else {
+      sound.playGiftHitAudio(gift.soundEffect, gift.soundUrl, isRoomSoundMuted);
     }
 
     // 2. Evaluate Lucky Gift Win via Dashboard-controlled probability & 1M+ global jackpot ticker
@@ -1055,16 +1227,30 @@ export const VoiceRoomView: React.FC = () => {
   };
 
   const handleClearHeartValue = (seatIndex: number) => {
-    setSeatHeartsOverride((prev) => ({ ...prev, [seatIndex]: 0 }));
+    if (!canManage) return;
+    clearSeatHeartPoints(seatIndex);
+    setSeatHeartsOverride((prev) => {
+      const copy = { ...prev };
+      delete copy[seatIndex];
+      return copy;
+    });
     setActiveBottomDrawer('none');
   };
 
   const handleToggleLockAllSeats = () => {
-    const anyUnlocked = seats8.some((s) => !s.isLocked);
-    seats8.forEach((s) => {
-      if (anyUnlocked && !s.isLocked) toggleSeatLock(s.index);
-      if (!anyUnlocked && s.isLocked) toggleSeatLock(s.index);
-    });
+    if (!canManage) return;
+    toggleAllSeatsLock();
+  };
+
+  const openRoomSettingsDrawer = (tab: 'backgrounds' | 'privacy' | 'moderation' = 'backgrounds') => {
+    setNoticeDraft(activeRoom.announcement || roomNotice);
+    setTitleDraft(activeRoom.title);
+    setPrivacyTypeDraft(activeRoom.type);
+    setPasswordDraft(activeRoom.password || '');
+    setIsLockedDraft(Boolean(activeRoom.isLocked));
+    setSettingsFeedback(null);
+    setRoomSettingsTab(tab);
+    setActiveBottomDrawer('room_settings');
   };
 
   const handleSendChat = (e: React.FormEvent) => {
@@ -1111,7 +1297,7 @@ export const VoiceRoomView: React.FC = () => {
       {/* Desktop Ambient Backdrop so wide viewports never look like an empty void */}
       <div className="hidden sm:block fixed inset-0 pointer-events-none">
         <img
-          src={activeTheme.image}
+          src={resolvedRoomWallpaperUrl}
           alt=""
           referrerPolicy="no-referrer"
           className="w-full h-full object-cover opacity-30 blur-2xl scale-110"
@@ -1125,8 +1311,8 @@ export const VoiceRoomView: React.FC = () => {
       >
         {/* Room Theme Wallpaper + Measured Readability Scrim */}
         <img
-          src={activeTheme.image}
-          alt={activeTheme.name}
+          src={resolvedRoomWallpaperUrl}
+          alt={resolvedRoomWallpaperName}
           referrerPolicy="no-referrer"
           className="absolute inset-0 w-full h-full object-cover opacity-70 pointer-events-none transition-opacity duration-500"
         />
@@ -1145,8 +1331,29 @@ export const VoiceRoomView: React.FC = () => {
             alt={activeStageGift.giftName}
             muted={isRoomSoundMuted}
             durationMs={activeStageGift.durationMs}
+            hasExplicitDuration={activeStageGift.hasExplicitDuration}
             resetKey={activeStageGift.comboPulseKey}
-            onEnded={() => setActiveStageGift(null)}
+            onReady={() => {
+              if (lastPlayedStageSoundKeyRef.current !== activeStageGift.comboPulseKey) {
+                lastPlayedStageSoundKeyRef.current = activeStageGift.comboPulseKey;
+                sound.playGiftHitAudio(
+                  activeStageGift.soundEffect,
+                  activeStageGift.soundUrl,
+                  isRoomSoundMuted
+                );
+              }
+            }}
+            onEnded={() => {
+              if (lastPlayedStageSoundKeyRef.current !== activeStageGift.comboPulseKey) {
+                lastPlayedStageSoundKeyRef.current = activeStageGift.comboPulseKey;
+                sound.playGiftHitAudio(
+                  activeStageGift.soundEffect,
+                  activeStageGift.soundUrl,
+                  isRoomSoundMuted
+                );
+              }
+              setActiveStageGift(null);
+            }}
           />
         )}
 
@@ -1164,6 +1371,8 @@ export const VoiceRoomView: React.FC = () => {
               ? entranceBanner.preferVideo
               : fallbackResolved.preferVideo;
           const stageDurationMs = entranceBanner.durationMs || fallbackResolved.durationMs;
+          const stageHasExplicitDuration =
+            entranceBanner.hasExplicitDuration ?? fallbackResolved.hasExplicitDuration;
 
           return (
             <>
@@ -1177,6 +1386,7 @@ export const VoiceRoomView: React.FC = () => {
                   alt={entranceBanner.entranceName}
                   muted={isRoomSoundMuted}
                   durationMs={stageDurationMs}
+                  hasExplicitDuration={stageHasExplicitDuration}
                   resetKey={entranceBanner.id}
                   onEnded={clearEntranceBanner}
                 />
@@ -1326,6 +1536,14 @@ export const VoiceRoomView: React.FC = () => {
           </div>
         )}
 
+        {voiceNotice && (
+          <div className="absolute top-[112px] inset-x-4 z-50 pointer-events-none flex justify-center">
+            <div className="px-4 py-2 rounded-2xl bg-rose-950/95 border border-rose-400/50 text-rose-100 text-xs font-bold shadow-2xl backdrop-blur-md">
+              {voiceNotice}
+            </div>
+          </div>
+        )}
+
         {/* ================================================================= */}
         {/* 1. TOP ROOM HEADER BAR (Clean Flagship Voice Room Architecture)   */}
         {/* ================================================================= */}
@@ -1333,28 +1551,76 @@ export const VoiceRoomView: React.FC = () => {
           <div className="flex items-center justify-between gap-2">
             {/* Right in RTL (First in DOM): Room Identity */}
             <div className="flex items-center gap-2.5 min-w-0 bg-black/35 backdrop-blur-md pl-3 pr-1.5 py-1.5 rounded-2xl border border-white/10">
-              <img
-                src={activeRoom.ownerAvatar || currentUser.avatar}
-                alt={activeRoom.title}
-                referrerPolicy="no-referrer"
-                className="w-9 h-9 rounded-xl object-cover shrink-0 border border-amber-400/40"
-              />
+              <button
+                type="button"
+                onClick={() => {
+                  const ownerProfile =
+                    users.find((u) => u.id === activeRoom.ownerId) ||
+                    (activeRoom.ownerId === currentUser.id
+                      ? currentUser
+                      : {
+                          ...currentUser,
+                          id: activeRoom.ownerId,
+                          displayName: activeRoom.ownerName || activeRoom.title,
+                          avatar: activeRoom.ownerAvatar || currentUser.avatar,
+                        });
+                  setViewingProfileUser(ownerProfile);
+                  setActiveModal('profile');
+                }}
+                title={activeRoom.ownerId === currentUser.id ? 'فتح البروفايل الخاص بي' : 'فتح البروفايل'}
+                className="relative shrink-0 rounded-xl focus:outline-none hover:ring-2 hover:ring-amber-400/70 transition-all"
+              >
+                <img
+                  src={activeRoom.ownerAvatar || currentUser.avatar}
+                  alt={activeRoom.title}
+                  referrerPolicy="no-referrer"
+                  className="w-9 h-9 rounded-xl object-cover border border-amber-400/40"
+                />
+              </button>
               <div className="min-w-0 text-right">
-                <h1 className="text-[13px] font-bold text-white truncate leading-tight">
-                  {activeRoom.title}
-                </h1>
-                <button
-                  onClick={handleCopyRoomId}
-                  className="flex items-center gap-1 text-[11px] text-slate-300 hover:text-amber-300 transition-colors font-mono tabular-nums mt-0.5"
-                  title="نسخ رقم الغرفة"
-                >
-                  <span>ID {activeRoom.roomNo || '2026091'}</span>
-                  {idCopied ? (
-                    <Check className="w-3 h-3 text-emerald-400" />
-                  ) : (
-                    <Copy className="w-2.5 h-2.5 opacity-70" />
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <h1 className="text-[13px] font-bold text-white truncate leading-tight">
+                    {activeRoom.title}
+                  </h1>
+                  {activeRoom.isLocked && (
+                    <span title="غرفة مقفلة" className="inline-flex shrink-0">
+                      <Lock className="w-3 h-3 text-rose-400" />
+                    </span>
                   )}
-                </button>
+                  {!activeRoom.isLocked && activeRoom.type === 'password' && (
+                    <span title="غرفة برمز مرور" className="inline-flex shrink-0">
+                      <KeyRound className="w-3 h-3 text-amber-400" />
+                    </span>
+                  )}
+                  {activeRoom.type === 'vip' && (
+                    <span className="px-1 py-0.5 rounded bg-amber-400/20 border border-amber-400/40 text-amber-300 text-[9px] font-black shrink-0">
+                      VIP
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <button
+                    onClick={handleCopyRoomId}
+                    className="flex items-center gap-1 text-[11px] text-slate-300 hover:text-amber-300 transition-colors font-mono tabular-nums"
+                    title="نسخ رقم الغرفة"
+                  >
+                    <span>ID {activeRoom.roomNo || '2026091'}</span>
+                    {idCopied ? (
+                      <Check className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-2.5 h-2.5 opacity-70" />
+                    )}
+                  </button>
+                  {isOwner ? (
+                    <span className="px-1.5 py-0.2 rounded bg-amber-400/15 border border-amber-400/35 text-[9px] font-bold text-amber-300 shrink-0">
+                      المالك
+                    </span>
+                  ) : isMod ? (
+                    <span className="px-1.5 py-0.2 rounded bg-sky-500/20 border border-sky-400/40 text-[9px] font-bold text-sky-300 shrink-0">
+                      مشرف
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </div>
 
@@ -1372,12 +1638,9 @@ export const VoiceRoomView: React.FC = () => {
               </button>
 
               <button
-                onClick={() => {
-                  setNoticeDraft(roomNotice);
-                  setActiveBottomDrawer('room_settings');
-                }}
+                onClick={() => openRoomSettingsDrawer(canManage ? 'privacy' : 'backgrounds')}
                 className="w-9 h-9 rounded-xl bg-black/35 backdrop-blur-md border border-white/10 flex items-center justify-center text-slate-200 hover:bg-white/10 transition-colors"
-                title="إعدادات الغرفة"
+                title="إعدادات وخصوصية الغرفة"
               >
                 <SlidersHorizontal className="w-4 h-4" />
               </button>
@@ -1414,10 +1677,7 @@ export const VoiceRoomView: React.FC = () => {
               </button>
 
               <button
-                onClick={() => {
-                  setNoticeDraft(roomNotice);
-                  setActiveBottomDrawer('room_settings');
-                }}
+                onClick={() => openRoomSettingsDrawer(canManage ? 'privacy' : 'backgrounds')}
                 className="h-7 px-2.5 rounded-lg bg-black/25 backdrop-blur-sm border border-white/8 flex items-center gap-1.5 text-slate-300 hover:text-white transition-colors min-w-0 max-w-[185px]"
               >
                 <Megaphone className="w-3 h-3 text-amber-400/80 shrink-0" />
@@ -1448,7 +1708,7 @@ export const VoiceRoomView: React.FC = () => {
         {/* 2. SPACIOUS 8-MIC VOICE STAGE (2 Rows × 4 Mics — Clean Frames)    */}
         {/* ================================================================= */}
         <section className="relative z-20 shrink-0 px-3.5 pt-4 pb-2">
-          <div className="grid grid-cols-4 gap-x-2 gap-y-5">
+          <div className="grid grid-cols-4 gap-x-2 gap-y-6">
             {seats8.map((seat, idx) => {
               const isHostSeat = idx === 0;
               const heartVal =
@@ -1458,7 +1718,15 @@ export const VoiceRoomView: React.FC = () => {
               const activeEmoji = seatEmojis[idx];
               const seatPulse = seatPulseMap[idx];
               const isOccupied = Boolean(seat.userId);
-              const isSpeaking = isOccupied && seat.isSpeaking && !seat.isMuted;
+              const liveAgoraLevel = seat.userId ? agoraVolumes[seat.userId] : undefined;
+              const isSpeaking =
+                isOccupied &&
+                !seat.isMuted &&
+                (seat.userId === currentUser.id && agoraLiveMicActive
+                  ? (liveAgoraLevel ?? 0) > 8
+                  : liveAgoraLevel !== undefined
+                  ? liveAgoraLevel > 8
+                  : seat.isSpeaking);
               const seatUserProfile = seat.userId
                 ? users.find((u) => u.id === seat.userId)
                 : undefined;
@@ -1467,7 +1735,11 @@ export const VoiceRoomView: React.FC = () => {
                   ? currentUser.avatar
                   : seat.userAvatar || seatUserProfile?.avatar || '';
               const activeSeatFrameId =
-                seat.userId === currentUser.id ? currentUser.activeFrameId : seat.activeFrameId;
+                seat.userId === currentUser.id
+                  ? currentUser.activeFrameId
+                  : seatUserProfile?.activeFrameId !== undefined
+                  ? seatUserProfile.activeFrameId
+                  : seat.activeFrameId;
               const seatFrame = activeSeatFrameId
                 ? storeItems.find((i) => i.type === 'frame' && i.id === activeSeatFrameId)
                 : undefined;
@@ -1517,10 +1789,10 @@ export const VoiceRoomView: React.FC = () => {
 
                     {isOccupied ? (
                       hasUploadedFrame ? (
-                        /* Occupied Seat WITH Uploaded Frame: Clean borderless avatar centered inside large frame */
+                        /* Occupied Seat WITH Uploaded Frame: Concentrically centered avatar inside balanced frame */
                         <>
                           <div
-                            className={`relative z-10 w-[52px] h-[52px] rounded-full overflow-hidden transition-transform duration-150 group-active:scale-95 ${
+                            className={`relative z-10 w-[46px] h-[46px] rounded-full overflow-hidden transition-transform duration-150 group-active:scale-95 ${
                               isSpeaking ? 'ring-2 ring-amber-400/70' : ''
                             }`}
                           >
@@ -1542,7 +1814,7 @@ export const VoiceRoomView: React.FC = () => {
                             src={seatFrame!.previewUrl}
                             alt={seatFrame!.nameAr}
                             referrerPolicy="no-referrer"
-                            className="pointer-events-none absolute -inset-2.5 w-[calc(100%+20px)] h-[calc(100%+20px)] object-contain z-20 drop-shadow-[0_6px_14px_rgba(0,0,0,0.45)]"
+                            className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[82px] h-[82px] object-contain z-20 drop-shadow-[0_6px_14px_rgba(0,0,0,0.45)]"
                           />
                         </>
                       ) : (
@@ -1612,6 +1884,19 @@ export const VoiceRoomView: React.FC = () => {
                       </span>
                     )}
 
+                    {/* Room Moderator Shield Marker */}
+                    {isOccupied &&
+                      seat.userId &&
+                      seat.userId !== activeRoom.ownerId &&
+                      activeRoom.moderators.includes(seat.userId) && (
+                        <span
+                          className="absolute bottom-1 left-1 z-30 w-5 h-5 rounded-full bg-sky-500 border-2 border-[#0e1322] flex items-center justify-center shadow"
+                          title="مشرف الغرفة"
+                        >
+                          <ShieldCheck className="w-2.5 h-2.5 text-slate-950" />
+                        </span>
+                      )}
+
                     {/* Locked Overlay on Occupied Seat */}
                     {isOccupied && seat.isLocked && (
                       <span className="absolute inset-2 z-30 rounded-full bg-black/55 flex items-center justify-center">
@@ -1622,7 +1907,7 @@ export const VoiceRoomView: React.FC = () => {
 
                   {/* Seat Name / Label */}
                   <span
-                    className={`mt-2 text-[11px] font-medium truncate max-w-[78px] leading-tight ${
+                    className={`mt-2.5 text-[11px] font-medium truncate max-w-[78px] leading-tight ${
                       isOccupied
                         ? 'text-white font-semibold'
                         : isHostSeat
@@ -1813,7 +2098,21 @@ export const VoiceRoomView: React.FC = () => {
                     <span className="text-[10px] font-mono tabular-nums text-sky-400 ml-1.5">
                       Lv.{msg.level || 1}
                     </span>
-                    <span className="font-semibold text-amber-200 ml-1.5">{msg.senderName}:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target =
+                          users.find((u) => u.id === msg.senderId) ||
+                          (msg.senderId === currentUser.id ? currentUser : null);
+                        if (target) {
+                          setViewingProfileUser(target);
+                          setActiveModal('profile');
+                        }
+                      }}
+                      className="font-semibold text-amber-200 hover:text-amber-300 underline-offset-2 hover:underline ml-1.5"
+                    >
+                      {msg.senderName}:
+                    </button>
                     <span className="text-white">{msg.text}</span>
                   </>
                 )}
@@ -2319,32 +2618,43 @@ export const VoiceRoomView: React.FC = () => {
                 </button>
 
                 <button
-                  onClick={() => {
-                    setNoticeDraft(roomNotice);
-                    setActiveBottomDrawer('room_settings');
-                  }}
+                  onClick={() => openRoomSettingsDrawer('backgrounds')}
                   className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-white/5 hover:bg-white/10 transition-colors"
                 >
                   <SlidersHorizontal className="w-6 h-6 text-slate-300" />
-                  <span className="text-xs font-medium text-slate-200">خلفية الغرفة</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    handleToggleLockAllSeats();
-                    setActiveBottomDrawer('none');
-                  }}
-                  className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-white/5 hover:bg-white/10 transition-colors"
-                >
-                  {seats8.some((s) => !s.isLocked) ? (
-                    <Lock className="w-6 h-6 text-rose-400" />
-                  ) : (
-                    <Unlock className="w-6 h-6 text-emerald-400" />
-                  )}
                   <span className="text-xs font-medium text-slate-200">
-                    {seats8.some((s) => !s.isLocked) ? 'قفل الكل' : 'فتح الكل'}
+                    {canManage ? 'الخصوصية والخلفية' : 'مظهر الغرفة'}
                   </span>
                 </button>
+
+                {canManage && (
+                  <button
+                    onClick={() => openRoomSettingsDrawer('moderation')}
+                    className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-sky-500/10 hover:bg-sky-500/20 border border-sky-400/25 transition-colors"
+                  >
+                    <ShieldCheck className="w-6 h-6 text-sky-400" />
+                    <span className="text-xs font-medium text-sky-200">الإشراف والحظر</span>
+                  </button>
+                )}
+
+                {canManage && (
+                  <button
+                    onClick={() => {
+                      handleToggleLockAllSeats();
+                      setActiveBottomDrawer('none');
+                    }}
+                    className="flex flex-col items-center gap-2 p-3 rounded-2xl bg-white/5 hover:bg-white/10 transition-colors"
+                  >
+                    {seats8.some((s) => !s.isLocked) ? (
+                      <Lock className="w-6 h-6 text-rose-400" />
+                    ) : (
+                      <Unlock className="w-6 h-6 text-emerald-400" />
+                    )}
+                    <span className="text-xs font-medium text-slate-200">
+                      {seats8.some((s) => !s.isLocked) ? 'قفل الكل' : 'فتح الكل'}
+                    </span>
+                  </button>
+                )}
 
                 <button
                   onClick={() => {
@@ -2362,7 +2672,7 @@ export const VoiceRoomView: React.FC = () => {
         )}
 
         {/* ================================================================= */}
-        {/* DRAWER 3: ROOM SETTINGS (3 Luxury Wallpapers + Notice Editor)     */}
+        {/* DRAWER 3: ROOM SETTINGS (Backgrounds + Privacy + Moderation)      */}
         {/* ================================================================= */}
         {activeBottomDrawer === 'room_settings' && (
           <div
@@ -2370,152 +2680,650 @@ export const VoiceRoomView: React.FC = () => {
             onClick={() => setActiveBottomDrawer('none')}
           >
             <div
-              className="w-full bg-[#111522] border-t border-white/12 rounded-t-3xl p-4 pb-6 text-white space-y-4 shadow-2xl"
+              className="w-full max-h-[82dvh] bg-[#111522] border-t border-white/12 rounded-t-3xl p-4 pb-6 text-white flex flex-col gap-3.5 shadow-2xl overflow-y-auto no-scrollbar"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="w-10 h-1 bg-white/20 rounded-full mx-auto" />
+              <div className="w-10 h-1 bg-white/20 rounded-full mx-auto shrink-0" />
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-white">إعدادات ومظهر الغرفة</h3>
+                <div className="text-right">
+                  <h3 className="text-sm font-bold text-white">إدارة ومظهر وخصوصيات الغرفة</h3>
+                  <p className="text-[11px] text-slate-400">
+                    {isOwner
+                      ? 'أنت مالك الغرفة — لديك صلاحية كاملة وإدارة المشرفين'
+                      : isMod
+                      ? 'أنت مشرف في الغرفة — لديك صلاحيات إدارة الغرفة والخصوصية'
+                      : 'عرض حالة الغرفة فقط (التعديل متاح للمالك والمشرفين)'}
+                  </p>
+                </div>
                 <button
                   onClick={() => setActiveBottomDrawer('none')}
-                  className="w-8 h-8 rounded-lg bg-white/8 flex items-center justify-center text-slate-400 hover:text-white"
+                  className="w-8 h-8 rounded-lg bg-white/8 flex items-center justify-center text-slate-400 hover:text-white shrink-0"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              {/* Wallpaper Picker */}
-              <div className="space-y-2 text-right">
-                <label className="text-xs font-semibold text-slate-300">خلفية الغرفة</label>
-                <div className="grid grid-cols-3 gap-2.5">
-                  {ROOM_THEMES.map((t) => (
-                    <button
-                      key={t.id}
-                      onClick={() => setThemeId(t.id)}
-                      className={`relative h-24 rounded-2xl overflow-hidden border-2 transition-all ${
-                        themeId === t.id ? 'border-amber-400' : 'border-white/10 opacity-75'
-                      }`}
-                    >
-                      <img
-                        src={t.image}
-                        alt={t.name}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
-                      />
-                      <div className="absolute inset-x-0 bottom-0 py-1 bg-black/70 text-[11px] font-semibold text-white">
-                        {t.name}
-                      </div>
-                    </button>
-                  ))}
-                </div>
+              {/* 3 Settings Tabs */}
+              <div className="grid grid-cols-3 gap-1.5 p-1 rounded-2xl bg-white/[0.04] border border-white/8 text-xs font-bold">
+                <button
+                  onClick={() => setRoomSettingsTab('backgrounds')}
+                  className={`py-2 rounded-xl transition-colors ${
+                    roomSettingsTab === 'backgrounds'
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  خلفيات الغرفة
+                </button>
+                <button
+                  onClick={() => setRoomSettingsTab('privacy')}
+                  className={`py-2 rounded-xl transition-colors ${
+                    roomSettingsTab === 'privacy'
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  خصوصيات الغرفة
+                </button>
+                <button
+                  onClick={() => setRoomSettingsTab('moderation')}
+                  className={`py-2 rounded-xl transition-colors ${
+                    roomSettingsTab === 'moderation'
+                      ? 'bg-sky-400 text-slate-950'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  الإشراف ({activeRoom.moderators.length})
+                </button>
               </div>
 
-              {/* Room Announcement Editor */}
-              <div className="space-y-2 text-right">
-                <label className="text-xs font-semibold text-slate-300">إعلان الغرفة</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={noticeDraft}
-                    onChange={(e) => setNoticeDraft(e.target.value)}
-                    className="flex-1 h-10 rounded-xl bg-white/6 border border-white/12 px-3 text-xs text-white focus:border-amber-400 focus:outline-none"
-                    placeholder="اكتب إعلان الغرفة..."
-                  />
+              {settingsFeedback && (
+                <div className="px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-emerald-300 text-xs text-right">
+                  {settingsFeedback}
+                </div>
+              )}
+
+              {/* TAB 1: ROOM WALLPAPERS (Built-in + Admin Dashboard URLs) */}
+              {roomSettingsTab === 'backgrounds' && (
+                <div className="space-y-3.5 text-right">
+                  {!canManage && (
+                    <div className="px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200">
+                      ملاحظة: اختيار أو تغيير خلفية الغرفة متاح لمالك الغرفة والمشرفين فقط.
+                    </div>
+                  )}
+
+                  {roomBackgrounds.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold text-amber-300">
+                          خلفيات الغرف المميزة ({roomBackgrounds.length})
+                        </label>
+                        <span className="text-[10px] text-slate-400">مرفوعة من الإدارة</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2.5">
+                        {roomBackgrounds.map((bg) => {
+                          const isSelectedBg =
+                            activeRoom.backgroundId === bg.id ||
+                            activeRoom.backgroundUrl === bg.imageUrl;
+                          return (
+                            <button
+                              key={bg.id}
+                              type="button"
+                              disabled={!canManage}
+                              onClick={() => {
+                                const ok = updateRoomPrivacySettings(activeRoom.id, {
+                                  backgroundId: bg.id,
+                                  backgroundUrl: bg.imageUrl,
+                                  coverImage: bg.imageUrl,
+                                });
+                                if (ok) {
+                                  setSettingsFeedback(`تم تطبيق خلفية "${bg.nameAr}" للغرفة`);
+                                }
+                              }}
+                              className={`relative h-24 rounded-2xl overflow-hidden border-2 transition-all ${
+                                isSelectedBg
+                                  ? 'border-amber-400 ring-2 ring-amber-400/30'
+                                  : 'border-white/10 opacity-80 hover:opacity-100'
+                              } ${!canManage ? 'cursor-not-allowed opacity-60' : ''}`}
+                            >
+                              <img
+                                src={bg.imageUrl}
+                                alt={bg.nameAr}
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full object-cover"
+                              />
+                              <div className="absolute inset-x-0 bottom-0 py-1 px-1.5 bg-black/75 text-[10px] font-semibold text-white truncate">
+                                {bg.nameAr}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-slate-300">الخلفيات الافتراضية</label>
+                    <div className="grid grid-cols-3 gap-2.5">
+                      {ROOM_THEMES.map((t) => {
+                        const isSelectedBuiltIn =
+                          !activeRoom.backgroundUrl &&
+                          (activeRoom.backgroundId === t.id ||
+                            (!activeRoom.backgroundId && themeId === t.id));
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            disabled={!canManage}
+                            onClick={() => {
+                              setThemeId(t.id);
+                              const ok = updateRoomPrivacySettings(activeRoom.id, {
+                                backgroundId: t.id,
+                                backgroundUrl: '',
+                              });
+                              if (ok) {
+                                setSettingsFeedback(`تم تطبيق خلفية "${t.name}"`);
+                              }
+                            }}
+                            className={`relative h-24 rounded-2xl overflow-hidden border-2 transition-all ${
+                              isSelectedBuiltIn
+                                ? 'border-amber-400'
+                                : 'border-white/10 opacity-75 hover:opacity-100'
+                            } ${!canManage ? 'cursor-not-allowed opacity-60' : ''}`}
+                          >
+                            <img
+                              src={t.image}
+                              alt={t.name}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-cover"
+                            />
+                            <div className="absolute inset-x-0 bottom-0 py-1 bg-black/70 text-[11px] font-semibold text-white">
+                              {t.name}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: ROOM PRIVACY SETTINGS */}
+              {roomSettingsTab === 'privacy' && (
+                <div className="space-y-3.5 text-right">
+                  {!canManage && (
+                    <div className="px-3 py-2 rounded-xl bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-200">
+                      خصوصيات الغرفة محمية — يملك صلاحية التعديل مالك الغرفة أو من منحه المالك إشرافاً.
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300">اسم الغرفة</label>
+                    <input
+                      type="text"
+                      disabled={!canManage}
+                      value={titleDraft}
+                      onChange={(e) => setTitleDraft(e.target.value)}
+                      className="w-full h-10 rounded-xl bg-white/6 border border-white/12 px-3 text-xs text-white focus:border-amber-400 focus:outline-none disabled:opacity-50"
+                      placeholder="عنوان الغرفة..."
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300">إعلان الغرفة</label>
+                    <input
+                      type="text"
+                      disabled={!canManage}
+                      value={noticeDraft}
+                      onChange={(e) => setNoticeDraft(e.target.value)}
+                      className="w-full h-10 rounded-xl bg-white/6 border border-white/12 px-3 text-xs text-white focus:border-amber-400 focus:outline-none disabled:opacity-50"
+                      placeholder="اكتب إعلان الغرفة..."
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300">مستوى دخول الغرفة</label>
+                    <div className="grid grid-cols-3 gap-2 text-xs font-bold">
+                      {[
+                        { id: 'public', label: 'مفتوحة للجميع' },
+                        { id: 'password', label: 'برمز دخول 🔑' },
+                        { id: 'vip', label: 'VIP فقط 👑' },
+                      ].map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          disabled={!canManage}
+                          onClick={() => setPrivacyTypeDraft(opt.id as 'public' | 'vip' | 'password')}
+                          className={`py-2.5 px-2 rounded-xl border transition-colors ${
+                            privacyTypeDraft === opt.id
+                              ? 'bg-amber-400/20 border-amber-400 text-amber-300'
+                              : 'bg-white/[0.04] border-white/10 text-slate-300'
+                          } disabled:opacity-50`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {privacyTypeDraft === 'password' && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-amber-300">رمز مرور الدخول للغرفة</label>
+                      <input
+                        type="text"
+                        disabled={!canManage}
+                        value={passwordDraft}
+                        onChange={(e) => setPasswordDraft(e.target.value)}
+                        className="w-full h-10 rounded-xl bg-white/6 border border-amber-400/35 px-3 text-xs font-mono text-white focus:border-amber-400 focus:outline-none disabled:opacity-50"
+                        placeholder="أدخل رمز الغرفة (مثال: 1234)"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between p-3 rounded-2xl bg-white/[0.04] border border-white/10">
+                    <div>
+                      <div className="text-xs font-bold text-white">قفل الغرفة بالكامل</div>
+                      <div className="text-[10px] text-slate-400">
+                        منع دخول أي زوار جدد (ماعدا المالك والمشرفين)
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!canManage}
+                      onClick={() => setIsLockedDraft((prev) => !prev)}
+                      className={`h-9 px-3.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors ${
+                        isLockedDraft
+                          ? 'bg-rose-600 text-white'
+                          : 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
+                      } disabled:opacity-50`}
+                    >
+                      {isLockedDraft ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                      <span>{isLockedDraft ? 'مقفلة' : 'مفتوحة'}</span>
+                    </button>
+                  </div>
+
+                  {canManage && (
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={handleToggleLockAllSeats}
+                        className="h-10 px-3.5 rounded-xl bg-white/8 hover:bg-white/14 text-xs font-bold text-slate-200 flex items-center gap-1.5 shrink-0"
+                      >
+                        <Lock className="w-3.5 h-3.5 text-amber-400" />
+                        <span>{seats8.some((s) => !s.isLocked) ? 'قفل المايكات' : 'فتح المايكات'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (privacyTypeDraft === 'password' && !passwordDraft.trim()) {
+                            setSettingsFeedback('يرجى إدخال رمز مرور الغرفة أولاً.');
+                            return;
+                          }
+                          const ok = updateRoomPrivacySettings(activeRoom.id, {
+                            title: titleDraft.trim() || activeRoom.title,
+                            announcement: noticeDraft.trim() || activeRoom.announcement,
+                            type: privacyTypeDraft,
+                            password: privacyTypeDraft === 'password' ? passwordDraft.trim() : '',
+                            isLocked: isLockedDraft,
+                          });
+                          if (ok) {
+                            if (noticeDraft.trim()) setRoomNotice(noticeDraft.trim());
+                            setSettingsFeedback('تم حفظ خصوصيات وإعدادات الغرفة بنجاح.');
+                          }
+                        }}
+                        className="flex-1 h-10 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs transition-colors"
+                      >
+                        حفظ خصوصيات الغرفة
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 3: ROOM MODERATION & BAN MANAGEMENT */}
+              {roomSettingsTab === 'moderation' && (() => {
+                const roomUserIds = new Set<string>();
+                seats8.forEach((s) => {
+                  if (s.userId) roomUserIds.add(s.userId);
+                });
+                activeRoomMessages.forEach((m) => {
+                  if (m.senderId && m.senderId !== 'system') roomUserIds.add(m.senderId);
+                });
+                activeRoom.moderators.forEach((id) => roomUserIds.add(id));
+
+                const modQuery = modSearchQuery.trim().toLowerCase();
+                const candidateUsers = users.filter((u) => {
+                  if (u.id === activeRoom.ownerId) return false;
+                  if (modQuery) {
+                    return (
+                      u.displayName.toLowerCase().includes(modQuery) ||
+                      u.userCode.toLowerCase().includes(modQuery)
+                    );
+                  }
+                  return roomUserIds.has(u.id);
+                });
+
+                const bannedUsers = (activeRoom.bannedUserIds || [])
+                  .map((bId) => users.find((u) => u.id === bId) || { id: bId, displayName: bId, userCode: '---', avatar: '' });
+
+                return (
+                  <div className="space-y-3 text-right">
+                    <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-400/25 flex items-center justify-between text-xs">
+                      <span className="font-bold text-amber-300 flex items-center gap-1.5">
+                        <Crown className="w-4 h-4" />
+                        مالك الغرفة: {activeRoom.ownerName}
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        المشرفون: {activeRoom.moderators.length}
+                      </span>
+                    </div>
+
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={modSearchQuery}
+                        onChange={(e) => setModSearchQuery(e.target.value)}
+                        placeholder="ابحث بالاسم أو رقم ID لمنح الإشراف أو الحظر..."
+                        className="w-full h-10 rounded-xl bg-white/6 border border-white/12 pr-9 pl-3 text-xs text-white focus:border-sky-400 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="max-h-48 overflow-y-auto space-y-2 no-scrollbar">
+                      {candidateUsers.length === 0 ? (
+                        <div className="py-6 text-center text-xs text-slate-400">
+                          لا يوجد أعضاء متطابقون — يمكنك البحث بالاسم أو ID لإضافة مشرف.
+                        </div>
+                      ) : (
+                        candidateUsers.map((u) => {
+                          const userIsMod = activeRoom.moderators.includes(u.id);
+                          const userIsBanned = (activeRoom.bannedUserIds || []).includes(u.id);
+                          return (
+                            <div
+                              key={u.id}
+                              className="p-2.5 rounded-2xl bg-white/[0.04] border border-white/8 flex items-center justify-between gap-2"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <img
+                                  src={u.avatar}
+                                  alt={u.displayName}
+                                  referrerPolicy="no-referrer"
+                                  className="w-9 h-9 rounded-full object-cover shrink-0"
+                                />
+                                <div className="min-w-0">
+                                  <div className="text-xs font-bold text-white truncate flex items-center gap-1">
+                                    <span>{u.displayName}</span>
+                                    {userIsMod && (
+                                      <span className="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 text-[9px]">
+                                        مشرف
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] font-mono text-slate-400">
+                                    ID {u.userCode}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {isOwner && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const res = toggleRoomModerator(activeRoom.id, u.id);
+                                      setSettingsFeedback(res.message);
+                                    }}
+                                    className={`h-8 px-2.5 rounded-xl text-[11px] font-bold flex items-center gap-1 transition-colors ${
+                                      userIsMod
+                                        ? 'bg-rose-500/20 border border-rose-500/40 text-rose-300 hover:bg-rose-500/30'
+                                        : 'bg-sky-500/20 border border-sky-400/40 text-sky-300 hover:bg-sky-500/30'
+                                    }`}
+                                  >
+                                    {userIsMod ? (
+                                      <>
+                                        <Shield className="w-3 h-3" />
+                                        <span>سحب</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <ShieldCheck className="w-3 h-3" />
+                                        <span>إشراف</span>
+                                      </>
+                                    )}
+                                  </button>
+                                )}
+
+                                {canManage && u.id !== currentUser.id && !userIsBanned && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      banUserFromRoom(activeRoom.id, u.id);
+                                      setSettingsFeedback(`تم حظر ${u.displayName} من الغرفة`);
+                                    }}
+                                    className="h-8 px-2.5 rounded-xl bg-rose-950/60 border border-rose-500/35 text-rose-300 hover:bg-rose-900/60 text-[11px] font-bold flex items-center gap-1"
+                                    title="حظر من الغرفة"
+                                  >
+                                    <Ban className="w-3 h-3" />
+                                    <span>حظر</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    {bannedUsers.length > 0 && (
+                      <div className="space-y-1.5 pt-2 border-t border-white/10">
+                        <div className="text-[11px] font-bold text-rose-300">
+                          المحظورون من الغرفة ({bannedUsers.length})
+                        </div>
+                        <div className="max-h-28 overflow-y-auto space-y-1.5 no-scrollbar">
+                          {bannedUsers.map((bu) => (
+                            <div
+                              key={bu.id}
+                              className="px-2.5 py-2 rounded-xl bg-rose-950/30 border border-rose-500/25 flex items-center justify-between text-xs"
+                            >
+                              <span className="text-slate-200 truncate">
+                                {bu.displayName} <span className="text-[10px] font-mono text-slate-400">({bu.userCode})</span>
+                              </span>
+                              {canManage && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    unbanUserFromRoom(activeRoom.id, bu.id);
+                                    setSettingsFeedback(`تم رفع الحظر عن ${bu.displayName}`);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 font-bold text-[10px]"
+                                >
+                                  فك الحظر
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+
+        {/* ================================================================= */}
+        {/* DRAWER 4: SEAT ACTION SHEET (Clean Native Pattern + Room Mods)    */}
+        {/* ================================================================= */}
+        {activeBottomDrawer === 'seat_menu' && selectedSeatForMenu && (() => {
+          const liveSeat = seats8[selectedSeatForMenu.index] || selectedSeatForMenu;
+          const targetUserId = liveSeat.userId;
+          const targetIsOwner = targetUserId === activeRoom.ownerId;
+          const targetIsMod = Boolean(targetUserId && activeRoom.moderators.includes(targetUserId));
+
+          return (
+            <div
+              className="absolute inset-0 z-50 bg-black/60 backdrop-blur-[2px] flex flex-col justify-end p-3"
+              onClick={() => setActiveBottomDrawer('none')}
+            >
+              <div
+                className="w-full space-y-2"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="rounded-2xl bg-[#151a2b] border border-white/10 overflow-hidden divide-y divide-white/8 text-center text-sm font-medium max-h-[75dvh] overflow-y-auto no-scrollbar">
+                  <div className="py-2.5 text-xs text-slate-400 flex items-center justify-center gap-1.5">
+                    <span>
+                      {liveSeat.index === 0 ? 'مايك المضيف (#1)' : `مايك #${liveSeat.index + 1}`}{' '}
+                      {liveSeat.userName ? `· ${liveSeat.userName}` : '· متاح'}
+                    </span>
+                    {targetIsOwner && (
+                      <span className="px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 text-[10px] font-bold">
+                        المالك
+                      </span>
+                    )}
+                    {!targetIsOwner && targetIsMod && (
+                      <span className="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 text-[10px] font-bold">
+                        مشرف
+                      </span>
+                    )}
+                  </div>
+
+                  {targetUserId === currentUser.id && (
+                    <button
+                      onClick={() => {
+                        setViewingProfileUser(currentUser);
+                        setActiveModal('profile');
+                        setActiveBottomDrawer('none');
+                      }}
+                      className="w-full h-12 text-amber-300 hover:bg-white/6 transition-colors font-bold flex items-center justify-center gap-2"
+                    >
+                      <UserCheck className="w-4 h-4" />
+                      <span>فتح البروفايل الخاص بي</span>
+                    </button>
+                  )}
+
                   <button
                     onClick={() => {
-                      if (noticeDraft.trim()) setRoomNotice(noticeDraft.trim());
+                      if (targetUserId === currentUser.id) {
+                        leaveSeat();
+                      } else if (targetUserId) {
+                        const targetUser = users.find((u) => u.id === targetUserId);
+                        setViewingProfileUser(targetUser || currentUser);
+                        setActiveModal('profile');
+                      } else {
+                        takeSeat(liveSeat.index);
+                      }
                       setActiveBottomDrawer('none');
                     }}
-                    className="h-10 px-4 rounded-xl bg-amber-400 text-slate-950 font-bold text-xs"
+                    className="w-full h-12 text-white hover:bg-white/6 transition-colors font-semibold"
                   >
-                    حفظ
+                    {targetUserId === currentUser.id
+                      ? 'النزول من المايك'
+                      : targetUserId
+                      ? 'عرض الملف الشخصي'
+                      : 'صعود إلى المايك'}
                   </button>
+
+                  {targetUserId && (
+                    <button
+                      onClick={() => {
+                        openGiftDrawer(liveSeat.index);
+                      }}
+                      className="w-full h-12 text-amber-300 hover:bg-white/6 transition-colors font-semibold"
+                    >
+                      إرسال هدية إلى {liveSeat.userName || `مايك #${liveSeat.index + 1}`}
+                    </button>
+                  )}
+
+                  {/* Owner-Only: Grant / Revoke Room Full Moderation */}
+                  {isOwner && targetUserId && !targetIsOwner && (
+                    <button
+                      onClick={() => {
+                        toggleRoomModerator(activeRoom.id, targetUserId);
+                        setActiveBottomDrawer('none');
+                      }}
+                      className="w-full h-12 text-sky-300 hover:bg-white/6 transition-colors font-semibold flex items-center justify-center gap-2"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>
+                        {targetIsMod
+                          ? 'سحب إشراف الغرفة'
+                          : 'منح إشراف الغرفة (صلاحيات كاملة)'}
+                      </span>
+                    </button>
+                  )}
+
+                  {/* Owner / Moderator Actions */}
+                  {canManage && targetUserId && !targetIsOwner && targetUserId !== currentUser.id && (
+                    <>
+                      <button
+                        onClick={() => {
+                          toggleSeatMuteByModerator(liveSeat.index);
+                          setActiveBottomDrawer('none');
+                        }}
+                        className="w-full h-12 text-slate-200 hover:bg-white/6 transition-colors flex items-center justify-center gap-2"
+                      >
+                        <MicOff className="w-4 h-4 text-amber-400" />
+                        <span>{liveSeat.isMuted ? 'فتح المايك للمتحدث' : 'كتم مايك المتحدث'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          kickUserFromSeat(liveSeat.index);
+                          setActiveBottomDrawer('none');
+                        }}
+                        className="w-full h-12 text-orange-300 hover:bg-white/6 transition-colors flex items-center justify-center gap-2"
+                      >
+                        <UserMinus className="w-4 h-4" />
+                        <span>إنزال من المايك</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          banUserFromRoom(activeRoom.id, targetUserId);
+                          setActiveBottomDrawer('none');
+                        }}
+                        className="w-full h-12 text-rose-400 hover:bg-white/6 transition-colors flex items-center justify-center gap-2"
+                      >
+                        <Ban className="w-4 h-4" />
+                        <span>حظر من الغرفة</span>
+                      </button>
+                    </>
+                  )}
+
+                  {canManage && (
+                    <>
+                      <button
+                        onClick={() => {
+                          toggleSeatLock(liveSeat.index);
+                          setActiveBottomDrawer('none');
+                        }}
+                        className="w-full h-12 text-slate-200 hover:bg-white/6 transition-colors"
+                      >
+                        {liveSeat.isLocked ? 'فتح قفل المايك' : 'قفل المايك'}
+                      </button>
+
+                      <button
+                        onClick={() => handleClearHeartValue(liveSeat.index)}
+                        className="w-full h-12 text-rose-400 hover:bg-white/6 transition-colors"
+                      >
+                        تصفير نقاط الكاريزما
+                      </button>
+                    </>
+                  )}
                 </div>
+
+                <button
+                  onClick={() => setActiveBottomDrawer('none')}
+                  className="w-full h-12 rounded-2xl bg-[#151a2b] border border-white/10 text-slate-300 font-semibold text-sm hover:bg-white/6 transition-colors"
+                >
+                  إلغاء
+                </button>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* ================================================================= */}
-        {/* DRAWER 4: SEAT ACTION SHEET (Clean Native Pattern)                */}
-        {/* ================================================================= */}
-        {activeBottomDrawer === 'seat_menu' && selectedSeatForMenu && (
-          <div
-            className="absolute inset-0 z-50 bg-black/60 backdrop-blur-[2px] flex flex-col justify-end p-3"
-            onClick={() => setActiveBottomDrawer('none')}
-          >
-            <div
-              className="w-full space-y-2"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="rounded-2xl bg-[#151a2b] border border-white/10 overflow-hidden divide-y divide-white/8 text-center text-sm font-medium">
-                <div className="py-2.5 text-xs text-slate-400">
-                  {selectedSeatForMenu.index === 0
-                    ? 'مايك المضيف (#1)'
-                    : `مايك #${selectedSeatForMenu.index + 1}`}{' '}
-                  {selectedSeatForMenu.userName ? `· ${selectedSeatForMenu.userName}` : '· متاح'}
-                </div>
-
-                <button
-                  onClick={() => {
-                    if (selectedSeatForMenu.userId === currentUser.id) {
-                      leaveSeat();
-                    } else if (selectedSeatForMenu.userId) {
-                      const targetUser = users.find((u) => u.id === selectedSeatForMenu.userId);
-                      setViewingProfileUser(targetUser || currentUser);
-                      setActiveModal('profile');
-                    } else {
-                      takeSeat(selectedSeatForMenu.index);
-                    }
-                    setActiveBottomDrawer('none');
-                  }}
-                  className="w-full h-12 text-white hover:bg-white/6 transition-colors font-semibold"
-                >
-                  {selectedSeatForMenu.userId === currentUser.id
-                    ? 'النزول من المايك'
-                    : selectedSeatForMenu.userId
-                    ? 'عرض الملف الشخصي'
-                    : 'صعود إلى المايك'}
-                </button>
-
-                {selectedSeatForMenu.userId && (
-                  <button
-                    onClick={() => {
-                      openGiftDrawer(selectedSeatForMenu.index);
-                    }}
-                    className="w-full h-12 text-amber-300 hover:bg-white/6 transition-colors font-semibold"
-                  >
-                    إرسال هدية إلى {selectedSeatForMenu.userName || `مايك #${selectedSeatForMenu.index + 1}`}
-                  </button>
-                )}
-
-                <button
-                  onClick={() => {
-                    toggleSeatLock(selectedSeatForMenu.index);
-                    setActiveBottomDrawer('none');
-                  }}
-                  className="w-full h-12 text-slate-200 hover:bg-white/6 transition-colors"
-                >
-                  {selectedSeatForMenu.isLocked ? 'فتح قفل المايك' : 'قفل المايك'}
-                </button>
-
-                <button
-                  onClick={() => handleClearHeartValue(selectedSeatForMenu.index)}
-                  className="w-full h-12 text-rose-400 hover:bg-white/6 transition-colors"
-                >
-                  تصفير نقاط الكاريزما
-                </button>
-              </div>
-
-              <button
-                onClick={() => setActiveBottomDrawer('none')}
-                className="w-full h-12 rounded-2xl bg-[#151a2b] border border-white/10 text-slate-300 font-semibold text-sm hover:bg-white/6 transition-colors"
-              >
-                إلغاء
-              </button>
-            </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ================================================================= */}
         {/* DRAWER 5: EMOJI SHEET                                             */}

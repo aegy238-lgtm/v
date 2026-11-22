@@ -109,6 +109,7 @@ export interface ResolvedGiftStageMedia {
   fallbackUrl?: string;
   preferVideo: boolean;
   durationMs: number;
+  hasExplicitDuration: boolean;
 }
 
 export function resolveGiftStageMedia(gift: {
@@ -118,7 +119,11 @@ export function resolveGiftStageMedia(gift: {
 }): ResolvedGiftStageMedia {
   const cleanVideo = normalizeMediaUrl(gift.videoUrl);
   const cleanImage = normalizeMediaUrl(gift.imageUrl);
-  const durationMs = clampEffectDurationSec(gift.effectDurationSec, 5) * 1000;
+  const hasExplicitDuration =
+    typeof gift.effectDurationSec === 'number' &&
+    Number.isFinite(gift.effectDurationSec) &&
+    gift.effectDurationSec >= 1;
+  const durationMs = (hasExplicitDuration ? clampEffectDurationSec(gift.effectDurationSec, 6) : 6) * 1000;
 
   if (cleanVideo) {
     const videoKind = detectMediaKind(cleanVideo);
@@ -127,6 +132,7 @@ export function resolveGiftStageMedia(gift: {
       fallbackUrl: cleanImage || undefined,
       preferVideo: videoKind === 'video' || videoKind === 'unknown',
       durationMs,
+      hasExplicitDuration,
     };
   }
 
@@ -136,6 +142,7 @@ export function resolveGiftStageMedia(gift: {
       mediaUrl: cleanImage,
       preferVideo: imgKind === 'video',
       durationMs,
+      hasExplicitDuration,
     };
   }
 
@@ -143,6 +150,7 @@ export function resolveGiftStageMedia(gift: {
     mediaUrl: undefined,
     preferVideo: false,
     durationMs,
+    hasExplicitDuration,
   };
 }
 
@@ -152,6 +160,7 @@ export interface ResolvedEntranceStageMedia {
   preferVideo: boolean;
   isVideoEntrance: boolean;
   durationMs: number;
+  hasExplicitDuration: boolean;
 }
 
 export function resolveEntranceStageMedia(item?: {
@@ -166,13 +175,16 @@ export function resolveEntranceStageMedia(item?: {
       preferVideo: false,
       isVideoEntrance: false,
       durationMs: 4500,
+      hasExplicitDuration: false,
     };
   }
 
   const cleanVideo = normalizeMediaUrl(item.videoUrl);
   const cleanPreview = normalizeMediaUrl(item.previewUrl);
   const hasExplicitDuration =
-    typeof item.effectDurationSec === 'number' && Number.isFinite(item.effectDurationSec) && item.effectDurationSec >= 1;
+    typeof item.effectDurationSec === 'number' &&
+    Number.isFinite(item.effectDurationSec) &&
+    item.effectDurationSec >= 1;
 
   if (cleanVideo) {
     const kind = detectMediaKind(cleanVideo);
@@ -183,6 +195,7 @@ export function resolveEntranceStageMedia(item?: {
       preferVideo: isVideo,
       isVideoEntrance: isVideo,
       durationMs: (hasExplicitDuration ? clampEffectDurationSec(item.effectDurationSec, 7) : 7) * 1000,
+      hasExplicitDuration,
     };
   }
 
@@ -195,6 +208,7 @@ export function resolveEntranceStageMedia(item?: {
       preferVideo: isVideo,
       isVideoEntrance: isVideo,
       durationMs: (hasExplicitDuration ? clampEffectDurationSec(item.effectDurationSec, 7) : 7) * 1000,
+      hasExplicitDuration,
     };
   }
 
@@ -204,5 +218,6 @@ export function resolveEntranceStageMedia(item?: {
     preferVideo: false,
     isVideoEntrance: false,
     durationMs: (hasExplicitDuration ? clampEffectDurationSec(item.effectDurationSec, 5) : 4.5) * 1000,
+    hasExplicitDuration,
   };
 }

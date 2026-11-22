@@ -44,9 +44,15 @@
         "roomNo": { "type": "string", "minLength": 1, "maxLength": 32 },
         "title": { "type": "string", "minLength": 1, "maxLength": 120 },
         "description": { "type": "string", "maxLength": 500 },
-        "coverImage": { "type": "string", "maxLength": 1024 },
+        "coverImage": { "type": "string", "maxLength": 2048 },
+        "backgroundId": { "type": "string", "maxLength": 128 },
+        "backgroundUrl": { "type": "string", "maxLength": 2048 },
         "category": { "type": "string", "enum": ["all", "chat", "music", "games", "vip", "official", "agency", "celebrity"] },
         "type": { "type": "string", "enum": ["public", "password", "vip", "official"] },
+        "password": { "type": "string", "maxLength": 64 },
+        "isLocked": { "type": "boolean" },
+        "announcement": { "type": "string", "maxLength": 500 },
+        "currentMusicTrack": { "type": "string", "maxLength": 160 },
         "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "ownerName": { "type": "string", "maxLength": 80 },
         "ownerAvatar": { "type": "string", "maxLength": 1024 },
@@ -59,6 +65,18 @@
         "tags": { "type": "array" }
       },
       "required": ["id", "roomNo", "title", "category", "type", "ownerId", "seatCount", "seats", "onlineViewersCount", "totalDiamondsEarned"]
+    },
+    "RoomBackground": {
+      "title": "RoomBackground",
+      "description": "Custom voice room wallpaper URL uploaded from the Admin Dashboard",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "nameAr": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "imageUrl": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "nameAr", "imageUrl"]
     },
     "RoomChatMessage": {
       "title": "RoomChatMessage",
@@ -297,6 +315,10 @@
     "/auravoice_rooms/{roomId}": {
       "schema": "VoiceRoom",
       "description": "Active voice chat rooms and seat allocations"
+    },
+    "/auravoice_room_backgrounds/{bgId}": {
+      "schema": "RoomBackground",
+      "description": "Custom room background image URLs uploaded by admin"
     },
     "/auravoice_rooms/{roomId}/messages/{messageId}": {
       "schema": "RoomChatMessage",

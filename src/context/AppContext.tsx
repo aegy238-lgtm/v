@@ -14,6 +14,7 @@ import {
   UserInventoryItem,
   ActiveScreenTab,
   RoomSeat,
+  RoomBackground,
   LuckyGiftConfig,
   GlobalJackpotBannerState,
 } from '../types';
@@ -50,6 +51,7 @@ import {
   persistAuraAgent,
   persistAuraGift,
   persistAuraRoom,
+  persistAuraRoomBackground,
   persistAuraStoreItem,
   persistAuraTransaction,
   persistAuraUser,
@@ -58,6 +60,7 @@ import {
   persistRoomMessage,
   removeAuraGift,
   removeAuraRoom,
+  removeAuraRoomBackground,
   removeAuraStoreItem,
   subscribeToAuthAuraCollections,
   subscribeToPublicAuraCollections,
@@ -89,6 +92,7 @@ interface EntranceBannerState {
   preferVideo?: boolean;
   isVideoEntrance?: boolean;
   durationMs?: number;
+  hasExplicitDuration?: boolean;
 }
 
 interface AppContextType {
@@ -102,6 +106,7 @@ interface AppContextType {
   currentUser: User;
   users: User[];
   rooms: VoiceRoom[];
+  roomBackgrounds: RoomBackground[];
   activeRoom: VoiceRoom | null;
   activeRoomMessages: RoomChatMessage[];
   gifts: GiftItem[];
@@ -132,15 +137,49 @@ interface AppContextType {
   viewingProfileUser: User | null;
   setViewingProfileUser: (u: User | null) => void;
 
+  // Room Role Helpers
+  isRoomOwner: (room: VoiceRoom, userId?: string) => boolean;
+  isRoomModerator: (room: VoiceRoom, userId?: string) => boolean;
+  canManageRoom: (room: VoiceRoom, userId?: string) => boolean;
+
   // Actions
-  joinRoom: (roomId: string) => void;
+  joinRoom: (
+    roomId: string,
+    enteredPassword?: string
+  ) => {
+    success: boolean;
+    reason?: 'banned' | 'password_required' | 'wrong_password' | 'vip_only' | 'locked' | 'not_found';
+    message?: string;
+  };
   leaveRoom: () => void;
   takeSeat: (seatIndex: number) => void;
   leaveSeat: () => void;
   toggleMic: () => void;
   toggleSeatLock: (seatIndex: number) => void;
+  toggleAllSeatsLock: () => void;
+  toggleSeatMuteByModerator: (seatIndex: number) => void;
+  kickUserFromSeat: (seatIndex: number) => void;
+  clearSeatHeartPoints: (seatIndex: number) => void;
+  toggleRoomModerator: (roomId: string, targetUserId: string) => { success: boolean; message: string };
+  adminToggleRoomModerator: (roomId: string, targetUserId: string) => { success: boolean; message: string };
+  banUserFromRoom: (roomId: string, targetUserId: string) => void;
+  unbanUserFromRoom: (roomId: string, targetUserId: string) => void;
+  updateRoomPrivacySettings: (
+    roomId: string,
+    updates: {
+      title?: string;
+      announcement?: string;
+      type?: VoiceRoom['type'];
+      password?: string;
+      isLocked?: boolean;
+      backgroundId?: string;
+      backgroundUrl?: string;
+      coverImage?: string;
+    }
+  ) => boolean;
   sendRoomMessage: (text: string) => void;
   sendGift: (giftId: string, count: number, targetType: 'speaker' | 'seat' | 'all', seatIndex?: number, seatIndices?: number[]) => boolean;
+  triggerFlyingGift: (gift: GiftItem, count: number, targetName: string) => void;
   rechargeCoins: (coins: number, paymentMethod: string) => void;
   agentRechargeUser: (agentId: string, targetUserCode: string, coinAmount: number) => { success: boolean; message: string };
   purchaseVip: (level: number, durationMonths: number) => boolean;
@@ -150,7 +189,15 @@ interface AppContextType {
   clearEntranceBanner: () => void;
   convertDiamondsToCoins: (diamonds: number) => boolean;
   requestWithdrawal: (diamonds: number, bankInfo: string) => boolean;
-  createVoiceRoom: (roomData: { title: string; category: VoiceRoom['category']; type: VoiceRoom['type']; seatCount: VoiceRoom['seatCount'] }) => void;
+  createVoiceRoom: (roomData: {
+    title: string;
+    category: VoiceRoom['category'];
+    type: VoiceRoom['type'];
+    seatCount: VoiceRoom['seatCount'];
+    password?: string;
+    backgroundId?: string;
+    backgroundUrl?: string;
+  }) => void;
   updateUserProfile: (updates: Partial<User>) => void;
   
   // Admin & Staff Actions
@@ -159,6 +206,8 @@ interface AppContextType {
   adminToggleMute: (userId: string) => void;
   adminSetVipLevel: (userId: string, level: number) => void;
   adminCloseRoom: (roomId: string) => void;
+  adminCreateRoomBackground: (bg: { nameAr: string; imageUrl: string }) => RoomBackground;
+  adminDeleteRoomBackground: (bgId: string) => void;
   adminCreateGift: (gift: GiftItem) => void;
   adminUpdateGift: (giftId: string, updates: Partial<GiftItem>) => void;
   adminDeleteGift: (giftId: string) => void;
@@ -249,6 +298,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return INITIAL_ROOMS;
   });
 
+  const [roomBackgrounds, setRoomBackgrounds] = useState<RoomBackground[]>(() => {
+    try {
+      const saved = localStorage.getItem('auravoice_room_backgrounds_v1');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+  const hasRemoteRoomBackgroundsRef = React.useRef<boolean>(false);
+
   const [gifts, setGifts] = useState<GiftItem[]>(() => {
     const saved = localStorage.getItem('auravoice_gifts');
     if (saved) {
@@ -302,6 +365,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [activeRoomMessages, setActiveRoomMessages] = useState<RoomChatMessage[]>([]);
   const [flyingGift, setFlyingGift] = useState<FlyingGiftState | null>(null);
+  const flyingTimerRef = React.useRef<number | null>(null);
   const [entranceBanner, setEntranceBanner] = useState<EntranceBannerState | null>(null);
   const entranceTimerRef = React.useRef<number | null>(null);
 
@@ -482,6 +546,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     localStorage.setItem('auravoice_store_items_v1', JSON.stringify(storeItems));
   }, [storeItems]);
+  useEffect(() => {
+    localStorage.setItem('auravoice_room_backgrounds_v1', JSON.stringify(roomBackgrounds));
+  }, [roomBackgrounds]);
 
   // Subscribe to Firebase connection status & auth state
   useEffect(() => {
@@ -527,10 +594,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // Public Firestore real-time listeners (rooms, gifts, store items, agencies, lucky config)
+  // Public Firestore real-time listeners (rooms, room backgrounds, gifts, store items, agencies, lucky config)
   useEffect(() => {
     const unsubPublic = subscribeToPublicAuraCollections({
       onRooms: (remoteRooms) => setRooms(remoteRooms),
+      onRoomBackgrounds: (remoteBgs) => {
+        if (remoteBgs.length > 0) {
+          hasRemoteRoomBackgroundsRef.current = true;
+          setRoomBackgrounds(remoteBgs);
+        } else if (hasRemoteRoomBackgroundsRef.current) {
+          setRoomBackgrounds([]);
+        }
+      },
       onGifts: (remoteGifts) => setGifts(remoteGifts),
       onStoreItems: (remoteStore) => setStoreItems(remoteStore),
       onAgencies: (remoteAgencies) => setAgencies(remoteAgencies),
@@ -777,6 +852,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const res = await syncAllAuraVoiceToFirestore({
         users,
         rooms,
+        roomBackgrounds,
         gifts,
         storeItems,
         agencies,
@@ -941,10 +1017,94 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Join Room
-  const joinRoom = (roomId: string) => {
+  const isRoomOwner = (room: VoiceRoom, userId?: string): boolean => {
+    const uid = userId ?? currentUser.id;
+    return room.ownerId === uid;
+  };
+
+  const isRoomModerator = (room: VoiceRoom, userId?: string): boolean => {
+    const uid = userId ?? currentUser.id;
+    return Array.isArray(room.moderators) && room.moderators.includes(uid);
+  };
+
+  const canManageRoom = (room: VoiceRoom, userId?: string): boolean => {
+    const uid = userId ?? currentUser.id;
+    return room.ownerId === uid || (Array.isArray(room.moderators) && room.moderators.includes(uid));
+  };
+
+  // Join Room (Enforces Bans, Locked Rooms, Password Rooms & VIP Privacy — Owner & Moderators bypass locks)
+  const joinRoom = (
+    roomId: string,
+    enteredPassword?: string
+  ): {
+    success: boolean;
+    reason?: 'banned' | 'password_required' | 'wrong_password' | 'vip_only' | 'locked' | 'not_found';
+    message?: string;
+  } => {
     const room = rooms.find((r) => r.id === roomId);
-    if (!room) return;
+    if (!room) {
+      return { success: false, reason: 'not_found', message: 'الغرفة غير موجودة أو تم إغلاقها.' };
+    }
+
+    if (Array.isArray(room.bannedUserIds) && room.bannedUserIds.includes(currentUser.id)) {
+      return {
+        success: false,
+        reason: 'banned',
+        message: 'تم حظرك من دخول هذه الغرفة من قِبل المالك أو المشرفين.',
+      };
+    }
+
+    const isManager = canManageRoom(room, currentUser.id);
+    if (!isManager) {
+      const cleanPass = room.password?.trim() || '';
+      if (room.type === 'password' && cleanPass) {
+        if (!enteredPassword || !enteredPassword.trim()) {
+          return {
+            success: false,
+            reason: 'password_required',
+            message: 'هذه الغرفة محمية برمز مرور للدخول.',
+          };
+        }
+        if (enteredPassword.trim() !== cleanPass) {
+          return {
+            success: false,
+            reason: 'wrong_password',
+            message: 'رمز المرور غير صحيح، يرجى المحاولة مرة أخرى.',
+          };
+        }
+      } else if (room.isLocked) {
+        if (cleanPass) {
+          if (!enteredPassword || !enteredPassword.trim()) {
+            return {
+              success: false,
+              reason: 'password_required',
+              message: 'الغرفة مقفلة برمز مرور.',
+            };
+          }
+          if (enteredPassword.trim() !== cleanPass) {
+            return {
+              success: false,
+              reason: 'wrong_password',
+              message: 'رمز المرور غير صحيح.',
+            };
+          }
+        } else {
+          return {
+            success: false,
+            reason: 'locked',
+            message: 'هذه الغرفة مقفلة حالياً بواسطة المالك أو المشرف.',
+          };
+        }
+      }
+
+      if (room.type === 'vip' && currentUser.vipLevel < 1) {
+        return {
+          success: false,
+          reason: 'vip_only',
+          message: 'هذه الغرفة مخصصة لأعضاء VIP فقط.',
+        };
+      }
+    }
 
     setActiveRoomId(roomId);
     
@@ -961,6 +1121,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     // Initial greeting in room chat
+    const roleTag = isRoomOwner(room, currentUser.id)
+      ? ' · المالك 👑'
+      : isRoomModerator(room, currentUser.id)
+      ? ' · مشرف الغرفة 🛡️'
+      : '';
+
     const welcomeMsg: RoomChatMessage = {
       id: `msg_${Date.now()}`,
       roomId,
@@ -970,18 +1136,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       vipLevel: 0,
       level: 0,
       isSystem: true,
-      text: `دخل ${currentUser.displayName} إلى الغرفة (VIP ${currentUser.vipLevel}) ✨`,
+      text: `دخل ${currentUser.displayName} إلى الغرفة (VIP ${currentUser.vipLevel}${roleTag}) ✨`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
     setActiveRoomMessages([welcomeMsg]);
 
     // Trigger equipped store entrance effect OR VIP tier entrance on joining room
+    // Respect explicit entrance removal (`activeEntranceId === ''`)
+    const hasRemovedEntrance = currentUser.activeEntranceId === '';
     const activeStoreEntrance = currentUser.activeEntranceId
       ? storeItems.find((i) => i.id === currentUser.activeEntranceId && i.type === 'entrance')
       : undefined;
 
-    if (activeStoreEntrance || currentUser.vipLevel >= 1) {
+    if (activeStoreEntrance || (!hasRemovedEntrance && currentUser.vipLevel >= 1)) {
+      sound.unlockAudio();
       const vipInfo = vipTiers.find((v) => v.level === currentUser.vipLevel) || vipTiers[0];
       const resolved = resolveEntranceStageMedia(activeStoreEntrance);
       if (entranceTimerRef.current) {
@@ -1001,17 +1170,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         preferVideo: resolved.preferVideo,
         isVideoEntrance: resolved.isVideoEntrance,
         durationMs: resolved.durationMs,
+        hasExplicitDuration: resolved.hasExplicitDuration,
       });
 
       sound.playGiftSound('fanfare');
 
-      // Video entrances play to natural completion via <video onEnded>; non-video uses configurable durationMs
-      const timerMs = resolved.isVideoEntrance ? 180000 : resolved.durationMs;
+      // Media-backed entrances (Video, APNG, GIF, WebP) dismiss via SmartMediaView.onEnded;
+      // keep only a generous safety net unless icon-only VIP entrance.
+      const timerMs = resolved.primaryUrl ? 180000 : resolved.durationMs;
       entranceTimerRef.current = window.setTimeout(() => {
         setEntranceBanner(null);
         entranceTimerRef.current = null;
       }, timerMs);
     }
+
+    return { success: true };
   };
 
   // Leave Room
@@ -1206,9 +1379,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  // Toggle Seat Lock (by room owner/moderator)
+  const pushRoomSystemNotice = (roomId: string, text: string) => {
+    const sysMsg: RoomChatMessage = {
+      id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      roomId,
+      senderId: 'system',
+      senderName: 'نظام الغرفة',
+      senderAvatar: '',
+      vipLevel: 0,
+      level: 0,
+      isSystem: true,
+      text,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    if (activeRoomId === roomId) {
+      setActiveRoomMessages((prev) => [...prev, sysMsg]);
+    }
+    void persistRoomMessage(sysMsg).catch(() => {});
+  };
+
+  // Toggle Seat Lock (strictly restricted to room owner or granted moderators)
   const toggleSeatLock = (seatIndex: number) => {
     if (!activeRoom || seatIndex < 0 || seatIndex >= 8) return;
+    if (!canManageRoom(activeRoom, currentUser.id)) return;
+
     setRooms((prev) =>
       prev.map((r) => {
         if (r.id === activeRoom.id) {
@@ -1240,6 +1434,322 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
+  const toggleAllSeatsLock = () => {
+    if (!activeRoom || !canManageRoom(activeRoom, currentUser.id)) return;
+    setRooms((prev) =>
+      prev.map((r) => {
+        if (r.id === activeRoom.id) {
+          const expandedSeats: RoomSeat[] = Array.from({ length: 8 }, (_, idx) => {
+            if (r.seats && r.seats[idx]) return r.seats[idx];
+            return {
+              index: idx,
+              userId: null,
+              heartPoints: 0,
+              isMuted: false,
+              isLocked: false,
+              isReserved: false,
+              isSpeaking: false,
+              audioLevel: 0,
+            };
+          });
+          const anyUnlocked = expandedSeats.some((s) => !s.isLocked);
+          const updated = {
+            ...r,
+            seats: expandedSeats.map((s) => ({ ...s, isLocked: anyUnlocked })),
+          };
+          void persistAuraRoom(updated).catch(() => {});
+          return updated;
+        }
+        return r;
+      })
+    );
+  };
+
+  const toggleSeatMuteByModerator = (seatIndex: number) => {
+    if (!activeRoom || seatIndex < 0 || seatIndex >= 8) return;
+    const seat = activeRoom.seats[seatIndex];
+    if (!seat?.userId) return;
+    const isSelf = seat.userId === currentUser.id;
+    if (!isSelf && !canManageRoom(activeRoom, currentUser.id)) return;
+
+    const nextMuted = !seat.isMuted;
+    sound.playMicClick(!nextMuted);
+
+    setRooms((prev) =>
+      prev.map((r) => {
+        if (r.id === activeRoom.id) {
+          const updated = {
+            ...r,
+            seats: r.seats.map((s, idx) =>
+              idx === seatIndex
+                ? {
+                    ...s,
+                    isMuted: nextMuted,
+                    isSpeaking: !nextMuted,
+                    audioLevel: nextMuted ? 0 : 70,
+                  }
+                : s
+            ),
+          };
+          void persistAuraRoom(updated).catch(() => {});
+          return updated;
+        }
+        return r;
+      })
+    );
+
+    if (!isSelf) {
+      pushRoomSystemNotice(
+        activeRoom.id,
+        nextMuted
+          ? `قام ${currentUser.displayName} بكتم مايك ${seat.userName || `مايك ${seatIndex + 1}`} 🔇`
+          : `قام ${currentUser.displayName} بفتح مايك ${seat.userName || `مايك ${seatIndex + 1}`} 🎙️`
+      );
+    }
+  };
+
+  const kickUserFromSeat = (seatIndex: number) => {
+    if (!activeRoom || seatIndex < 0 || seatIndex >= 8) return;
+    if (!canManageRoom(activeRoom, currentUser.id)) return;
+    const seat = activeRoom.seats[seatIndex];
+    if (!seat?.userId) return;
+    if (seat.userId === activeRoom.ownerId && currentUser.id !== activeRoom.ownerId) return;
+
+    sound.playMicClick(false);
+    setRooms((prev) =>
+      prev.map((r) => {
+        if (r.id === activeRoom.id) {
+          const updated = {
+            ...r,
+            seats: r.seats.map((s, idx) =>
+              idx === seatIndex
+                ? {
+                    ...s,
+                    userId: null,
+                    userName: undefined,
+                    userAvatar: undefined,
+                    vipLevel: undefined,
+                    level: undefined,
+                    activeFrameId: undefined,
+                    isSpeaking: false,
+                    audioLevel: 0,
+                  }
+                : s
+            ),
+          };
+          void persistAuraRoom(updated).catch(() => {});
+          return updated;
+        }
+        return r;
+      })
+    );
+
+    pushRoomSystemNotice(
+      activeRoom.id,
+      `قام ${currentUser.displayName} بإنزال ${seat.userName || `مايك ${seatIndex + 1}`} من المايك`
+    );
+  };
+
+  const clearSeatHeartPoints = (seatIndex: number) => {
+    if (!activeRoom || seatIndex < 0 || seatIndex >= 8) return;
+    if (!canManageRoom(activeRoom, currentUser.id)) return;
+    setRooms((prev) =>
+      prev.map((r) => {
+        if (r.id === activeRoom.id) {
+          const updated = {
+            ...r,
+            seats: r.seats.map((s, idx) => (idx === seatIndex ? { ...s, heartPoints: 0 } : s)),
+          };
+          void persistAuraRoom(updated).catch(() => {});
+          return updated;
+        }
+        return r;
+      })
+    );
+  };
+
+  const applyModeratorToggle = (
+    roomId: string,
+    targetUserId: string,
+    requireOwner: boolean
+  ): { success: boolean; message: string } => {
+    const room = rooms.find((r) => r.id === roomId);
+    if (!room) return { success: false, message: 'الغرفة غير موجودة.' };
+    if (requireOwner && room.ownerId !== currentUser.id) {
+      return { success: false, message: 'منح أو سحب الإشراف متاح لمالك الغرفة فقط.' };
+    }
+    if (targetUserId === room.ownerId) {
+      return { success: false, message: 'مالك الغرفة يمتلك كافة الصلاحيات بشكل دائم.' };
+    }
+
+    const targetUser = users.find((u) => u.id === targetUserId);
+    const targetName = targetUser?.displayName || targetUserId;
+    const currentMods = Array.isArray(room.moderators) ? room.moderators : [room.ownerId];
+    const isAlreadyMod = currentMods.includes(targetUserId);
+
+    const nextMods = isAlreadyMod
+      ? currentMods.filter((id) => id !== targetUserId)
+      : Array.from(new Set([...currentMods, targetUserId]));
+
+    const nextBanned = isAlreadyMod
+      ? room.bannedUserIds || []
+      : (room.bannedUserIds || []).filter((id) => id !== targetUserId);
+
+    setRooms((prev) =>
+      prev.map((r) => {
+        if (r.id === roomId) {
+          const updated = { ...r, moderators: nextMods, bannedUserIds: nextBanned };
+          void persistAuraRoom(updated).catch(() => {});
+          return updated;
+        }
+        return r;
+      })
+    );
+
+    const noticeText = isAlreadyMod
+      ? `تم سحب صلاحيات إشراف الغرفة من ${targetName}`
+      : `تم منح ${targetName} إشراف الغرفة الكامل 🛡️`;
+
+    if (activeRoomId === roomId) {
+      pushRoomSystemNotice(roomId, noticeText);
+    }
+
+    return { success: true, message: noticeText };
+  };
+
+  const toggleRoomModerator = (roomId: string, targetUserId: string) =>
+    applyModeratorToggle(roomId, targetUserId, true);
+
+  const adminToggleRoomModerator = (roomId: string, targetUserId: string) =>
+    applyModeratorToggle(roomId, targetUserId, false);
+
+  const banUserFromRoom = (roomId: string, targetUserId: string) => {
+    const room = rooms.find((r) => r.id === roomId);
+    if (!room || !canManageRoom(room, currentUser.id)) return;
+    if (targetUserId === room.ownerId) return;
+
+    const targetUser = users.find((u) => u.id === targetUserId);
+    const targetName = targetUser?.displayName || 'عضو';
+
+    setRooms((prev) =>
+      prev.map((r) => {
+        if (r.id === roomId) {
+          const updated: VoiceRoom = {
+            ...r,
+            moderators: (r.moderators || []).filter((id) => id !== targetUserId),
+            bannedUserIds: Array.from(new Set([...(r.bannedUserIds || []), targetUserId])),
+            seats: r.seats.map((s) =>
+              s.userId === targetUserId
+                ? {
+                    ...s,
+                    userId: null,
+                    userName: undefined,
+                    userAvatar: undefined,
+                    vipLevel: undefined,
+                    level: undefined,
+                    activeFrameId: undefined,
+                    isSpeaking: false,
+                    audioLevel: 0,
+                  }
+                : s
+            ),
+          };
+          void persistAuraRoom(updated).catch(() => {});
+          return updated;
+        }
+        return r;
+      })
+    );
+
+    if (activeRoomId === roomId) {
+      pushRoomSystemNotice(roomId, `تم حظر ${targetName} وطرده من الغرفة بواسطة ${currentUser.displayName} 🚫`);
+    }
+  };
+
+  const unbanUserFromRoom = (roomId: string, targetUserId: string) => {
+    const room = rooms.find((r) => r.id === roomId);
+    if (!room || !canManageRoom(room, currentUser.id)) return;
+
+    const targetUser = users.find((u) => u.id === targetUserId);
+    const targetName = targetUser?.displayName || 'عضو';
+
+    setRooms((prev) =>
+      prev.map((r) => {
+        if (r.id === roomId) {
+          const updated: VoiceRoom = {
+            ...r,
+            bannedUserIds: (r.bannedUserIds || []).filter((id) => id !== targetUserId),
+          };
+          void persistAuraRoom(updated).catch(() => {});
+          return updated;
+        }
+        return r;
+      })
+    );
+
+    if (activeRoomId === roomId) {
+      pushRoomSystemNotice(roomId, `تم رفع الحظر عن ${targetName} في الغرفة ✅`);
+    }
+  };
+
+  const updateRoomPrivacySettings = (
+    roomId: string,
+    updates: {
+      title?: string;
+      announcement?: string;
+      type?: VoiceRoom['type'];
+      password?: string;
+      isLocked?: boolean;
+      backgroundId?: string;
+      backgroundUrl?: string;
+      coverImage?: string;
+    }
+  ): boolean => {
+    const room = rooms.find((r) => r.id === roomId);
+    if (!room || !canManageRoom(room, currentUser.id)) return false;
+
+    setRooms((prev) =>
+      prev.map((r) => {
+        if (r.id === roomId) {
+          const nextType = updates.type ?? r.type;
+          const nextPassword =
+            updates.password !== undefined
+              ? updates.password.trim()
+              : nextType === 'public' || nextType === 'official'
+              ? ''
+              : r.password || '';
+          const nextBgUrl =
+            updates.backgroundUrl !== undefined ? updates.backgroundUrl.trim() : r.backgroundUrl;
+          const nextCover =
+            updates.coverImage !== undefined
+              ? updates.coverImage
+              : updates.backgroundUrl !== undefined && updates.backgroundUrl.trim()
+              ? updates.backgroundUrl.trim()
+              : r.coverImage;
+
+          const updated: VoiceRoom = {
+            ...r,
+            title: updates.title !== undefined ? updates.title.trim() || r.title : r.title,
+            announcement:
+              updates.announcement !== undefined ? updates.announcement.trim() : r.announcement,
+            type: nextType,
+            password: nextPassword,
+            isLocked: updates.isLocked !== undefined ? updates.isLocked : r.isLocked,
+            backgroundId:
+              updates.backgroundId !== undefined ? updates.backgroundId : r.backgroundId,
+            backgroundUrl: nextBgUrl,
+            coverImage: nextCover,
+          };
+          void persistAuraRoom(updated).catch(() => {});
+          return updated;
+        }
+        return r;
+      })
+    );
+
+    return true;
+  };
+
   // Send Room Chat Message
   const sendRoomMessage = (text: string) => {
     if (!activeRoom || !text.trim()) return;
@@ -1257,6 +1767,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setActiveRoomMessages((prev) => [...prev, newMsg]);
     void persistRoomMessage(newMsg).catch(() => {});
+  };
+
+  // Trigger Flying Gift Stage State (used by sendGift, GiftModal, and BackpackModal)
+  const triggerFlyingGift = (gift: GiftItem, count: number, targetName: string) => {
+    if (flyingTimerRef.current) {
+      window.clearTimeout(flyingTimerRef.current);
+      flyingTimerRef.current = null;
+    }
+    setFlyingGift({
+      id: `fly_${Date.now()}_${Math.random()}`,
+      gift,
+      count,
+      senderName: currentUser.displayName,
+      senderVip: currentUser.vipLevel,
+      targetName,
+    });
+    flyingTimerRef.current = window.setTimeout(() => {
+      setFlyingGift(null);
+      flyingTimerRef.current = null;
+    }, 4500);
   };
 
   // Send Gift inside Room
@@ -1381,18 +1911,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void persistAuraTransaction(newTx).catch(() => {});
 
     // Trigger Flying Gift Banner Animation
-    setFlyingGift({
-      id: `fly_${Date.now()}_${Math.random()}`,
-      gift,
-      count,
-      senderName: currentUser.displayName,
-      senderVip: currentUser.vipLevel,
-      targetName: targets.map((t) => t.name).join(', '),
-    });
-
-    setTimeout(() => {
-      setFlyingGift(null);
-    }, 4500);
+    triggerFlyingGift(gift, count, targets.map((t) => t.name).join(', '));
 
     // Post to Room Chat
     const chatGiftMsg: RoomChatMessage = {
@@ -1606,14 +2125,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const triggerEntranceEffect = (item?: StoreItem) => {
+    const hasRemovedEntrance = currentUser.activeEntranceId === '';
+    if (!item && hasRemovedEntrance) return;
     const resolvedItem =
       item ||
       (currentUser.activeEntranceId
         ? storeItems.find((i) => i.id === currentUser.activeEntranceId && i.type === 'entrance')
         : undefined);
     const vipInfo = vipTiers.find((v) => v.level === currentUser.vipLevel) || vipTiers[0];
-    if (!resolvedItem && currentUser.vipLevel < 1) return;
+    if (!resolvedItem && (currentUser.vipLevel < 1 || hasRemovedEntrance)) return;
 
+    sound.unlockAudio();
     if (entranceTimerRef.current) {
       window.clearTimeout(entranceTimerRef.current);
       entranceTimerRef.current = null;
@@ -1632,9 +2154,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       preferVideo: resolved.preferVideo,
       isVideoEntrance: resolved.isVideoEntrance,
       durationMs: resolved.durationMs,
+      hasExplicitDuration: resolved.hasExplicitDuration,
     });
     sound.playGiftSound('fanfare');
-    const timerMs = resolved.isVideoEntrance ? 180000 : resolved.durationMs;
+    const timerMs = resolved.primaryUrl ? 180000 : resolved.durationMs;
     entranceTimerRef.current = window.setTimeout(() => {
       setEntranceBanner(null);
       entranceTimerRef.current = null;
@@ -1694,7 +2217,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
-  // Equip Item from Backpack
+  // Equip or Unequip (itemId === '') Item from Backpack
   const equipInventoryItem = (type: 'frame' | 'entrance' | 'badge' | 'bubble' | 'vip', itemId: string) => {
     setUsers((prev) =>
       prev.map((u) => {
@@ -1713,11 +2236,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (type === 'frame') {
       syncUserFrameToSeats(itemId);
     }
-    if (type === 'entrance' && activeRoomId) {
-      const targetEntrance = storeItems.find((i) => i.id === itemId && i.type === 'entrance');
-      if (targetEntrance) triggerEntranceEffect(targetEntrance);
+    if (type === 'entrance') {
+      if (!itemId) {
+        clearEntranceBanner();
+      } else if (activeRoomId) {
+        const targetEntrance = storeItems.find((i) => i.id === itemId && i.type === 'entrance');
+        if (targetEntrance) triggerEntranceEffect(targetEntrance);
+      }
     }
-    sound.playMicClick(true);
+    sound.playMicClick(Boolean(itemId));
   };
 
   // Convert Diamonds to Coins
@@ -1805,15 +2332,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     category: VoiceRoom['category'];
     type: VoiceRoom['type'];
     seatCount: VoiceRoom['seatCount'];
+    password?: string;
+    backgroundId?: string;
+    backgroundUrl?: string;
   }) => {
+    const cleanBgUrl = roomData.backgroundUrl?.trim() || '';
     const newRoom: VoiceRoom = {
       id: `room_${Date.now()}`,
       roomNo: `${Math.floor(1000 + Math.random() * 9000)}`,
       title: roomData.title,
       description: 'مرحباً بالجميع في غرفتنا الصوتية',
-      coverImage: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=600&q=80',
+      coverImage:
+        cleanBgUrl ||
+        'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=600&q=80',
+      backgroundId: roomData.backgroundId || (cleanBgUrl ? undefined : 'midnight'),
+      backgroundUrl: cleanBgUrl || undefined,
       category: roomData.category,
       type: roomData.type,
+      password: roomData.type === 'password' ? roomData.password?.trim() || '' : undefined,
       ownerId: currentUser.id,
       ownerName: currentUser.displayName,
       ownerAvatar: currentUser.avatar,
@@ -1825,6 +2361,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userAvatar: i === 0 ? currentUser.avatar : undefined,
         vipLevel: i === 0 ? currentUser.vipLevel : 0,
         level: i === 0 ? currentUser.level : 0,
+        activeFrameId: i === 0 ? currentUser.activeFrameId : undefined,
         isMuted: false,
         isLocked: false,
         isReserved: false,
@@ -1840,7 +2377,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setRooms((prev) => [newRoom, ...prev]);
     void persistAuraRoom(newRoom).catch(() => {});
-    joinRoom(newRoom.id);
+    setActiveRoomId(newRoom.id);
+    setActiveRoomMessages([
+      {
+        id: `msg_${Date.now()}`,
+        roomId: newRoom.id,
+        senderId: 'system',
+        senderName: 'نظام الغرفة',
+        senderAvatar: '',
+        vipLevel: 0,
+        level: 0,
+        isSystem: true,
+        text: `أنشأ ${currentUser.displayName} الغرفة (${newRoom.title}) كمالك الغرفة 👑`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      },
+    ]);
   };
 
   // Update User Profile (Name, Avatar, Bio, Country, Special ID userCode, etc.)
@@ -1935,6 +2486,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     setRooms((prev) => prev.filter((r) => r.id !== roomId));
     void removeAuraRoom(roomId).catch(() => {});
+  };
+
+  const adminCreateRoomBackground = (bg: { nameAr: string; imageUrl: string }): RoomBackground => {
+    const newBg: RoomBackground = {
+      id: `roombg_${Date.now()}`,
+      nameAr: bg.nameAr.trim() || 'خلفية غرفة مخصصة',
+      imageUrl: bg.imageUrl.trim(),
+      createdAt: new Date().toISOString().slice(0, 10),
+    };
+    setRoomBackgrounds((prev) => [newBg, ...prev]);
+    void persistAuraRoomBackground(newBg).catch(() => {});
+    return newBg;
+  };
+
+  const adminDeleteRoomBackground = (bgId: string) => {
+    setRoomBackgrounds((prev) => prev.filter((b) => b.id !== bgId));
+    void removeAuraRoomBackground(bgId).catch(() => {});
   };
 
   const adminCreateGift = (gift: GiftItem) => {
@@ -2063,6 +2631,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentUser,
         users,
         rooms,
+        roomBackgrounds,
         activeRoom,
         activeRoomMessages,
         gifts,
@@ -2086,14 +2655,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveModal,
         viewingProfileUser,
         setViewingProfileUser,
+        isRoomOwner,
+        isRoomModerator,
+        canManageRoom,
         joinRoom,
         leaveRoom,
         takeSeat,
         leaveSeat,
         toggleMic,
         toggleSeatLock,
+        toggleAllSeatsLock,
+        toggleSeatMuteByModerator,
+        kickUserFromSeat,
+        clearSeatHeartPoints,
+        toggleRoomModerator,
+        adminToggleRoomModerator,
+        banUserFromRoom,
+        unbanUserFromRoom,
+        updateRoomPrivacySettings,
         sendRoomMessage,
         sendGift,
+        triggerFlyingGift,
         rechargeCoins,
         agentRechargeUser,
         purchaseVip,
@@ -2110,6 +2692,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         adminToggleMute,
         adminSetVipLevel,
         adminCloseRoom,
+        adminCreateRoomBackground,
+        adminDeleteRoomBackground,
         adminCreateGift,
         adminUpdateGift,
         adminDeleteGift,

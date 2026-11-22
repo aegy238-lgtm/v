@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   Shield,
@@ -29,6 +29,9 @@ import {
   ShoppingBag,
   Volume2,
   Square,
+  ShieldCheck,
+  UserPlus,
+  Link2,
 } from 'lucide-react';
 import { GiftCategory, GiftItem, SoundEffectType, StoreItem } from '../types';
 import { SmartMediaView } from './SmartMediaView';
@@ -37,12 +40,22 @@ import {
   getMediaFormatLabel,
   resolveEntranceStageMedia,
 } from '../utils/mediaFormats';
+import { ApngInfo, inspectApngUrl } from '../utils/apngEngine';
 import { sound } from '../utils/audio';
+
+function parseOptionalDurationSec(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const num = Number(trimmed);
+  if (!Number.isFinite(num) || num < 1) return undefined;
+  return clampEffectDurationSec(num, 5);
+}
 
 export const AdminDashboard: React.FC = () => {
   const {
     users,
     rooms,
+    roomBackgrounds,
     gifts,
     agencies,
     agents,
@@ -58,6 +71,9 @@ export const AdminDashboard: React.FC = () => {
     adminToggleMute,
     adminSetVipLevel,
     adminCloseRoom,
+    adminCreateRoomBackground,
+    adminDeleteRoomBackground,
+    adminToggleRoomModerator,
     adminCreateGift,
     adminUpdateGift,
     adminDeleteGift,
@@ -93,7 +109,7 @@ export const AdminDashboard: React.FC = () => {
   const [newStoreIcon, setNewStoreIcon] = useState('🚘');
   const [newStorePreviewUrl, setNewStorePreviewUrl] = useState('');
   const [newStoreVideoUrl, setNewStoreVideoUrl] = useState('');
-  const [newStoreEffectSec, setNewStoreEffectSec] = useState(7);
+  const [newStoreEffectSec, setNewStoreEffectSec] = useState('');
   const [newStoreDesc, setNewStoreDesc] = useState('');
   const [previewingEntrance, setPreviewingEntrance] = useState<StoreItem | null>(null);
 
@@ -103,7 +119,7 @@ export const AdminDashboard: React.FC = () => {
     videoUrl: string;
     priceCoins: number;
     durationDays: number;
-    effectDurationSec: number;
+    effectDurationSec: string;
   };
   const [storeDrafts, setStoreDrafts] = useState<Record<string, StoreDraft>>({});
 
@@ -114,7 +130,8 @@ export const AdminDashboard: React.FC = () => {
       videoUrl: item.videoUrl || '',
       priceCoins: item.priceCoins,
       durationDays: item.durationDays,
-      effectDurationSec: item.effectDurationSec ?? 7,
+      effectDurationSec:
+        typeof item.effectDurationSec === 'number' ? String(item.effectDurationSec) : '',
     };
 
   const setStoreField = (item: StoreItem, patch: Partial<StoreDraft>) => {
@@ -127,7 +144,8 @@ export const AdminDashboard: React.FC = () => {
           videoUrl: item.videoUrl || '',
           priceCoins: item.priceCoins,
           durationDays: item.durationDays,
-          effectDurationSec: item.effectDurationSec ?? 7,
+          effectDurationSec:
+            typeof item.effectDurationSec === 'number' ? String(item.effectDurationSec) : '',
         }),
         ...patch,
       },
@@ -141,7 +159,7 @@ export const AdminDashboard: React.FC = () => {
   const [adjustDiamonds, setAdjustDiamonds] = useState<number>(0);
   const [adjustNote, setAdjustNote] = useState('مكافأة داعم / تعويض إداري');
 
-  // New Gift Creation Form (supports ANY Image/GIF/WebP/MP4/WebM URL + Custom Sound URL + Duration)
+  // New Gift Creation Form (supports ANY Image/APNG/GIF/WebP/MP4/WebM URL + Custom Sound URL + Auto/Manual Duration)
   const [newGiftName, setNewGiftName] = useState('');
   const [newGiftPrice, setNewGiftPrice] = useState(1000);
   const [newGiftDiamonds, setNewGiftDiamonds] = useState(500);
@@ -149,18 +167,23 @@ export const AdminDashboard: React.FC = () => {
   const [newGiftImageUrl, setNewGiftImageUrl] = useState('');
   const [newGiftVideoUrl, setNewGiftVideoUrl] = useState('');
   const [newGiftSoundUrl, setNewGiftSoundUrl] = useState('');
-  const [newGiftDurationSec, setNewGiftDurationSec] = useState(5);
+  const [newGiftDurationSec, setNewGiftDurationSec] = useState('');
   const [newGiftIsLucky, setNewGiftIsLucky] = useState(false);
   const [newGiftCat, setNewGiftCat] = useState<GiftCategory>('luxury');
   const [newGiftSound, setNewGiftSound] = useState<SoundEffectType>('fanfare');
   const [previewingAudioTarget, setPreviewingAudioTarget] = useState<'new' | 'edit' | null>(null);
+
+  // Live APNG natural duration detection for pasted URLs
+  const [newGiftApngInfo, setNewGiftApngInfo] = useState<ApngInfo | null>(null);
+  const [editGiftApngInfo, setEditGiftApngInfo] = useState<ApngInfo | null>(null);
+  const [newStoreApngInfo, setNewStoreApngInfo] = useState<ApngInfo | null>(null);
 
   // Edit Existing Gift Modal
   const [editingGift, setEditingGift] = useState<GiftItem | null>(null);
   const [editImageUrl, setEditImageUrl] = useState('');
   const [editVideoUrl, setEditVideoUrl] = useState('');
   const [editSoundUrl, setEditSoundUrl] = useState('');
-  const [editDurationSec, setEditDurationSec] = useState(5);
+  const [editDurationSec, setEditDurationSec] = useState('');
   const [editPrice, setEditPrice] = useState(0);
   const [editIsLucky, setEditIsLucky] = useState(false);
 
@@ -169,6 +192,56 @@ export const AdminDashboard: React.FC = () => {
   const [newAgentBalance, setNewAgentBalance] = useState(2000000);
   const [newAgentRate, setNewAgentRate] = useState(5);
   const [adminNotice, setAdminNotice] = useState<string | null>(null);
+
+  // Room Backgrounds URL Uploader & Room Moderator Controls
+  const [newBgName, setNewBgName] = useState('');
+  const [newBgUrl, setNewBgUrl] = useState('');
+  const [roomModTargetUserByRoom, setRoomModTargetUserByRoom] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const probeUrl = (newGiftVideoUrl || newGiftImageUrl).trim();
+    if (!probeUrl) {
+      setNewGiftApngInfo(null);
+      return;
+    }
+    let cancelled = false;
+    void inspectApngUrl(probeUrl).then((info) => {
+      if (!cancelled) setNewGiftApngInfo(info?.isApng ? info : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [newGiftVideoUrl, newGiftImageUrl]);
+
+  useEffect(() => {
+    const probeUrl = (editVideoUrl || editImageUrl).trim();
+    if (!probeUrl) {
+      setEditGiftApngInfo(null);
+      return;
+    }
+    let cancelled = false;
+    void inspectApngUrl(probeUrl).then((info) => {
+      if (!cancelled) setEditGiftApngInfo(info?.isApng ? info : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [editVideoUrl, editImageUrl]);
+
+  useEffect(() => {
+    const probeUrl = (newStoreVideoUrl || newStorePreviewUrl).trim();
+    if (!probeUrl) {
+      setNewStoreApngInfo(null);
+      return;
+    }
+    let cancelled = false;
+    void inspectApngUrl(probeUrl).then((info) => {
+      if (!cancelled) setNewStoreApngInfo(info?.isApng ? info : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [newStoreVideoUrl, newStorePreviewUrl]);
 
   const showAdminNotice = (msg: string) => {
     setAdminNotice(msg);
@@ -211,7 +284,7 @@ export const AdminDashboard: React.FC = () => {
       imageUrl: cleanImg || undefined,
       videoUrl: cleanVid || undefined,
       soundUrl: cleanSnd || undefined,
-      effectDurationSec: clampEffectDurationSec(newGiftDurationSec, 5),
+      effectDurationSec: parseOptionalDurationSec(newGiftDurationSec),
       accentColor: isLucky ? '#ec4899' : '#f59e0b',
       animationType: isLucky
         ? 'lollipop_matrix'
@@ -233,7 +306,7 @@ export const AdminDashboard: React.FC = () => {
     setNewGiftImageUrl('');
     setNewGiftVideoUrl('');
     setNewGiftSoundUrl('');
-    setNewGiftDurationSec(5);
+    setNewGiftDurationSec('');
     setNewGiftIsLucky(false);
   };
 
@@ -242,7 +315,7 @@ export const AdminDashboard: React.FC = () => {
     setEditImageUrl(g.imageUrl || '');
     setEditVideoUrl(g.videoUrl || '');
     setEditSoundUrl(g.soundUrl || '');
-    setEditDurationSec(g.effectDurationSec ?? 5);
+    setEditDurationSec(typeof g.effectDurationSec === 'number' ? String(g.effectDurationSec) : '');
     setEditPrice(g.coinPrice);
     setEditIsLucky(Boolean(g.isLucky || g.category === 'lucky'));
   };
@@ -254,7 +327,7 @@ export const AdminDashboard: React.FC = () => {
       imageUrl: editImageUrl.trim() || undefined,
       videoUrl: editVideoUrl.trim() || undefined,
       soundUrl: editSoundUrl.trim() || undefined,
-      effectDurationSec: clampEffectDurationSec(editDurationSec, 5),
+      effectDurationSec: parseOptionalDurationSec(editDurationSec),
       coinPrice: Math.max(1, editPrice),
       isLucky: editIsLucky,
     });
@@ -306,7 +379,7 @@ export const AdminDashboard: React.FC = () => {
       previewUrl: newStorePreviewUrl.trim(),
       videoUrl: newStoreType === 'entrance' && newStoreVideoUrl.trim() ? newStoreVideoUrl.trim() : undefined,
       effectDurationSec:
-        newStoreType === 'entrance' ? clampEffectDurationSec(newStoreEffectSec, 7) : undefined,
+        newStoreType === 'entrance' ? parseOptionalDurationSec(newStoreEffectSec) : undefined,
       previewGradient: gradientByType[newStoreType],
       icon: newStoreIcon.trim() || defaultIconByType[newStoreType],
       descriptionAr:
@@ -325,7 +398,7 @@ export const AdminDashboard: React.FC = () => {
     setNewStoreName('');
     setNewStorePreviewUrl('');
     setNewStoreVideoUrl('');
-    setNewStoreEffectSec(7);
+    setNewStoreEffectSec('');
     setNewStoreDesc('');
   };
 
@@ -338,7 +411,7 @@ export const AdminDashboard: React.FC = () => {
     { id: 'gifts', label: 'الهدايا و MP4', icon: <Gift className="w-4 h-4" /> },
     { id: 'store', label: 'المتجر والدخوليات والإطارات', icon: <ShoppingBag className="w-4 h-4" /> },
     { id: 'users', label: 'المستخدمون', icon: <Users className="w-4 h-4" /> },
-    { id: 'rooms', label: 'الغرف', icon: <Radio className="w-4 h-4" /> },
+    { id: 'rooms', label: 'الغرف والخلفيات', icon: <Radio className="w-4 h-4" /> },
     { id: 'agents', label: 'وكلاء الشحن', icon: <CreditCard className="w-4 h-4" /> },
     { id: 'agencies', label: 'الوكالات', icon: <Briefcase className="w-4 h-4" /> },
     { id: 'staff', label: 'الصلاحيات', icon: <Shield className="w-4 h-4" /> },
@@ -711,11 +784,13 @@ export const AdminDashboard: React.FC = () => {
                   <label className="flex items-center justify-between text-slate-300 mb-1 font-semibold">
                     <span className="flex items-center gap-1.5">
                       <ImageIcon className="w-3.5 h-3.5 text-sky-400" />
-                      <span>رابط صورة أو GIF / WebP الهدية (يُعرض بكامل الغرفة):</span>
+                      <span>رابط صورة أو APNG / GIF / WebP الهدية:</span>
                     </span>
                     {newGiftImageUrl.trim() && (
                       <span className="font-mono text-[10px] text-sky-300">
-                        {getMediaFormatLabel(newGiftImageUrl)}
+                        {newGiftApngInfo && !newGiftVideoUrl.trim()
+                          ? `APNG • ${(newGiftApngInfo.totalDurationMs / 1000).toFixed(1)}ث (${newGiftApngInfo.numFrames} إطار)`
+                          : getMediaFormatLabel(newGiftImageUrl)}
                       </span>
                     )}
                   </label>
@@ -723,22 +798,24 @@ export const AdminDashboard: React.FC = () => {
                     type="text"
                     value={newGiftImageUrl}
                     onChange={(e) => setNewGiftImageUrl(e.target.value)}
-                    placeholder="https://example.com/gift.gif أو .webp أو .png"
+                    placeholder="https://example.com/gift.png أو .apng أو .gif أو .webp"
                     dir="ltr"
                     className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-sky-300 font-mono text-left focus:outline-none focus:border-sky-400"
                   />
                 </div>
 
-                {/* Animation / Video URL Input (MP4, WebM, GIF, WebP, or Direct CDN URL) */}
+                {/* Animation / Video URL Input (MP4, WebM, APNG, GIF, WebP, or Direct CDN URL) */}
                 <div>
                   <label className="flex items-center justify-between text-slate-300 mb-1 font-semibold">
                     <span className="flex items-center gap-1.5">
                       <Video className="w-3.5 h-3.5 text-rose-400" />
-                      <span>رابط حركة الهدية (MP4 / WebM / GIF / WebP / أي رابط):</span>
+                      <span>رابط حركة الهدية (MP4 / WebM / APNG / GIF / WebP):</span>
                     </span>
                     {newGiftVideoUrl.trim() && (
                       <span className="font-mono text-[10px] text-rose-300">
-                        {getMediaFormatLabel(newGiftVideoUrl)}
+                        {newGiftApngInfo
+                          ? `APNG • ${(newGiftApngInfo.totalDurationMs / 1000).toFixed(1)}ث (${newGiftApngInfo.numFrames} إطار)`
+                          : getMediaFormatLabel(newGiftVideoUrl)}
                       </span>
                     )}
                   </label>
@@ -746,7 +823,7 @@ export const AdminDashboard: React.FC = () => {
                     type="text"
                     value={newGiftVideoUrl}
                     onChange={(e) => setNewGiftVideoUrl(e.target.value)}
-                    placeholder="https://example.com/luxury-gift.mp4 أو .gif"
+                    placeholder="https://example.com/luxury-gift.mp4 أو .apng أو .gif"
                     dir="ltr"
                     className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-rose-300 font-mono text-left focus:outline-none focus:border-rose-400"
                   />
@@ -904,18 +981,17 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                   <div>
                     <label className="block text-slate-300 mb-1 font-semibold">
-                      مدة عرض GIF/الصورة (ث):
+                      مدة العرض (ث - اتركه فارغاً للتلقائي):
                     </label>
                     <input
                       type="number"
                       min={1}
                       max={120}
                       value={newGiftDurationSec}
-                      onChange={(e) =>
-                        setNewGiftDurationSec(clampEffectDurationSec(Number(e.target.value), 5))
-                      }
-                      title="الفيديو يعمل بكامل مدته، والصور المتحركة GIF/WebP تُعرض بهذه المدة"
-                      className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-cyan-300 font-mono tabular-nums font-bold focus:outline-none focus:border-cyan-400"
+                      onChange={(e) => setNewGiftDurationSec(e.target.value)}
+                      placeholder="تلقائي (كامل APNG/الفيديو)"
+                      title="عند ترك الحقل فارغاً يعمل الفيديو و APNG بكامل مدتهما الطبيعية تلقائياً"
+                      className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-cyan-300 font-mono tabular-nums font-bold focus:outline-none focus:border-cyan-400 placeholder:text-[11px] placeholder:font-sans placeholder:text-slate-500"
                     />
                   </div>
                 </div>
@@ -1153,9 +1229,13 @@ export const AdminDashboard: React.FC = () => {
                           <Video className="w-3.5 h-3.5 text-purple-400" />
                           <span>رابط حركة الدخولية (MP4 / WebM / GIF / WebP — أي رابط):</span>
                         </span>
-                        {newStoreVideoUrl.trim() && (
+                        {newStoreType === 'entrance' && (
                           <span className="font-mono text-[10px] text-purple-300">
-                            {getMediaFormatLabel(newStoreVideoUrl)}
+                            {newStoreApngInfo && newStoreVideoUrl.trim()
+                              ? `APNG • ${(newStoreApngInfo.totalDurationMs / 1000).toFixed(1)}ث`
+                              : newStoreVideoUrl.trim()
+                              ? getMediaFormatLabel(newStoreVideoUrl)
+                              : ''}
                           </span>
                         )}
                       </label>
@@ -1164,24 +1244,23 @@ export const AdminDashboard: React.FC = () => {
                         dir="ltr"
                         value={newStoreVideoUrl}
                         onChange={(e) => setNewStoreVideoUrl(e.target.value)}
-                        placeholder="https://example.com/entrance.mp4 أو .gif"
+                        placeholder="https://example.com/entrance.mp4 أو .apng أو .gif"
                         className="w-full min-h-[40px] bg-slate-950 border border-white/12 rounded-xl px-3 text-purple-300 font-mono text-left focus:outline-none focus:border-purple-400"
                       />
                     </div>
 
                     <div>
                       <label className="block text-slate-300 mb-1 font-semibold">
-                        مدة تشغيل GIF/الصورة بالثواني (الفيديو يعمل بكامل مدته تلقائياً):
+                        مدة التشغيل بالثواني (اتركه فارغاً لكامل APNG/الفيديو):
                       </label>
                       <input
                         type="number"
                         min={1}
                         max={120}
                         value={newStoreEffectSec}
-                        onChange={(e) =>
-                          setNewStoreEffectSec(clampEffectDurationSec(Number(e.target.value), 7))
-                        }
-                        className="w-full min-h-[40px] bg-slate-950 border border-white/12 rounded-xl px-3 text-cyan-300 font-mono tabular-nums font-bold focus:outline-none focus:border-cyan-400"
+                        onChange={(e) => setNewStoreEffectSec(e.target.value)}
+                        placeholder="تلقائي (كامل APNG/الفيديو)"
+                        className="w-full min-h-[40px] bg-slate-950 border border-white/12 rounded-xl px-3 text-cyan-300 font-mono tabular-nums font-bold focus:outline-none focus:border-cyan-400 placeholder:text-[11px] placeholder:font-sans placeholder:text-slate-500"
                       />
                     </div>
                   </>
@@ -1391,7 +1470,7 @@ export const AdminDashboard: React.FC = () => {
                                 />
                                 <div className="flex items-center justify-between gap-2 bg-slate-900 border border-white/10 rounded-xl px-2.5 min-h-[34px]">
                                   <span className="text-[10px] text-slate-400">
-                                    مدة GIF/صورة (ث):
+                                    المدة (ث / تلقائي):
                                   </span>
                                   <input
                                     type="number"
@@ -1400,14 +1479,12 @@ export const AdminDashboard: React.FC = () => {
                                     value={draft.effectDurationSec}
                                     onChange={(e) =>
                                       setStoreField(item, {
-                                        effectDurationSec: clampEffectDurationSec(
-                                          Number(e.target.value),
-                                          7
-                                        ),
+                                        effectDurationSec: e.target.value,
                                       })
                                     }
-                                    title="مدة عرض GIF/الصورة بالثواني (الفيديو يعمل بكامل مدته)"
-                                    className="w-16 bg-transparent text-left text-cyan-300 font-mono tabular-nums font-bold focus:outline-none"
+                                    placeholder="تلقائي"
+                                    title="اتركه فارغاً لتعمل الدخولية (APNG / فيديو) بكامل مدتها"
+                                    className="w-16 bg-transparent text-left text-cyan-300 font-mono tabular-nums font-bold focus:outline-none placeholder:text-[10px] placeholder:font-sans placeholder:text-slate-500"
                                   />
                                 </div>
                               </>
@@ -1456,7 +1533,7 @@ export const AdminDashboard: React.FC = () => {
                                       : undefined,
                                   effectDurationSec:
                                     item.type === 'entrance'
-                                      ? clampEffectDurationSec(draft.effectDurationSec, 7)
+                                      ? parseOptionalDurationSec(draft.effectDurationSec)
                                       : undefined,
                                   priceCoins: Math.max(0, draft.priceCoins),
                                   durationDays: Math.max(1, draft.durationDays),
@@ -1476,9 +1553,8 @@ export const AdminDashboard: React.FC = () => {
                                     nameAr: draft.nameAr.trim() || item.nameAr,
                                     previewUrl: draft.previewUrl.trim(),
                                     videoUrl: draft.videoUrl.trim() || undefined,
-                                    effectDurationSec: clampEffectDurationSec(
-                                      draft.effectDurationSec,
-                                      7
+                                    effectDurationSec: parseOptionalDurationSec(
+                                      draft.effectDurationSec
                                     ),
                                   };
                                   setPreviewingEntrance(previewItem);
@@ -1515,7 +1591,7 @@ export const AdminDashboard: React.FC = () => {
                                     : undefined,
                                 effectDurationSec:
                                   item.type === 'entrance'
-                                    ? clampEffectDurationSec(draft.effectDurationSec, 7)
+                                    ? parseOptionalDurationSec(draft.effectDurationSec)
                                     : undefined,
                                 priceCoins: Math.max(0, draft.priceCoins),
                                 durationDays: Math.max(1, draft.durationDays),
@@ -1775,42 +1851,278 @@ export const AdminDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 4: ROOMS MANAGEMENT */}
+      {/* TAB 4: ROOMS MANAGEMENT, MODERATORS & CUSTOM BACKGROUNDS BY URL */}
       {activeTab === 'rooms' && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {rooms.map((room) => (
-            <div
-              key={room.id}
-              className="p-4 sm:p-5 rounded-3xl bg-[#101524] border border-white/10 flex flex-col justify-between space-y-4"
+        <div className="space-y-6">
+          {/* Room Backgrounds URL Uploader + Gallery */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!newBgUrl.trim()) return;
+                const created = adminCreateRoomBackground({
+                  nameAr: newBgName.trim() || `خلفية غرفة #${roomBackgrounds.length + 1}`,
+                  imageUrl: newBgUrl.trim(),
+                });
+                setNewBgName('');
+                setNewBgUrl('');
+                showAdminNotice(`تم رفع الخلفية (${created.nameAr}) وتظهر الآن للمستخدمين داخل الغرف!`);
+              }}
+              className="lg:col-span-5 bg-[#101524] border border-amber-400/25 rounded-3xl p-4 sm:p-5 space-y-3.5 shadow-xl"
             >
-              <div>
-                <div className="flex items-center justify-between mb-2 text-xs">
-                  <span className="font-mono text-amber-300">ID: {room.roomNo}</span>
-                  <span className="text-slate-400 font-mono">{room.seatCount} مقاعد</span>
-                </div>
-                <h4 className="font-bold text-sm text-white">{room.title}</h4>
-                <div className="text-xs text-slate-400 mt-1">المالك: {room.ownerName}</div>
-                <div className="text-xs text-cyan-300 font-mono mt-1">
-                  المتواجدين: {room.onlineViewersCount}
-                </div>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-black text-sm sm:text-base text-amber-300 flex items-center gap-2">
+                  <ImageIcon className="w-4 h-4" />
+                  <span>رفع خلفية غرفة جديدة بالرابط</span>
+                </h3>
+                <span className="text-[11px] text-emerald-300 font-bold">تظهر فوراً بالغرف</span>
               </div>
 
-              <div className="pt-3 border-t border-white/10 flex items-center justify-between gap-2">
-                <span className="text-xs font-mono tabular-nums text-slate-400">
-                  الألماس: {(room.totalDiamondsEarned / 1000).toFixed(0)}K
-                </span>
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="block text-slate-300 mb-1 font-semibold">اسم الخلفية:</label>
+                  <input
+                    type="text"
+                    required
+                    value={newBgName}
+                    onChange={(e) => setNewBgName(e.target.value)}
+                    placeholder="مثال: قاعة القصر الذهبي / سهرة النيون"
+                    className="w-full min-h-[40px] bg-slate-950 border border-white/12 rounded-xl px-3 text-white focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="flex items-center justify-between text-slate-300 mb-1 font-semibold">
+                    <span className="flex items-center gap-1.5">
+                      <Link2 className="w-3.5 h-3.5 text-sky-400" />
+                      <span>رابط صورة الخلفية (PNG / JPG / GIF / WebP):</span>
+                    </span>
+                  </label>
+                  <input
+                    type="url"
+                    required
+                    dir="ltr"
+                    value={newBgUrl}
+                    onChange={(e) => setNewBgUrl(e.target.value)}
+                    placeholder="https://example.com/room-wallpaper.jpg"
+                    className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-sky-300 font-mono text-left focus:outline-none focus:border-sky-400"
+                  />
+                </div>
+
+                {newBgUrl.trim() && (
+                  <div className="relative h-32 rounded-2xl overflow-hidden border border-white/12 bg-slate-950">
+                    <img
+                      src={newBgUrl.trim()}
+                      alt={newBgName || 'معاينة الخلفية'}
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute inset-x-0 bottom-0 px-3 py-1.5 bg-black/70 text-[11px] font-bold text-white flex items-center justify-between">
+                      <span className="truncate">{newBgName.trim() || 'معاينة مباشرة'}</span>
+                      <span className="text-emerald-300 font-mono text-[10px]">PREVIEW</span>
+                    </div>
+                  </div>
+                )}
+
                 <button
-                  onClick={() => {
-                    adminCloseRoom(room.id);
-                    showAdminNotice(`تم إغلاق الغرفة (${room.title}).`);
-                  }}
-                  className="min-h-[38px] px-3 py-1.5 rounded-xl bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 text-xs font-bold"
+                  type="submit"
+                  className="w-full min-h-[44px] py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs shadow-md transition-colors flex items-center justify-center gap-1.5"
                 >
-                  إغلاق الغرفة
+                  <Plus className="w-4 h-4" />
+                  <span>إضافة الخلفية للغرف فوراً</span>
                 </button>
               </div>
+            </form>
+
+            {/* Uploaded Room Backgrounds Gallery */}
+            <div className="lg:col-span-7 bg-[#101524] border border-white/10 rounded-3xl p-4 sm:p-5 shadow-xl space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-bold text-sm text-white">
+                  خلفيات الغرف المرفوعة بالروابط ({roomBackgrounds.length})
+                </h3>
+                <span className="text-[11px] text-slate-400">
+                  تظهر للمالك والمشرفين في إعدادات الغرفة للاختيار منها
+                </span>
+              </div>
+
+              {roomBackgrounds.length === 0 ? (
+                <div className="py-10 rounded-2xl bg-slate-950/70 border border-white/8 text-center space-y-2">
+                  <div className="text-3xl opacity-80">🖼️</div>
+                  <p className="text-xs text-slate-400">
+                    لم يتم رفع خلفيات مخصصة بعد — أضف رابط صورة من النموذج وسيظهر فوراً في جميع الغرف.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[340px] overflow-y-auto pr-0.5">
+                  {roomBackgrounds.map((bg) => (
+                    <div
+                      key={bg.id}
+                      className="group relative rounded-2xl overflow-hidden border border-white/12 bg-slate-950 flex flex-col"
+                    >
+                      <div className="relative h-28 w-full overflow-hidden">
+                        <img
+                          src={bg.imageUrl}
+                          alt={bg.nameAr}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            adminDeleteRoomBackground(bg.id);
+                            showAdminNotice(`تم حذف الخلفية (${bg.nameAr}).`);
+                          }}
+                          className="absolute top-2 left-2 w-8 h-8 rounded-xl bg-rose-600/85 hover:bg-rose-500 text-white flex items-center justify-center shadow-lg transition-colors"
+                          title="حذف الخلفية"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <div className="p-2.5 text-right space-y-0.5">
+                        <div className="text-xs font-bold text-white truncate">{bg.nameAr}</div>
+                        <div className="text-[10px] font-mono text-sky-300/80 truncate" dir="ltr">
+                          {bg.imageUrl}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          ))}
+          </div>
+
+          {/* Active Rooms + Room Moderator Assignment */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {rooms.map((room) => {
+              const roomMods = (room.moderators || []).filter((id) => id !== room.ownerId);
+              const candidateUsers = users.filter((u) => u.id !== room.ownerId);
+              const selectedTargetId =
+                roomModTargetUserByRoom[room.id] || candidateUsers[0]?.id || '';
+
+              return (
+                <div
+                  key={room.id}
+                  className="p-4 sm:p-5 rounded-3xl bg-[#101524] border border-white/10 flex flex-col justify-between space-y-4"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs gap-2">
+                      <span className="font-mono text-amber-300">ID: {room.roomNo}</span>
+                      <span
+                        className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${
+                          room.isLocked
+                            ? 'bg-rose-500/20 text-rose-300'
+                            : room.type === 'password'
+                            ? 'bg-amber-500/20 text-amber-300'
+                            : room.type === 'vip'
+                            ? 'bg-purple-500/20 text-purple-300'
+                            : 'bg-emerald-500/15 text-emerald-300'
+                        }`}
+                      >
+                        {room.isLocked
+                          ? '🔒 مقفلة'
+                          : room.type === 'password'
+                          ? '🔑 برمز مرور'
+                          : room.type === 'vip'
+                          ? '👑 VIP'
+                          : 'عامة'}
+                      </span>
+                    </div>
+                    <h4 className="font-bold text-sm text-white">{room.title}</h4>
+                    <div className="text-xs text-slate-400">المالك: {room.ownerName}</div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-cyan-300 font-mono">
+                        المتواجدين: {room.onlineViewersCount}
+                      </span>
+                      <span className="text-amber-300/90 font-semibold">
+                        المشرفون: {roomMods.length}
+                      </span>
+                    </div>
+
+                    {/* Assign / Remove Room Moderator from Admin Dashboard */}
+                    <div className="pt-2 border-t border-white/8 space-y-2">
+                      <div className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                        <span>منح / سحب إشراف الغرفة:</span>
+                      </div>
+
+                      {candidateUsers.length > 0 && (
+                        <div className="flex items-center gap-1.5">
+                          <select
+                            value={selectedTargetId}
+                            onChange={(e) =>
+                              setRoomModTargetUserByRoom((prev) => ({
+                                ...prev,
+                                [room.id]: e.target.value,
+                              }))
+                            }
+                            className="flex-1 min-w-0 h-9 rounded-xl bg-slate-950 border border-white/12 px-2 text-[11px] text-white focus:outline-none focus:border-amber-400"
+                          >
+                            {candidateUsers.map((u) => (
+                              <option key={u.id} value={u.id}>
+                                {u.displayName} ({u.userCode})
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!selectedTargetId) return;
+                              const res = adminToggleRoomModerator(room.id, selectedTargetId);
+                              showAdminNotice(res.message);
+                            }}
+                            className="h-9 px-2.5 rounded-xl bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/40 text-amber-300 text-[11px] font-bold shrink-0 flex items-center gap-1"
+                          >
+                            <UserPlus className="w-3.5 h-3.5" />
+                            <span>
+                              {roomMods.includes(selectedTargetId) ? 'سحب' : 'منح إشراف'}
+                            </span>
+                          </button>
+                        </div>
+                      )}
+
+                      {roomMods.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {roomMods.map((modId) => {
+                            const modUser = users.find((u) => u.id === modId);
+                            return (
+                              <button
+                                key={modId}
+                                type="button"
+                                onClick={() => {
+                                  const res = adminToggleRoomModerator(room.id, modId);
+                                  showAdminNotice(res.message);
+                                }}
+                                className="px-2 py-0.5 rounded-lg bg-indigo-500/20 hover:bg-rose-500/25 border border-indigo-400/30 text-[10px] text-indigo-200 flex items-center gap-1"
+                                title="اضغط لسحب الإشراف"
+                              >
+                                <span>🛡️ {modUser?.displayName || modId}</span>
+                                <X className="w-2.5 h-2.5" />
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-white/10 flex items-center justify-between gap-2">
+                    <span className="text-xs font-mono tabular-nums text-slate-400">
+                      الألماس: {(room.totalDiamondsEarned / 1000).toFixed(0)}K
+                    </span>
+                    <button
+                      onClick={() => {
+                        adminCloseRoom(room.id);
+                        showAdminNotice(`تم إغلاق الغرفة (${room.title}).`);
+                      }}
+                      className="min-h-[38px] px-3 py-1.5 rounded-xl bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 text-xs font-bold"
+                    >
+                      إغلاق الغرفة
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -2178,10 +2490,12 @@ export const AdminDashboard: React.FC = () => {
             <form onSubmit={handleSaveGiftEdit} className="space-y-3 text-xs">
               <div>
                 <label className="flex items-center justify-between text-slate-300 mb-1 font-semibold">
-                  <span>رابط صورة أو GIF / WebP الهدية:</span>
+                  <span>رابط صورة أو APNG / GIF / WebP الهدية:</span>
                   {editImageUrl.trim() && (
                     <span className="font-mono text-[10px] text-sky-300">
-                      {getMediaFormatLabel(editImageUrl)}
+                      {editGiftApngInfo && !editVideoUrl.trim()
+                        ? `APNG • ${(editGiftApngInfo.totalDurationMs / 1000).toFixed(1)}ث (${editGiftApngInfo.numFrames} إطار)`
+                        : getMediaFormatLabel(editImageUrl)}
                     </span>
                   )}
                 </label>
@@ -2190,17 +2504,19 @@ export const AdminDashboard: React.FC = () => {
                   dir="ltr"
                   value={editImageUrl}
                   onChange={(e) => setEditImageUrl(e.target.value)}
-                  placeholder="https://example.com/gift.gif أو .webp أو .png"
+                  placeholder="https://example.com/gift.png أو .apng أو .gif"
                   className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-sky-300 font-mono text-left focus:outline-none focus:border-sky-400"
                 />
               </div>
 
               <div>
                 <label className="flex items-center justify-between text-slate-300 mb-1 font-semibold">
-                  <span>رابط حركة الهدية (MP4 / WebM / GIF / WebP):</span>
+                  <span>رابط حركة الهدية (MP4 / WebM / APNG / GIF / WebP):</span>
                   {editVideoUrl.trim() && (
                     <span className="font-mono text-[10px] text-rose-300">
-                      {getMediaFormatLabel(editVideoUrl)}
+                      {editGiftApngInfo
+                        ? `APNG • ${(editGiftApngInfo.totalDurationMs / 1000).toFixed(1)}ث (${editGiftApngInfo.numFrames} إطار)`
+                        : getMediaFormatLabel(editVideoUrl)}
                     </span>
                   )}
                 </label>
@@ -2209,7 +2525,7 @@ export const AdminDashboard: React.FC = () => {
                   dir="ltr"
                   value={editVideoUrl}
                   onChange={(e) => setEditVideoUrl(e.target.value)}
-                  placeholder="https://example.com/gift-animation.mp4 أو .gif"
+                  placeholder="https://example.com/gift-animation.mp4 أو .apng أو .gif"
                   className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-rose-300 font-mono text-left focus:outline-none focus:border-rose-400"
                 />
               </div>
@@ -2272,17 +2588,16 @@ export const AdminDashboard: React.FC = () => {
                 </div>
                 <div>
                   <label className="block text-slate-300 mb-1 font-semibold">
-                    مدة GIF/صورة (ث):
+                    المدة (ث / فارغ = تلقائي):
                   </label>
                   <input
                     type="number"
                     min={1}
                     max={120}
                     value={editDurationSec}
-                    onChange={(e) =>
-                      setEditDurationSec(clampEffectDurationSec(Number(e.target.value), 5))
-                    }
-                    className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-cyan-300 font-mono tabular-nums font-bold focus:outline-none focus:border-cyan-400"
+                    onChange={(e) => setEditDurationSec(e.target.value)}
+                    placeholder="تلقائي (كامل APNG)"
+                    className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-cyan-300 font-mono tabular-nums font-bold focus:outline-none focus:border-cyan-400 placeholder:text-[11px] placeholder:font-sans placeholder:text-slate-500"
                   />
                 </div>
               </div>

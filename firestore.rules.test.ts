@@ -31,6 +31,9 @@ assert.match(rulesContent, /isValidStoreItem\(incoming\(\)\)/);
 assert.match(rulesContent, /'soundUrl' in data/);
 assert.match(rulesContent, /'effectDurationSec' in data/);
 assert.match(rulesContent, /isValidTransaction\(incoming\(\)\)/);
+assert.match(rulesContent, /isValidRoomBackground\(incoming\(\)\)/);
+assert.match(rulesContent, /'backgroundUrl' in data/);
+assert.match(rulesContent, /'moderators' in existing\(\)/);
 
 // 5. No blanket open writes
 assert.equal(/allow\s+(write|create|update|delete)\s*:\s*if\s+true\s*;/.test(rulesContent), false);

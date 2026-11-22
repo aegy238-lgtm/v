@@ -5,6 +5,10 @@ class SoundEngine {
   private isMuted: boolean = false;
   private activeAudioSet: Set<HTMLAudioElement> = new Set();
   private previewAudioEl: HTMLAudioElement | null = null;
+  private audioBufferCache: Map<string, AudioBuffer> = new Map();
+  private inflightAudioDecodes: Set<string> = new Set();
+  private preloadedAudioEls: Map<string, HTMLAudioElement> = new Map();
+  private audioUnlocked: boolean = false;
 
   private getContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -18,6 +22,59 @@ class SoundEngine {
       this.ctx.resume().catch(() => {});
     }
     return this.ctx;
+  }
+
+  public unlockAudio(): void {
+    const ctx = this.getContext();
+    if (ctx && !this.audioUnlocked) {
+      this.audioUnlocked = true;
+      try {
+        const silent = ctx.createBuffer(1, 1, 22050);
+        const src = ctx.createBufferSource();
+        src.buffer = silent;
+        src.connect(ctx.destination);
+        src.start(0);
+      } catch {
+        // ignore silent unlock errors
+      }
+    }
+  }
+
+  public preloadAudioUrl(url?: string | null): void {
+    const clean = url?.trim();
+    if (!clean || typeof window === 'undefined') return;
+
+    if (typeof Audio !== 'undefined' && !this.preloadedAudioEls.has(clean)) {
+      try {
+        const el = new Audio(clean);
+        el.preload = 'auto';
+        el.volume = 0.92;
+        el.load();
+        this.preloadedAudioEls.set(clean, el);
+      } catch {
+        // ignore audio element preload errors
+      }
+    }
+
+    if (this.audioBufferCache.has(clean) || this.inflightAudioDecodes.has(clean)) return;
+    const ctx = this.getContext();
+    if (!ctx) return;
+
+    this.inflightAudioDecodes.add(clean);
+    void fetch(clean, { mode: 'cors', credentials: 'omit' })
+      .then((res) => (res.ok ? res.arrayBuffer() : null))
+      .then((buf) => (buf ? ctx.decodeAudioData(buf) : null))
+      .then((decoded) => {
+        if (decoded) {
+          this.audioBufferCache.set(clean, decoded);
+        }
+      })
+      .catch(() => {
+        // CORS-restricted audio URLs will fall back cleanly to preloaded HTMLAudioElement
+      })
+      .finally(() => {
+        this.inflightAudioDecodes.delete(clean);
+      });
   }
 
   public toggleMute(): boolean {
@@ -92,46 +149,77 @@ class SoundEngine {
     if (this.isMuted || forceMuted) return;
 
     const cleanUrl = customSoundUrl?.trim();
-    if (cleanUrl && typeof Audio !== 'undefined') {
-      try {
-        // Cap simultaneous overlapping custom gift audio tracks cleanly
-        if (this.activeAudioSet.size >= 4) {
-          const oldest = this.activeAudioSet.values().next().value;
-          if (oldest) {
-            oldest.pause();
-            this.activeAudioSet.delete(oldest);
-          }
+    if (cleanUrl) {
+      // 1. Instant 0ms Web Audio BufferSource playback if already decoded in memory
+      const cachedBuffer = this.audioBufferCache.get(cleanUrl);
+      const ctx = this.getContext();
+      if (cachedBuffer && ctx) {
+        try {
+          const src = ctx.createBufferSource();
+          src.buffer = cachedBuffer;
+          const gain = ctx.createGain();
+          gain.gain.value = 0.92;
+          src.connect(gain);
+          gain.connect(ctx.destination);
+          src.start(0);
+          return;
+        } catch {
+          // fall through to HTMLAudioElement
         }
+      }
 
-        const audio = new Audio(cleanUrl);
-        audio.volume = 0.92;
-        audio.preload = 'auto';
-        this.activeAudioSet.add(audio);
+      // Trigger preload for next time
+      this.preloadAudioUrl(cleanUrl);
 
-        let fellBack = false;
-        const triggerFallback = () => {
-          this.activeAudioSet.delete(audio);
-          if (!fellBack) {
-            fellBack = true;
-            this.playGiftSound(fallbackType);
+      // 2. HTMLAudioElement playback (reusing warm cached element when idle)
+      if (typeof Audio !== 'undefined') {
+        try {
+          if (this.activeAudioSet.size >= 4) {
+            const oldest = this.activeAudioSet.values().next().value;
+            if (oldest) {
+              oldest.pause();
+              this.activeAudioSet.delete(oldest);
+            }
           }
-        };
 
-        audio.onended = () => {
-          this.activeAudioSet.delete(audio);
-        };
-        audio.onerror = triggerFallback;
+          const warm = this.preloadedAudioEls.get(cleanUrl);
+          const audio = warm && warm.paused ? warm : new Audio(cleanUrl);
+          if (audio === warm) {
+            try {
+              audio.currentTime = 0;
+            } catch {
+              // ignore seek errors before metadata
+            }
+          }
+          audio.volume = 0.92;
+          audio.preload = 'auto';
+          this.activeAudioSet.add(audio);
 
-        const playPromise = audio.play();
-        if (playPromise && typeof playPromise.catch === 'function') {
-          playPromise.catch(() => {
-            triggerFallback();
-          });
+          let fellBack = false;
+          const triggerFallback = () => {
+            this.activeAudioSet.delete(audio);
+            if (!fellBack) {
+              fellBack = true;
+              this.playGiftSound(fallbackType);
+            }
+          };
+
+          audio.onended = () => {
+            this.activeAudioSet.delete(audio);
+          };
+          audio.onerror = triggerFallback;
+
+          const playPromise = audio.play();
+          if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch(() => {
+              triggerFallback();
+            });
+          }
+          return;
+        } catch {
+          this.playGiftSound(fallbackType);
+          return;
         }
-        return;
-      } catch {
-        this.playGiftSound(fallbackType);
-        return;
       }
     }
 

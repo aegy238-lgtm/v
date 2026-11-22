@@ -1,7 +1,16 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { X, Radio, Lock, Users, Sparkles } from 'lucide-react';
+import { X, Radio, KeyRound, Image as ImageIcon } from 'lucide-react';
 import { VoiceRoom } from '../types';
+import midnightLoungeBg from '../assets/images/room_bg_midnight_lounge_1795294231147.jpg';
+import royalMajlisBg from '../assets/images/room_bg_royal_majlis_1795294234181.jpg';
+import starlightSkyBg from '../assets/images/room_bg_starlight_sky_1795294232054.jpg';
+
+const BUILTIN_ROOM_BACKGROUNDS = [
+  { id: 'midnight', nameAr: 'الصالة الليلية', imageUrl: midnightLoungeBg },
+  { id: 'majlis', nameAr: 'المجلس الملكي', imageUrl: royalMajlisBg },
+  { id: 'starlight', nameAr: 'سماء الليل', imageUrl: starlightSkyBg },
+];
 
 interface CreateRoomModalProps {
   isOpen: boolean;
@@ -9,32 +18,42 @@ interface CreateRoomModalProps {
 }
 
 export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({ isOpen, onClose }) => {
-  const { createVoiceRoom } = useApp();
+  const { createVoiceRoom, roomBackgrounds } = useApp();
 
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<VoiceRoom['category']>('music');
   const [roomType, setRoomType] = useState<VoiceRoom['type']>('public');
+  const [password, setPassword] = useState('');
+  const [selectedBgId, setSelectedBgId] = useState<string>('midnight');
   const seatCount: VoiceRoom['seatCount'] = 8;
 
   if (!isOpen) return null;
 
+  const selectedAdminBg = roomBackgrounds.find((b) => b.id === selectedBgId);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
+    if (roomType === 'password' && !password.trim()) return;
 
     createVoiceRoom({
       title: title.trim(),
       category,
       type: roomType,
       seatCount,
+      password: roomType === 'password' ? password.trim() : undefined,
+      backgroundId: selectedBgId,
+      backgroundUrl: selectedAdminBg ? selectedAdminBg.imageUrl : undefined,
     });
 
+    setTitle('');
+    setPassword('');
     onClose();
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden p-6 space-y-5">
+      <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto no-scrollbar bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl p-6 space-y-5">
         
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <div className="flex items-center gap-2">
@@ -84,7 +103,7 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({ isOpen, onClos
                 <button
                   key={c.id}
                   type="button"
-                  onClick={() => setCategory(c.id as any)}
+                  onClick={() => setCategory(c.id as VoiceRoom['category'])}
                   className={`p-2.5 rounded-xl border text-center font-bold transition-all ${
                     category === c.id
                       ? 'bg-amber-500/20 border-amber-500 text-amber-300'
@@ -104,9 +123,9 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({ isOpen, onClos
 
           <div>
             <label className="block text-slate-300 font-semibold mb-1.5">
-              نوع الخصوصية:
+              خصوصية الغرفة:
             </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => setRoomType('public')}
@@ -116,7 +135,19 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({ isOpen, onClos
                     : 'bg-slate-950 border-slate-800 text-slate-400'
                 }`}
               >
-                غرفة عامة (متاحة للجميع)
+                عامة
+              </button>
+              <button
+                type="button"
+                onClick={() => setRoomType('password')}
+                className={`p-2.5 rounded-xl border font-bold text-center flex items-center justify-center gap-1 ${
+                  roomType === 'password'
+                    ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                    : 'bg-slate-950 border-slate-800 text-slate-400'
+                }`}
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>برمز مرور</span>
               </button>
               <button
                 type="button"
@@ -127,8 +158,55 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({ isOpen, onClos
                     : 'bg-slate-950 border-slate-800 text-slate-400'
                 }`}
               >
-                غرفة VIP خاصة
+                VIP خاصة
               </button>
+            </div>
+          </div>
+
+          {roomType === 'password' && (
+            <div>
+              <label className="block text-amber-300 font-semibold mb-1.5">
+                رمز مرور الدخول:
+              </label>
+              <input
+                type="text"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="أدخل رمز الغرفة (مثال: 1234)"
+                className="w-full bg-slate-950 border border-amber-500/40 rounded-2xl px-4 py-2.5 font-mono text-slate-100 focus:outline-none focus:border-amber-400"
+              />
+            </div>
+          )}
+
+          <div>
+            <label className="flex items-center gap-1.5 text-slate-300 font-semibold mb-1.5">
+              <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
+              <span>خلفية الغرفة:</span>
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {[...roomBackgrounds, ...BUILTIN_ROOM_BACKGROUNDS].map((bg) => (
+                <button
+                  key={bg.id}
+                  type="button"
+                  onClick={() => setSelectedBgId(bg.id)}
+                  className={`relative h-16 rounded-xl overflow-hidden border-2 transition-all ${
+                    selectedBgId === bg.id
+                      ? 'border-amber-400 ring-2 ring-amber-400/25'
+                      : 'border-slate-800 opacity-75 hover:opacity-100'
+                  }`}
+                >
+                  <img
+                    src={bg.imageUrl}
+                    alt={bg.nameAr}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-x-0 bottom-0 py-0.5 px-1 bg-black/75 text-[10px] font-bold text-white truncate">
+                    {bg.nameAr}
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
 

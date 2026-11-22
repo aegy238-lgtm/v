@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { X, Crown, MessageCircle, Gift, UserPlus, Check, Sparkles, Edit3 } from 'lucide-react';
+import { X, Crown, MessageCircle, Gift, UserPlus, Check, Sparkles, Edit3, ShieldCheck, Shield, Ban } from 'lucide-react';
 import { GiftModal } from './GiftModal';
 
 interface UserProfileModalProps {
@@ -15,11 +15,21 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
     storeItems,
     users,
     setActiveModal,
+    activeRoom,
+    isRoomOwner,
+    canManageRoom,
+    toggleRoomModerator,
+    banUserFromRoom,
   } = useApp();
 
   const [isFollowing, setIsFollowing] = useState(false);
   const [isEditingBio, setIsEditingBio] = useState(false);
   const [bioText, setBioText] = useState('');
+  const [roomActionMsg, setRoomActionMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRoomActionMsg(null);
+  }, [viewingProfileUser?.id, isOpen]);
 
   if (!isOpen || !viewingProfileUser) return null;
 
@@ -63,13 +73,15 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
             <div
               className={
                 userFrame?.previewUrl
-                  ? 'w-20 h-20 rounded-full overflow-hidden shadow-2xl'
+                  ? 'w-[72px] h-[72px] rounded-full overflow-hidden shadow-2xl'
                   : `w-24 h-24 rounded-full p-1 border-4 ${
                       viewingProfileUser.activeFrameId === 'frame_gold_wings'
                         ? 'border-amber-400 ring-2 ring-yellow-300'
                         : viewingProfileUser.activeFrameId === 'frame_ruby_emperor'
                         ? 'border-rose-500 ring-2 ring-red-400'
-                        : 'border-cyan-400'
+                        : viewingProfileUser.activeFrameId
+                        ? 'border-cyan-400'
+                        : 'border-white/20'
                     } shadow-2xl`
               }
             >
@@ -85,7 +97,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
                 src={userFrame.previewUrl}
                 alt={userFrame.nameAr}
                 referrerPolicy="no-referrer"
-                className="pointer-events-none absolute -inset-2 w-[calc(100%+16px)] h-[calc(100%+16px)] object-contain z-20"
+                className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[122px] h-[122px] object-contain z-20"
               />
             )}
             {viewingProfileUser.vipLevel > 0 && !userFrame?.previewUrl && (
@@ -185,6 +197,58 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
               </button>
             )}
           </div>
+
+          {/* Room Owner / Moderator Quick Controls inside Active Room */}
+          {activeRoom && !isMe && viewingProfileUser.id !== activeRoom.ownerId && (isRoomOwner(activeRoom) || canManageRoom(activeRoom)) && (
+            <div className="mt-3 pt-3 border-t border-slate-800 space-y-2 text-right">
+              <div className="text-[11px] font-bold text-slate-400">
+                إدارة العضو داخل الغرفة الحالية ({activeRoom.title})
+              </div>
+              <div className="flex items-center gap-2">
+                {isRoomOwner(activeRoom) && (
+                  <button
+                    onClick={() => {
+                      const res = toggleRoomModerator(activeRoom.id, viewingProfileUser.id);
+                      setRoomActionMsg(res.message);
+                    }}
+                    className={`flex-1 py-2.5 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 border transition-colors ${
+                      activeRoom.moderators.includes(viewingProfileUser.id)
+                        ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                        : 'bg-sky-500/20 border-sky-400/40 text-sky-300'
+                    }`}
+                  >
+                    {activeRoom.moderators.includes(viewingProfileUser.id) ? (
+                      <>
+                        <Shield className="w-3.5 h-3.5" />
+                        <span>سحب إشراف الغرفة</span>
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>منح إشراف الغرفة</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
+                {canManageRoom(activeRoom) && (
+                  <button
+                    onClick={() => {
+                      banUserFromRoom(activeRoom.id, viewingProfileUser.id);
+                      setRoomActionMsg(`تم حظر ${viewingProfileUser.displayName} من الغرفة`);
+                    }}
+                    className="py-2.5 px-3.5 rounded-xl bg-rose-950/70 border border-rose-500/40 text-rose-300 font-bold text-xs flex items-center justify-center gap-1.5"
+                  >
+                    <Ban className="w-3.5 h-3.5" />
+                    <span>حظر</span>
+                  </button>
+                )}
+              </div>
+              {roomActionMsg && (
+                <div className="text-[11px] text-emerald-300 font-bold">{roomActionMsg}</div>
+              )}
+            </div>
+          )}
 
         </div>
 

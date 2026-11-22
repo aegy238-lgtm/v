@@ -27,6 +27,7 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
     equipInventoryItem,
     purchaseStoreItem,
     sendRoomMessage,
+    triggerFlyingGift,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<
@@ -86,9 +87,16 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
     const ok = consumeBagGift(giftId, sendQty);
     if (!ok) return;
 
-    sound.playGiftHitAudio(giftObj.soundEffect, giftObj.soundUrl);
+    sound.unlockAudio();
 
     const targetSeat = occupiedSeats[0];
+    const targetName = targetSeat.userName || `مايك ${targetSeat.index + 1}`;
+    triggerFlyingGift(giftObj, sendQty, targetName);
+
+    if (!giftObj.videoUrl && !giftObj.imageUrl) {
+      sound.playGiftHitAudio(giftObj.soundEffect, giftObj.soundUrl);
+    }
+
     const isLucky =
       giftObj.isLucky || giftObj.category === 'lucky' || giftObj.animationType === 'lollipop_matrix';
 
@@ -112,7 +120,7 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
     }
 
     sendRoomMessage(
-      `أرسل من الحقيبة ${giftObj.icon} ${giftObj.nameAr} ×${sendQty} إلى ${targetSeat.userName || `مايك ${targetSeat.index + 1}`}`
+      `أرسل من الحقيبة ${giftObj.icon} ${giftObj.nameAr} ×${sendQty} إلى ${targetName}`
     );
     setTimeout(() => setBagFeedback(null), 4000);
   };
@@ -187,19 +195,19 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
             <div className="flex items-center gap-3.5 text-right w-full sm:w-auto">
               <div className="relative w-16 h-16 shrink-0 flex items-center justify-center">
                 <div
-                  className={`w-13 h-13 rounded-full overflow-hidden ${
+                  className={
                     equippedFrame?.previewUrl
-                      ? ''
-                      : `p-0.5 border-2 ${
+                      ? 'w-11 h-11 rounded-full overflow-hidden'
+                      : `w-12 h-12 rounded-full overflow-hidden p-0.5 border-2 ${
                           currentUser.activeFrameId === 'frame_gold_wings'
                             ? 'border-amber-400'
                             : currentUser.activeFrameId === 'frame_neon_cyber'
                             ? 'border-cyan-400'
                             : currentUser.activeFrameId === 'frame_ruby_emperor'
                             ? 'border-rose-500'
-                            : 'border-amber-400/70'
+                            : 'border-white/15'
                         }`
-                  }`}
+                  }
                 >
                   <img
                     src={currentUser.avatar}
@@ -213,7 +221,7 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                     src={equippedFrame.previewUrl}
                     alt={equippedFrame.nameAr}
                     referrerPolicy="no-referrer"
-                    className="pointer-events-none absolute -inset-2 w-[calc(100%+16px)] h-[calc(100%+16px)] object-contain z-20"
+                    className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[72px] h-[72px] object-contain z-20"
                   />
                 )}
               </div>
@@ -229,6 +237,39 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                   نسبة فوز هدايا الحظ الحالية:{' '}
                   <strong className="text-emerald-400 font-mono">{luckyConfig.winRatePercent}%</strong>
                 </div>
+                {(currentUser.activeFrameId ||
+                  currentUser.activeEntranceId ||
+                  (currentUser.vipLevel >= 1 && currentUser.activeEntranceId !== '')) && (
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    {currentUser.activeFrameId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          equipInventoryItem('frame', '');
+                          setBagFeedback('تمت إزالة الإطار بنجاح — صورتك الآن بدون إطار.');
+                          setTimeout(() => setBagFeedback(null), 3200);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/40 text-rose-200 text-[11px] font-bold transition-colors"
+                      >
+                        إزالة الإطار
+                      </button>
+                    )}
+                    {(currentUser.activeEntranceId ||
+                      (currentUser.vipLevel >= 1 && currentUser.activeEntranceId !== '')) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          equipInventoryItem('entrance', '');
+                          setBagFeedback('تمت إزالة الدخولية بنجاح — ستدخل الغرف بدون دخولية.');
+                          setTimeout(() => setBagFeedback(null), 3200);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/40 text-rose-200 text-[11px] font-bold transition-colors"
+                      >
+                        إزالة الدخولية
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -376,13 +417,13 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                             src={currentUser.avatar}
                             alt={frame.nameAr}
                             referrerPolicy="no-referrer"
-                            className="w-14 h-14 rounded-full object-cover"
+                            className="w-12 h-12 rounded-full object-cover"
                           />
                           <img
                             src={frame.previewUrl}
                             alt={frame.nameAr}
                             referrerPolicy="no-referrer"
-                            className="pointer-events-none absolute -inset-1.5 w-[calc(100%+12px)] h-[calc(100%+12px)] object-contain z-20"
+                            className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[84px] h-[84px] object-contain z-20"
                           />
                         </div>
                       ) : (
@@ -396,9 +437,22 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
 
                     <div className="mt-4 pt-3 border-t border-white/8">
                       {isEquipped ? (
-                        <div className="py-2 text-xs font-bold text-amber-300 flex items-center justify-center gap-1.5">
-                          <Check className="w-4 h-4" />
-                          <span>مرتدى حالياً</span>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="py-1.5 text-xs font-bold text-amber-300 flex items-center gap-1">
+                            <Check className="w-4 h-4" />
+                            <span>مرتدى حالياً</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              equipInventoryItem('frame', '');
+                              setBagFeedback(`تمت إزالة الإطار (${frame.nameAr}) بنجاح!`);
+                              setTimeout(() => setBagFeedback(null), 3200);
+                            }}
+                            className="min-h-[36px] px-3.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-200 font-bold text-xs transition-colors"
+                          >
+                            إزالة
+                          </button>
                         </div>
                       ) : (
                         <button
@@ -421,71 +475,107 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
 
           {/* TAB 2: ENTRANCES */}
           {activeTab === 'entrances' && (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {entrances.map((ent) => {
-                const isEquipped = currentUser.activeEntranceId === ent.id;
-                return (
-                  <div
-                    key={ent.id}
-                    className={`p-4 rounded-2xl border flex flex-col justify-between text-center transition-all ${
-                      isEquipped
-                        ? 'bg-cyan-500/10 border-cyan-400/60'
-                        : 'bg-[#13192a] border-white/8'
-                    }`}
-                  >
-                    <div>
-                      <div className="relative h-24 rounded-xl bg-[#0a0e1a] border border-white/8 flex items-center justify-center overflow-hidden mb-3">
-                        {ent.videoUrl || ent.previewUrl ? (
-                          <SmartMediaView
-                            mode="thumbnail"
-                            url={ent.videoUrl || ent.previewUrl}
-                            preferVideo={Boolean(ent.videoUrl)}
-                            alt={ent.nameAr}
-                            className="w-full h-full object-contain p-1"
-                            fallback={<div className="text-4xl">{ent.icon}</div>}
-                          />
+            <div className="space-y-4">
+              {currentUser.vipLevel >= 1 &&
+                currentUser.activeEntranceId !== '' &&
+                !entrances.some((e) => e.id === currentUser.activeEntranceId) && (
+                  <div className="p-3.5 rounded-2xl bg-cyan-500/10 border border-cyan-400/35 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <span className="text-cyan-100 font-semibold">
+                      تعمل حالياً دخولية VIP {currentUser.vipLevel} الافتراضية عند دخولك الغرف.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        equipInventoryItem('entrance', '');
+                        setBagFeedback('تمت إزالة الدخولية الافتراضية — لن يظهر أي تأثير دخولية.');
+                        setTimeout(() => setBagFeedback(null), 3200);
+                      }}
+                      className="min-h-[34px] px-3.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-200 font-bold transition-colors"
+                    >
+                      إزالة الدخولية
+                    </button>
+                  </div>
+                )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {entrances.map((ent) => {
+                  const isEquipped = currentUser.activeEntranceId === ent.id;
+                  return (
+                    <div
+                      key={ent.id}
+                      className={`p-4 rounded-2xl border flex flex-col justify-between text-center transition-all ${
+                        isEquipped
+                          ? 'bg-cyan-500/10 border-cyan-400/60'
+                          : 'bg-[#13192a] border-white/8'
+                      }`}
+                    >
+                      <div>
+                        <div className="relative h-24 rounded-xl bg-[#0a0e1a] border border-white/8 flex items-center justify-center overflow-hidden mb-3">
+                          {ent.videoUrl || ent.previewUrl ? (
+                            <SmartMediaView
+                              mode="thumbnail"
+                              url={ent.videoUrl || ent.previewUrl}
+                              preferVideo={Boolean(ent.videoUrl)}
+                              alt={ent.nameAr}
+                              className="w-full h-full object-contain p-1"
+                              fallback={<div className="text-4xl">{ent.icon}</div>}
+                            />
+                          ) : (
+                            <div className="text-4xl">{ent.icon}</div>
+                          )}
+                          {(ent.videoUrl || ent.previewUrl) && (
+                            <button
+                              type="button"
+                              onClick={() => setPreviewEntrance(ent)}
+                              className="absolute bottom-1.5 left-1.5 px-2 py-1 rounded-lg bg-black/75 border border-white/15 text-[10px] font-bold text-amber-300 flex items-center gap-1 hover:bg-black"
+                            >
+                              <Play className="w-3 h-3" />
+                              <span>معاينة</span>
+                            </button>
+                          )}
+                        </div>
+                        <h4 className="font-bold text-sm text-white">{ent.nameAr}</h4>
+                        <p className="text-xs text-slate-400 mt-1 line-clamp-2">
+                          {ent.descriptionAr}
+                        </p>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-white/8">
+                        {isEquipped ? (
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="py-1.5 text-xs font-bold text-cyan-300 flex items-center gap-1">
+                              <Check className="w-4 h-4" />
+                              <span>الدخولية المعتمدة</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                equipInventoryItem('entrance', '');
+                                setBagFeedback(`تمت إزالة الدخولية (${ent.nameAr}) بنجاح!`);
+                                setTimeout(() => setBagFeedback(null), 3200);
+                              }}
+                              className="min-h-[36px] px-3.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-200 font-bold text-xs transition-colors"
+                            >
+                              إزالة
+                            </button>
+                          </div>
                         ) : (
-                          <div className="text-4xl">{ent.icon}</div>
-                        )}
-                        {(ent.videoUrl || ent.previewUrl) && (
                           <button
-                            type="button"
-                            onClick={() => setPreviewEntrance(ent)}
-                            className="absolute bottom-1.5 left-1.5 px-2 py-1 rounded-lg bg-black/75 border border-white/15 text-[10px] font-bold text-amber-300 flex items-center gap-1 hover:bg-black"
+                            onClick={() => {
+                              equipInventoryItem('entrance', ent.id);
+                              setBagFeedback(`تم تفعيل الدخولية (${ent.nameAr}) وتعمل عند دخولك الغرف الصوتية!`);
+                              setTimeout(() => setBagFeedback(null), 3200);
+                            }}
+                            className="w-full min-h-[40px] rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-bold text-xs transition-colors"
                           >
-                            <Play className="w-3 h-3" />
-                            <span>معاينة</span>
+                            تفعيل هذه الدخولية
                           </button>
                         )}
                       </div>
-                      <h4 className="font-bold text-sm text-white">{ent.nameAr}</h4>
-                      <p className="text-xs text-slate-400 mt-1 line-clamp-2">
-                        {ent.descriptionAr}
-                      </p>
                     </div>
-
-                    <div className="mt-4 pt-3 border-t border-white/8">
-                      {isEquipped ? (
-                        <div className="py-2 text-xs font-bold text-cyan-300 flex items-center justify-center gap-1.5">
-                          <Check className="w-4 h-4" />
-                          <span>الدخولية المعتمدة</span>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            equipInventoryItem('entrance', ent.id);
-                            setBagFeedback(`تم تفعيل الدخولية (${ent.nameAr}) وتعمل عند دخولك الغرف الصوتية!`);
-                            setTimeout(() => setBagFeedback(null), 3200);
-                          }}
-                          className="w-full min-h-[40px] rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-bold text-xs transition-colors"
-                        >
-                          تفعيل هذه الدخولية
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -520,9 +610,22 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
 
                     <div className="mt-4 pt-3 border-t border-white/8">
                       {isEquipped ? (
-                        <div className="py-2 text-xs font-bold text-amber-300 flex items-center justify-center gap-1.5">
-                          <Check className="w-4 h-4" />
-                          <span>شارة مفعلة</span>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="py-1.5 text-xs font-bold text-amber-300 flex items-center gap-1">
+                            <Check className="w-4 h-4" />
+                            <span>شارة مفعلة</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              equipInventoryItem('badge', '');
+                              setBagFeedback(`تمت إزالة الشارة (${badge.nameAr}) بنجاح!`);
+                              setTimeout(() => setBagFeedback(null), 3200);
+                            }}
+                            className="min-h-[36px] px-3.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-200 font-bold text-xs transition-colors"
+                          >
+                            إزالة
+                          </button>
                         </div>
                       ) : (
                         <button
@@ -574,9 +677,22 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
 
                     <div className="mt-4 pt-3 border-t border-white/8">
                       {isEquipped ? (
-                        <div className="py-2 text-xs font-bold text-purple-300 flex items-center justify-center gap-1.5">
-                          <Check className="w-4 h-4" />
-                          <span>فقاعة مفعلة</span>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="py-1.5 text-xs font-bold text-purple-300 flex items-center gap-1">
+                            <Check className="w-4 h-4" />
+                            <span>فقاعة مفعلة</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              equipInventoryItem('bubble', '');
+                              setBagFeedback(`تمت إزالة فقاعة الدردشة (${bubble.nameAr})!`);
+                              setTimeout(() => setBagFeedback(null), 3200);
+                            }}
+                            className="min-h-[36px] px-3.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-200 font-bold text-xs transition-colors"
+                          >
+                            إزالة
+                          </button>
                         </div>
                       ) : (
                         <button
@@ -666,13 +782,13 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                                   src={currentUser.avatar}
                                   alt={item.nameAr}
                                   referrerPolicy="no-referrer"
-                                  className="w-13 h-13 rounded-full object-cover"
+                                  className="w-12 h-12 rounded-full object-cover"
                                 />
                                 <img
                                   src={item.previewUrl}
                                   alt={item.nameAr}
                                   referrerPolicy="no-referrer"
-                                  className="pointer-events-none absolute -inset-1.5 w-[calc(100%+12px)] h-[calc(100%+12px)] object-contain z-20"
+                                  className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[84px] h-[84px] object-contain z-20"
                                 />
                               </div>
                             ) : item.type === 'entrance' && (item.videoUrl || item.previewUrl) ? (
@@ -717,10 +833,23 @@ export const BackpackModal: React.FC<BackpackModalProps> = ({ isOpen, onClose })
                             {item.priceCoins.toLocaleString()} عملة
                           </div>
                           {isEquipped ? (
-                            <span className="px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-400/40 text-emerald-300 font-bold text-xs flex items-center gap-1">
-                              <Check className="w-3.5 h-3.5" />
-                              <span>مفعل</span>
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-2.5 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-400/40 text-emerald-300 font-bold text-xs flex items-center gap-1">
+                                <Check className="w-3.5 h-3.5" />
+                                <span>مفعل</span>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  equipInventoryItem(item.type, '');
+                                  setBagFeedback(`تمت إزالة (${item.nameAr}) بنجاح!`);
+                                  setTimeout(() => setBagFeedback(null), 3200);
+                                }}
+                                className="min-h-[34px] px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-200 font-bold text-xs transition-colors"
+                              >
+                                إزالة
+                              </button>
+                            </div>
                           ) : (
                             <button
                               onClick={() => {

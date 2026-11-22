@@ -311,7 +311,7 @@ export const Navbar: React.FC = () => {
                     className="w-full text-right px-3 py-1.5 rounded-lg text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2"
                   >
                     <UserCheck className="w-3.5 h-3.5 text-amber-400" />
-                    <span>عرض وتعديل ملفي الشخصي</span>
+                    <span>فتح البروفايل الخاص بي</span>
                   </button>
                   <button
                     onClick={() => {

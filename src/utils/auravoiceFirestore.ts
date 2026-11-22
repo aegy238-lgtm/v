@@ -23,6 +23,7 @@ import {
   GiftItem,
   LuckyGiftConfig,
   RechargeAgent,
+  RoomBackground,
   RoomChatMessage,
   StaffMember,
   StoreItem,
@@ -34,6 +35,7 @@ import {
 export const COLLECTIONS = {
   users: 'auravoice_users',
   rooms: 'auravoice_rooms',
+  roomBackgrounds: 'auravoice_room_backgrounds',
   gifts: 'auravoice_gifts',
   storeItems: 'auravoice_store_items',
   agencies: 'auravoice_agencies',
@@ -206,6 +208,7 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
 export async function syncAllAuraVoiceToFirestore(data: {
   users: User[];
   rooms: VoiceRoom[];
+  roomBackgrounds?: RoomBackground[];
   gifts: GiftItem[];
   storeItems: StoreItem[];
   agencies: Agency[];
@@ -241,6 +244,15 @@ export async function syncAllAuraVoiceToFirestore(data: {
       batch.set(
         doc(db, COLLECTIONS.rooms, r.id),
         stripUndefinedForFirestore({ ...r, updatedAt: nowIso }),
+        { merge: true }
+      );
+      count++;
+    });
+
+    (data.roomBackgrounds || []).forEach((bg) => {
+      batch.set(
+        doc(db, COLLECTIONS.roomBackgrounds, bg.id),
+        stripUndefinedForFirestore({ ...bg, updatedAt: nowIso }),
         { merge: true }
       );
       count++;
@@ -328,6 +340,7 @@ export async function syncAllAuraVoiceToFirestore(data: {
  */
 export function subscribeToPublicAuraCollections(handlers: {
   onRooms: (rooms: VoiceRoom[]) => void;
+  onRoomBackgrounds?: (backgrounds: RoomBackground[]) => void;
   onGifts: (gifts: GiftItem[]) => void;
   onStoreItems: (items: StoreItem[]) => void;
   onAgencies: (agencies: Agency[]) => void;
@@ -344,6 +357,19 @@ export function subscribeToPublicAuraCollections(handlers: {
       if (list.length > 0) handlers.onRooms(list);
     },
     (error) => handleFirestoreError(error, OperationType.LIST, COLLECTIONS.rooms)
+  );
+
+  const unsubRoomBgs = onSnapshot(
+    collection(db, COLLECTIONS.roomBackgrounds),
+    (snap) => {
+      const list: RoomBackground[] = [];
+      snap.forEach((d) => {
+        const data = d.data() as RoomBackground;
+        if (data?.id && data?.imageUrl) list.push(data);
+      });
+      handlers.onRoomBackgrounds?.(list);
+    },
+    (error) => handleFirestoreError(error, OperationType.LIST, COLLECTIONS.roomBackgrounds)
   );
 
   const unsubGifts = onSnapshot(
@@ -400,6 +426,7 @@ export function subscribeToPublicAuraCollections(handlers: {
 
   return () => {
     unsubRooms();
+    unsubRoomBgs();
     unsubGifts();
     unsubStore();
     unsubAgencies();
@@ -552,6 +579,29 @@ export async function removeAuraRoom(roomId: string): Promise<void> {
   }
 }
 
+export async function persistAuraRoomBackground(bg: RoomBackground): Promise<void> {
+  if (!auth.currentUser) return;
+  const path = `${COLLECTIONS.roomBackgrounds}/${bg.id}`;
+  try {
+    await setDoc(
+      doc(db, COLLECTIONS.roomBackgrounds, bg.id),
+      stripUndefinedForFirestore({ ...bg, updatedAt: new Date().toISOString() })
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function removeAuraRoomBackground(bgId: string): Promise<void> {
+  if (!auth.currentUser) return;
+  const path = `${COLLECTIONS.roomBackgrounds}/${bgId}`;
+  try {
+    await deleteDoc(doc(db, COLLECTIONS.roomBackgrounds, bgId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
 export async function persistRoomMessage(msg: RoomChatMessage): Promise<void> {
   if (!auth.currentUser) return;
   const safeId = msg.id.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -573,8 +623,7 @@ export async function persistAuraGift(gift: GiftItem): Promise<void> {
   try {
     await setDoc(
       doc(db, COLLECTIONS.gifts, gift.id),
-      stripUndefinedForFirestore({ ...gift, updatedAt: new Date().toISOString() }),
-      { merge: true }
+      stripUndefinedForFirestore({ ...gift, updatedAt: new Date().toISOString() })
     );
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -597,8 +646,7 @@ export async function persistAuraStoreItem(item: StoreItem): Promise<void> {
   try {
     await setDoc(
       doc(db, COLLECTIONS.storeItems, item.id),
-      stripUndefinedForFirestore({ ...item, updatedAt: new Date().toISOString() }),
-      { merge: true }
+      stripUndefinedForFirestore({ ...item, updatedAt: new Date().toISOString() })
     );
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);

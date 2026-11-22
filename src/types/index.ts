@@ -77,12 +77,21 @@ export interface RoomSeat {
   audioLevel: number; // 0 to 100
 }
 
+export interface RoomBackground {
+  id: string;
+  nameAr: string;
+  imageUrl: string;
+  createdAt?: string;
+}
+
 export interface VoiceRoom {
   id: string;
   roomNo: string;
   title: string;
   description: string;
   coverImage: string;
+  backgroundId?: string;
+  backgroundUrl?: string;
   category: RoomCategory;
   type: RoomType;
   password?: string;

@@ -10,6 +10,10 @@ import {
   X,
   ShieldAlert,
   CreditCard,
+  Lock,
+  KeyRound,
+  ShieldCheck,
+  AlertCircle,
 } from 'lucide-react';
 
 import royalMajlisBg from '../assets/images/room_bg_royal_majlis_1795294234181.jpg';
@@ -25,7 +29,9 @@ const LOCAL_ROOM_COVERS = [
 export const HomeScreen: React.FC = () => {
   const {
     rooms,
+    roomBackgrounds,
     currentUser,
+    isRoomModerator,
     joinRoom,
     setActiveModal,
     setCurrentView,
@@ -33,6 +39,49 @@ export const HomeScreen: React.FC = () => {
   const [activeTopTab, setActiveTopTab] = useState<'all' | 'mine' | 'vip'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
+  const [passwordModalRoomId, setPasswordModalRoomId] = useState<string | null>(null);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [joinFeedbackToast, setJoinFeedbackToast] = useState<string | null>(null);
+
+  const triggerJoinToast = (msg: string) => {
+    setJoinFeedbackToast(msg);
+    window.setTimeout(() => {
+      setJoinFeedbackToast((prev) => (prev === msg ? null : prev));
+    }, 4000);
+  };
+
+  const handleAttemptJoinRoom = (roomId: string) => {
+    const res = joinRoom(roomId);
+    if (res.success) return;
+    if (res.reason === 'password_required') {
+      setPasswordModalRoomId(roomId);
+      setPasswordInput('');
+      setPasswordError(null);
+      return;
+    }
+    if (res.message) {
+      triggerJoinToast(res.message);
+    }
+  };
+
+  const handleSubmitRoomPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!passwordModalRoomId) return;
+    const res = joinRoom(passwordModalRoomId, passwordInput);
+    if (res.success) {
+      setPasswordModalRoomId(null);
+      setPasswordInput('');
+      setPasswordError(null);
+      return;
+    }
+    if (res.reason === 'wrong_password' || res.reason === 'password_required') {
+      setPasswordError(res.message || 'رمز المرور غير صحيح.');
+    } else {
+      setPasswordModalRoomId(null);
+      if (res.message) triggerJoinToast(res.message);
+    }
+  };
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
 
@@ -193,12 +242,28 @@ export const HomeScreen: React.FC = () => {
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
             {filteredRooms.map((room, index) => {
               const occupiedCount = room.seats.filter((s) => Boolean(s.userId)).length;
-              const coverSrc = LOCAL_ROOM_COVERS[index % LOCAL_ROOM_COVERS.length];
+              const matchedAdminBg = room.backgroundId
+                ? roomBackgrounds.find((b) => b.id === room.backgroundId)
+                : undefined;
+              const builtinBg =
+                room.backgroundId === 'midnight'
+                  ? midnightLoungeBg
+                  : room.backgroundId === 'majlis'
+                  ? royalMajlisBg
+                  : room.backgroundId === 'starlight'
+                  ? starlightSkyBg
+                  : undefined;
+              const coverSrc =
+                room.backgroundUrl ||
+                matchedAdminBg?.imageUrl ||
+                builtinBg ||
+                LOCAL_ROOM_COVERS[index % LOCAL_ROOM_COVERS.length];
+              const userIsMod = isRoomModerator(room);
 
               return (
                 <button
                   key={room.id}
-                  onClick={() => joinRoom(room.id)}
+                  onClick={() => handleAttemptJoinRoom(room.id)}
                   className="group relative w-full aspect-square rounded-2xl overflow-hidden border border-white/12 hover:border-amber-400/70 bg-[#0e1320] text-right transition-all active:scale-[0.98] shadow-xl flex flex-col justify-between p-3"
                 >
                   <img
@@ -209,7 +274,7 @@ export const HomeScreen: React.FC = () => {
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-[#070a12] via-[#070a12]/50 to-[#070a12]/35" />
 
-                  {/* Top Row: Host Avatar + Mic Count / VIP */}
+                  {/* Top Row: Host Avatar + Mic Count / Privacy / Moderator */}
                   <div className="relative z-10 flex items-start justify-between gap-2 w-full">
                     <div className="relative shrink-0">
                       <img
@@ -223,6 +288,11 @@ export const HomeScreen: React.FC = () => {
                           VIP
                         </span>
                       )}
+                      {room.type === 'password' && (
+                        <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-md bg-amber-400 text-slate-950 flex items-center justify-center shadow">
+                          <KeyRound className="w-3 h-3" />
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex flex-col items-end gap-1 text-[10px] font-mono tabular-nums">
@@ -233,6 +303,16 @@ export const HomeScreen: React.FC = () => {
                       <span className="text-[9px] text-slate-300/90 bg-black/45 px-1.5 py-0.5 rounded-md">
                         ID {room.roomNo}
                       </span>
+                      {room.isLocked && (
+                        <span className="px-1.5 py-0.5 rounded-md bg-rose-600/80 text-white text-[9px] font-bold flex items-center gap-0.5">
+                          <Lock className="w-2.5 h-2.5" /> مقفلة
+                        </span>
+                      )}
+                      {userIsMod && (
+                        <span className="px-1.5 py-0.5 rounded-md bg-sky-500/25 border border-sky-400/40 text-sky-300 text-[9px] font-bold flex items-center gap-0.5">
+                          <ShieldCheck className="w-2.5 h-2.5" /> مشرف
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -264,6 +344,85 @@ export const HomeScreen: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Non-blocking Join Error Toast */}
+      {joinFeedbackToast && (
+        <div className="fixed top-16 inset-x-4 z-50 flex justify-center pointer-events-none">
+          <div className="pointer-events-auto max-w-md w-full rounded-2xl bg-rose-950/95 border border-rose-500/50 px-4 py-3 shadow-2xl flex items-center justify-between gap-3 text-xs text-rose-100">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>{joinFeedbackToast}</span>
+            </div>
+            <button
+              onClick={() => setJoinFeedbackToast(null)}
+              className="text-rose-300 hover:text-white shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Room Password Entry Modal */}
+      {passwordModalRoomId && (
+        <div
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setPasswordModalRoomId(null)}
+        >
+          <form
+            onSubmit={handleSubmitRoomPassword}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-3xl bg-[#111626] border border-amber-400/35 p-5 space-y-4 shadow-2xl text-right"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-black text-amber-300">
+                <KeyRound className="w-4 h-4" />
+                <span>غرفة محمية برمز مرور</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPasswordModalRoomId(null)}
+                className="w-7 h-7 rounded-lg bg-white/8 flex items-center justify-center text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300">
+              أدخل رمز المرور الخاص بهذه الغرفة للدخول:
+            </p>
+
+            <input
+              type="password"
+              value={passwordInput}
+              onChange={(e) => setPasswordInput(e.target.value)}
+              placeholder="رمز مرور الغرفة..."
+              autoFocus
+              className="w-full h-11 rounded-xl bg-slate-950 border border-white/15 px-3.5 text-sm font-mono text-white focus:border-amber-400 focus:outline-none"
+            />
+
+            {passwordError && (
+              <div className="text-xs text-rose-400 font-bold">{passwordError}</div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPasswordModalRoomId(null)}
+                className="h-10 px-4 rounded-xl bg-white/8 text-slate-300 text-xs font-bold"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                className="flex-1 h-10 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black transition-colors"
+              >
+                دخول الغرفة
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

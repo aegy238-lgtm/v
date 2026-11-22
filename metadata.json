@@ -1,7 +1,9 @@
 {
-  "name": "Remix Untitled",
+  "name": "Remix Remix Untitled",
   "description": "sdsdsdsd",
-  "requestFramePermissions": [],
+  "requestFramePermissions": [
+    "microphone"
+  ],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]

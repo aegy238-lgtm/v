@@ -74,7 +74,25 @@ service cloud.firestore {
         data.seatCount is number && data.seatCount >= 4 && data.seatCount <= 24 &&
         data.seats is list && data.seats.size() <= 24 &&
         data.onlineViewersCount is number && data.onlineViewersCount >= 0 &&
-        data.totalDiamondsEarned is number && data.totalDiamondsEarned >= 0;
+        data.totalDiamondsEarned is number && data.totalDiamondsEarned >= 0 &&
+        (!('moderators' in data) || (data.moderators is list && data.moderators.size() <= 100)) &&
+        (!('bannedUserIds' in data) || (data.bannedUserIds is list && data.bannedUserIds.size() <= 200)) &&
+        (!('password' in data) || (data.password is string && data.password.size() <= 64)) &&
+        (!('isLocked' in data) || data.isLocked is bool) &&
+        (!('announcement' in data) || (data.announcement is string && data.announcement.size() <= 500)) &&
+        (!('coverImage' in data) || (data.coverImage is string && data.coverImage.size() <= 2048)) &&
+        (!('backgroundId' in data) || (data.backgroundId is string && data.backgroundId.size() <= 128)) &&
+        (!('backgroundUrl' in data) || (data.backgroundUrl is string && data.backgroundUrl.size() <= 2048));
+    }
+
+    function isValidRoomBackground(data) {
+      return data.keys().hasAll(['id', 'nameAr', 'imageUrl']) &&
+        data.keys().hasOnly(['id', 'nameAr', 'imageUrl', 'createdAt', 'updatedAt']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.nameAr is string && data.nameAr.size() > 0 && data.nameAr.size() <= 80 &&
+        data.imageUrl is string && data.imageUrl.size() > 0 && data.imageUrl.size() <= 2048 &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
     }
 
     function isValidRoomMessage(data) {
@@ -223,9 +241,11 @@ service cloud.firestore {
       allow create: if isValidId(roomId) && isSignedIn() && isValidVoiceRoom(incoming());
       allow update: if isValidId(roomId) && isSignedIn() && isValidVoiceRoom(incoming()) && (
         isAdmin() ||
-        (incoming().id == existing().id && incoming().ownerId == existing().ownerId && incoming().diff(existing()).affectedKeys().hasOnly(['seats', 'onlineViewersCount', 'totalDiamondsEarned', 'title', 'description', 'announcement', 'currentMusicTrack', 'isLocked', 'updatedAt']))
+        (incoming().id == existing().id && incoming().ownerId == existing().ownerId && request.auth.uid == existing().ownerId && incoming().diff(existing()).affectedKeys().hasOnly(['seats', 'onlineViewersCount', 'totalDiamondsEarned', 'title', 'description', 'announcement', 'currentMusicTrack', 'isLocked', 'type', 'password', 'moderators', 'bannedUserIds', 'coverImage', 'backgroundId', 'backgroundUrl', 'updatedAt'])) ||
+        (incoming().id == existing().id && incoming().ownerId == existing().ownerId && ('moderators' in existing()) && request.auth.uid in existing().moderators && incoming().diff(existing()).affectedKeys().hasOnly(['seats', 'onlineViewersCount', 'totalDiamondsEarned', 'title', 'description', 'announcement', 'currentMusicTrack', 'isLocked', 'type', 'password', 'bannedUserIds', 'coverImage', 'backgroundId', 'backgroundUrl', 'updatedAt'])) ||
+        (incoming().id == existing().id && incoming().ownerId == existing().ownerId && incoming().diff(existing()).affectedKeys().hasOnly(['seats', 'onlineViewersCount', 'totalDiamondsEarned', 'updatedAt']))
       );
-      allow delete: if isValidId(roomId) && isAdmin();
+      allow delete: if isValidId(roomId) && (isAdmin() || (isSignedIn() && request.auth.uid == existing().ownerId));
 
       match /messages/{messageId} {
         allow get: if isValidId(roomId) && isValidId(messageId) && isSignedIn();
@@ -233,6 +253,13 @@ service cloud.firestore {
         allow create: if isValidId(roomId) && isValidId(messageId) && isSignedIn() && isValidRoomMessage(incoming()) && exists(/databases/$(database)/documents/auravoice_rooms/$(roomId));
         allow update, delete: if isValidId(roomId) && isValidId(messageId) && isAdmin();
       }
+    }
+
+    match /auravoice_room_backgrounds/{bgId} {
+      allow get: if isValidId(bgId);
+      allow list: if true;
+      allow create, update: if isValidId(bgId) && isAdmin() && isValidRoomBackground(incoming());
+      allow delete: if isValidId(bgId) && isAdmin();
     }
 
     match /auravoice_gifts/{giftId} {

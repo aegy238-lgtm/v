@@ -17,6 +17,7 @@ import {
   Crown,
   LogOut,
   LogIn,
+  UserCheck,
 } from 'lucide-react';
 import { VOICE_COUNTRIES } from '../utils/voiceProfileOptions';
 
@@ -56,6 +57,7 @@ export const ProfileScreen: React.FC = () => {
   const [socialTab, setSocialTab] = useState<'friends' | 'following' | 'fans' | 'visitors'>('friends');
   const [recordsFilter, setRecordsFilter] = useState<'all' | 'lucky_win' | 'recharge' | 'gift'>('all');
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [showAvatarMenu, setShowAvatarMenu] = useState(false);
 
   // Edit profile form state
   const [editName, setEditName] = useState(currentUser.displayName || 'الدبلان');
@@ -222,40 +224,71 @@ export const ProfileScreen: React.FC = () => {
         {/* Column 1: Compact Horizontal Hero Identity + Slim 2-Col Wallet */}
         <div className="lg:col-span-5 space-y-2.5 lg:space-y-4">
           {/* Compact Hero Profile Card */}
-          <div className="relative rounded-2xl lg:rounded-3xl overflow-hidden bg-gradient-to-b from-[#13192c] to-[#0c101d] border border-amber-400/25 p-3 lg:p-5 shadow-xl">
+          <div className="relative rounded-2xl lg:rounded-3xl overflow-visible bg-gradient-to-b from-[#13192c] to-[#0c101d] border border-amber-400/25 p-3 lg:p-5 shadow-xl">
             <div className="flex items-center gap-3.5 text-right">
               {/* Avatar + Uploaded Frame URL Overlay */}
-              <div
-                onClick={() => setSubModal('edit_profile')}
-                className="relative w-20 h-20 lg:w-22 lg:h-22 shrink-0 cursor-pointer flex items-center justify-center"
-              >
+              <div className="relative shrink-0">
                 <div
-                  className={
-                    equippedFrame?.previewUrl
-                      ? 'w-14 h-14 lg:w-16 lg:h-16 rounded-full overflow-hidden'
-                      : 'w-15 h-15 lg:w-18 lg:h-18 rounded-2xl p-[2px] bg-gradient-to-b from-amber-300 via-yellow-500 to-amber-700 shadow-lg'
-                  }
+                  onClick={() => setShowAvatarMenu((prev) => !prev)}
+                  title="فتح البروفايل الخاص بي"
+                  className="relative w-20 h-20 lg:w-22 lg:h-22 shrink-0 cursor-pointer flex items-center justify-center"
                 >
-                  <img
-                    src={currentUser.avatar}
-                    alt={currentUser.displayName}
-                    referrerPolicy="no-referrer"
-                    className={`w-full h-full object-cover ${
-                      equippedFrame?.previewUrl ? 'rounded-full' : 'rounded-[14px]'
-                    }`}
-                  />
+                  <div
+                    className={
+                      equippedFrame?.previewUrl
+                        ? 'w-12 h-12 lg:w-14 lg:h-14 rounded-full overflow-hidden'
+                        : 'w-15 h-15 lg:w-18 lg:h-18 rounded-2xl p-[2px] bg-gradient-to-b from-amber-300 via-yellow-500 to-amber-700 shadow-lg'
+                    }
+                  >
+                    <img
+                      src={currentUser.avatar}
+                      alt={currentUser.displayName}
+                      referrerPolicy="no-referrer"
+                      className={`w-full h-full object-cover ${
+                        equippedFrame?.previewUrl ? 'rounded-full' : 'rounded-[14px]'
+                      }`}
+                    />
+                  </div>
+                  {equippedFrame?.previewUrl && (
+                    <img
+                      src={equippedFrame.previewUrl}
+                      alt={equippedFrame.nameAr}
+                      referrerPolicy="no-referrer"
+                      className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[84px] h-[84px] lg:w-[96px] lg:h-[96px] object-contain z-20"
+                    />
+                  )}
+                  <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 z-30 px-2 py-0.5 rounded-md bg-gradient-to-r from-amber-500 to-yellow-400 text-[9px] font-black text-slate-950 shadow whitespace-nowrap">
+                    VIP {currentUser.vipLevel || 5}
+                  </span>
                 </div>
-                {equippedFrame?.previewUrl && (
-                  <img
-                    src={equippedFrame.previewUrl}
-                    alt={equippedFrame.nameAr}
-                    referrerPolicy="no-referrer"
-                    className="pointer-events-none absolute -inset-2 w-[calc(100%+16px)] h-[calc(100%+16px)] object-contain z-20"
-                  />
+
+                {showAvatarMenu && (
+                  <div className="absolute top-full right-0 mt-2 w-48 rounded-2xl bg-[#141a2d] border border-amber-400/35 shadow-2xl p-1.5 z-40 space-y-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAvatarMenu(false);
+                        setViewingProfileUser(currentUser);
+                        setActiveModal('profile');
+                      }}
+                      className="w-full px-3 py-2 rounded-xl text-xs font-bold text-amber-300 hover:bg-white/10 flex items-center gap-2 text-right transition-colors"
+                    >
+                      <UserCheck className="w-3.5 h-3.5 shrink-0" />
+                      <span>فتح البروفايل الخاص بي</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAvatarMenu(false);
+                        setSubModal('edit_profile');
+                      }}
+                      className="w-full px-3 py-2 rounded-xl text-xs font-semibold text-slate-200 hover:bg-white/10 flex items-center gap-2 text-right transition-colors"
+                    >
+                      <Edit3 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                      <span>تعديل الملف الشخصي</span>
+                    </button>
+                  </div>
                 )}
-                <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 z-30 px-2 py-0.5 rounded-md bg-gradient-to-r from-amber-500 to-yellow-400 text-[9px] font-black text-slate-950 shadow whitespace-nowrap">
-                  VIP {currentUser.vipLevel || 5}
-                </span>
               </div>
 
               {/* Name, ID, Country, Bio */}

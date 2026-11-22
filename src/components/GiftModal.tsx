@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { GiftCategory } from '../types';
 import { X, Send, Coins, Users, Sparkles } from 'lucide-react';
 import { SmartMediaView } from './SmartMediaView';
 import { getMediaFormatLabel } from '../utils/mediaFormats';
+import { preloadMediaAssets } from '../utils/apngEngine';
 import { sound } from '../utils/audio';
 
 interface GiftModalProps {
@@ -22,11 +23,19 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
   const [selectedSeatIndex, setSelectedSeatIndex] = useState<number>(0);
   const [vipNotice, setVipNotice] = useState<string | null>(null);
 
-  if (!isOpen || !activeRoom) return null;
-
-  const occupiedSeats = activeRoom.seats.filter((s) => Boolean(s.userId));
+  const occupiedSeats = activeRoom?.seats.filter((s) => Boolean(s.userId)) || [];
   const filteredGifts = gifts.filter((g) => g.category === activeTab);
   const selectedGift = gifts.find((g) => g.id === selectedGiftId) || gifts[0];
+
+  useEffect(() => {
+    if (!isOpen || !selectedGift) return;
+    preloadMediaAssets([selectedGift.videoUrl, selectedGift.imageUrl]);
+    if (selectedGift.soundUrl) {
+      sound.preloadAudioUrl(selectedGift.soundUrl);
+    }
+  }, [isOpen, selectedGift]);
+
+  if (!isOpen || !activeRoom) return null;
 
   const combos = [1, 10, 66, 188, 520, 1314];
 
@@ -38,9 +47,12 @@ export const GiftModal: React.FC<GiftModalProps> = ({ isOpen, onClose }) => {
 
   const handleSend = () => {
     if (!selectedGift) return;
+    sound.unlockAudio();
     const success = sendGift(selectedGift.id, comboCount, targetType, selectedSeatIndex);
     if (success) {
-      sound.playGiftHitAudio(selectedGift.soundEffect, selectedGift.soundUrl);
+      if (!selectedGift.videoUrl?.trim() && !selectedGift.imageUrl?.trim()) {
+        sound.playGiftHitAudio(selectedGift.soundEffect, selectedGift.soundUrl);
+      }
       const isLucky =
         selectedGift.isLucky ||
         selectedGift.category === 'lucky' ||
