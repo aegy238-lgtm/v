@@ -6,7 +6,7 @@ import type {
   IAgoraRTCRemoteUser,
 } from 'agora-rtc-sdk-ng';
 
-const DEFAULT_AGORA_APP_ID = '9209e41821f34b4bb3d5bc8391d86cdc';
+const DEFAULT_AGORA_APP_ID = '467d6372146f4670b6c37a0364fb5fdd';
 
 export function getAgoraAppId(): string {
   const envId =

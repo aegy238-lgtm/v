@@ -7,7 +7,7 @@ import {
 } from './agoraVoice';
 
 const appId = getAgoraAppId();
-assert.equal(appId, '9209e41821f34b4bb3d5bc8391d86cdc', 'Agora App ID must match 9209e41821f34b4bb3d5bc8391d86cdc');
+assert.equal(appId, '467d6372146f4670b6c37a0364fb5fdd', 'Agora App ID must match 467d6372146f4670b6c37a0364fb5fdd');
 assert.match(appId, /^[a-f0-9]{32}$/, 'Agora App ID must be a 32-char hex string');
 
 const channel = formatAgoraChannelName('room_101:vip/arabic');
