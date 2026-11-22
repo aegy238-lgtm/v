@@ -1,14 +1,38 @@
 import React, { useEffect, useState } from 'react';
-import { Download, Smartphone, X, Share, MoreVertical, CheckCircle2, WifiOff } from 'lucide-react';
+import {
+  Download,
+  Smartphone,
+  X,
+  Share,
+  MoreVertical,
+  CheckCircle2,
+  WifiOff,
+  ExternalLink,
+  Copy,
+  Check,
+} from 'lucide-react';
 import { usePWAInstall, useOnlineStatus } from '../hooks/usePWAInstall';
 
-const DISMISS_SESSION_KEY = 'auravoice_pwa_prompt_dismissed_v1';
+const DISMISS_SESSION_KEY = 'fokashat_pwa_prompt_dismissed_v2';
+
+function getStandaloneAppUrl(): string {
+  if (typeof window === 'undefined') return '/';
+  return window.location.origin + '/';
+}
+
+function getAndroidChromeIntentUrl(): string {
+  if (typeof window === 'undefined') return '/';
+  const hostAndPath = window.location.host + '/';
+  return `intent://${hostAndPath}#Intent;scheme=https;package=com.android.chrome;end`;
+}
 
 interface InstallGuideModalProps {
   isOpen: boolean;
   onClose: () => void;
   isIOS: boolean;
   isAndroid: boolean;
+  isInIframe: boolean;
+  isInAppBrowser: boolean;
 }
 
 const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
@@ -16,8 +40,25 @@ const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
   onClose,
   isIOS,
   isAndroid,
+  isInIframe,
+  isInAppBrowser,
 }) => {
+  const [copiedUrl, setCopiedUrl] = useState(false);
+
   if (!isOpen) return null;
+
+  const standaloneUrl = getStandaloneAppUrl();
+  const chromeIntentUrl = getAndroidChromeIntentUrl();
+
+  const handleCopyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(standaloneUrl);
+      setCopiedUrl(true);
+      window.setTimeout(() => setCopiedUrl(false), 2500);
+    } catch {
+      setCopiedUrl(false);
+    }
+  };
 
   return (
     <div
@@ -32,15 +73,16 @@ const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
           <div className="flex items-center gap-2.5">
             <img
               src="/pwa-192x192.png"
-              alt="عيوني شات"
-              className="w-11 h-11 rounded-2xl border border-amber-400/40 object-cover shrink-0"
+              alt="فوكاشات"
+              referrerPolicy="no-referrer"
+              className="w-12 h-12 rounded-2xl border border-amber-400/45 object-cover shrink-0 shadow-lg"
             />
             <div>
               <h3 className="text-sm font-black text-white">
-                {isIOS ? 'تثبيت التطبيق على آيفون' : 'تثبيت تطبيق عيوني شات للأندرويد'}
+                {isIOS ? 'تثبيت تطبيق فوكاشات على آيفون' : 'تثبيت تطبيق فوكاشات للأندرويد'}
               </h3>
               <p className="text-[11px] text-slate-400">
-                يعمل كتطبيق مستقل على الشاشة الرئيسية بدون متصفح
+                يعمل كتطبيق مستقل بأيقونة فوكاشات على هاتفك بدون متصفح
               </p>
             </div>
           </div>
@@ -53,7 +95,48 @@ const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
           </button>
         </div>
 
-        {isIOS ? (
+        {(isInIframe || isInAppBrowser) && !isIOS ? (
+          <div className="space-y-3 text-xs text-slate-200 leading-relaxed">
+            <div className="rounded-2xl bg-amber-500/10 border border-amber-400/35 p-3.5 space-y-1.5">
+              <div className="font-black text-amber-300">
+                افتح الرابط مباشرة في متصفح Chrome لتثبيت نسخة الأندرويد:
+              </div>
+              <p className="text-[11px] text-slate-300">
+                المعاينة المدمجة أو المتصفح الداخلي يمنع تثبيت التطبيقات تلقائياً. افتح التطبيق في متصفح Chrome واضغط «تثبيت» ليتم تثبيته فوراً كتطبيق أندرويد مستقل.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2">
+              <a
+                href={isAndroid && isInAppBrowser ? chromeIntentUrl : standaloneUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full min-h-[44px] rounded-2xl bg-gradient-to-r from-emerald-400 to-teal-500 hover:brightness-105 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg"
+              >
+                <ExternalLink className="w-4 h-4" />
+                <span>فتح التطبيق في متصفح Chrome للتثبيت</span>
+              </a>
+
+              <button
+                type="button"
+                onClick={() => void handleCopyLink()}
+                className="w-full min-h-[42px] rounded-2xl bg-white/8 hover:bg-white/14 border border-white/15 text-slate-100 font-bold text-xs flex items-center justify-center gap-2 transition-colors"
+              >
+                {copiedUrl ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-400" />
+                    <span className="text-emerald-300">تم نسخ رابط التطبيق — الصقه في Chrome</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4 text-amber-300" />
+                    <span>نسخ رابط التطبيق لفتحه في Chrome</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        ) : isIOS ? (
           <div className="space-y-2.5 text-xs text-slate-200 leading-relaxed">
             <div className="rounded-2xl bg-white/5 border border-white/10 p-3 flex items-start gap-2.5">
               <span className="w-6 h-6 rounded-lg bg-amber-400/20 text-amber-300 font-black flex items-center justify-center shrink-0">
@@ -81,9 +164,7 @@ const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
                 1
               </span>
               <p>
-                {isAndroid
-                  ? 'افتح قائمة متصفح Chrome'
-                  : 'افتح قائمة المتصفح'}{' '}
+                افتح قائمة متصفح Chrome{' '}
                 <MoreVertical className="inline w-3.5 h-3.5 text-amber-300 mx-0.5" /> في أعلى
                 الشاشة.
               </p>
@@ -94,9 +175,27 @@ const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
               </span>
               <p>
                 اضغط على <strong className="text-emerald-300">تثبيت التطبيق (Install App)</strong>{' '}
-                ليتم تنزيله وتثبيته مباشرةً كتطبيق أندرويد على هاتفك.
+                أو <strong className="text-amber-300">الإضافة إلى الشاشة الرئيسية</strong> ليتم تثبيت تطبيق فوكاشات مباشرةً على هاتفك.
               </p>
             </div>
+
+            <button
+              type="button"
+              onClick={() => void handleCopyLink()}
+              className="w-full min-h-[40px] rounded-2xl bg-white/6 hover:bg-white/12 border border-white/12 text-slate-200 font-bold text-xs flex items-center justify-center gap-2 transition-colors"
+            >
+              {copiedUrl ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-300">تم نسخ رابط التطبيق</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5 text-amber-300" />
+                  <span>نسخ رابط التطبيق</span>
+                </>
+              )}
+            </button>
           </div>
         )}
 
@@ -117,7 +216,16 @@ const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
  * (auto-hides once the app is already installed in standalone mode).
  */
 export const PWAInstallPromptBanner: React.FC = () => {
-  const { isInstallable, isInstalled, isIOS, isAndroid, isInstalling, install } = usePWAInstall();
+  const {
+    isInstallable,
+    isInstalled,
+    isIOS,
+    isAndroid,
+    isInIframe,
+    isInAppBrowser,
+    isInstalling,
+    install,
+  } = usePWAInstall();
   const [dismissed, setDismissed] = useState<boolean>(() => {
     try {
       return sessionStorage.getItem(DISMISS_SESSION_KEY) === '1';
@@ -155,7 +263,7 @@ export const PWAInstallPromptBanner: React.FC = () => {
       const outcome = await install();
       if (outcome === 'accepted') {
         setJustInstalled(true);
-        window.setTimeout(() => setJustInstalled(false), 3200);
+        window.setTimeout(() => setJustInstalled(false), 3500);
         return;
       }
       if (outcome === 'dismissed') return;
@@ -168,7 +276,7 @@ export const PWAInstallPromptBanner: React.FC = () => {
       {justInstalled && (
         <div className="fixed top-4 inset-x-4 max-w-sm mx-auto z-[115] rounded-2xl bg-emerald-950/95 border border-emerald-400/50 px-4 py-3 shadow-2xl flex items-center gap-2.5 text-emerald-200 text-xs font-bold font-tajawal">
           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>تم تثبيت تطبيق عيوني شات على جهازك بنجاح!</span>
+          <span>تم تثبيت تطبيق فوكاشات على جهازك بنجاح!</span>
         </div>
       )}
 
@@ -177,18 +285,21 @@ export const PWAInstallPromptBanner: React.FC = () => {
           <div className="rounded-2xl bg-gradient-to-l from-[#12192e]/95 via-[#0e1426]/95 to-[#1a1510]/95 border border-amber-400/40 backdrop-blur-xl p-3.5 shadow-[0_18px_50px_rgba(0,0,0,0.75)] flex items-center gap-3">
             <img
               src="/pwa-192x192.png"
-              alt="تطبيق عيوني شات"
+              alt="تطبيق فوكاشات"
+              referrerPolicy="no-referrer"
               className="w-12 h-12 rounded-2xl border border-amber-400/45 object-cover shrink-0 shadow-lg"
             />
             <div className="flex-1 min-w-0 text-right">
               <div className="flex items-center gap-1.5">
                 <Smartphone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 <span className="text-xs font-black text-white truncate">
-                  تثبيت تطبيق عيوني شات للأندرويد
+                  تثبيت تطبيق فوكاشات للأندرويد
                 </span>
               </div>
               <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">
-                نزّل نسخة التطبيق الكاملة على هاتفك لتشغيل الغرف الصوتية بدون متصفح.
+                {isInstallable
+                  ? 'جاهز للتثبيت المباشر بضغطة واحدة كتطبيق أندرويد مستقل.'
+                  : 'نزّل نسخة التطبيق الكاملة على هاتفك لتشغيل الغرف الصوتية بدون متصفح.'}
               </p>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
@@ -219,6 +330,8 @@ export const PWAInstallPromptBanner: React.FC = () => {
         onClose={() => setShowGuide(false)}
         isIOS={isIOS}
         isAndroid={isAndroid}
+        isInIframe={isInIframe}
+        isInAppBrowser={isInAppBrowser}
       />
     </>
   );
@@ -235,7 +348,16 @@ interface ProfileInstallButtonProps {
 export const ProfileInstallButton: React.FC<ProfileInstallButtonProps> = ({
   variant = 'header',
 }) => {
-  const { isInstallable, isInstalled, isIOS, isAndroid, isInstalling, install } = usePWAInstall();
+  const {
+    isInstallable,
+    isInstalled,
+    isIOS,
+    isAndroid,
+    isInIframe,
+    isInAppBrowser,
+    isInstalling,
+    install,
+  } = usePWAInstall();
   const [showGuide, setShowGuide] = useState(false);
 
   if (isInstalled) return null;
@@ -258,21 +380,26 @@ export const ProfileInstallButton: React.FC<ProfileInstallButtonProps> = ({
           className="w-full rounded-2xl bg-gradient-to-l from-emerald-500/18 via-teal-500/12 to-amber-500/12 border border-emerald-400/35 hover:border-emerald-400/60 px-3.5 py-2.5 flex items-center justify-between gap-3 transition-all active:scale-[0.99]"
         >
           <div className="flex items-center gap-2.5 min-w-0 text-right">
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 flex items-center justify-center shrink-0">
-              <Smartphone className="w-4 h-4" />
-            </div>
+            <img
+              src="/pwa-192x192.png"
+              alt="فوكاشات"
+              referrerPolicy="no-referrer"
+              className="w-10 h-10 rounded-xl border border-amber-400/40 object-cover shrink-0 shadow"
+            />
             <div className="min-w-0">
               <div className="text-xs font-black text-white truncate">
-                تثبيت تطبيق عيوني شات على الهاتف
+                تثبيت تطبيق فوكاشات للأندرويد
               </div>
-              <div className="text-[10px] text-emerald-200/80 truncate">
-                نسخة أندرويد مستقلة بضغطة واحدة بدون متصفح
+              <div className="text-[10px] text-emerald-200/85 truncate">
+                {isInstallable
+                  ? 'اضغط هنا للتثبيت المباشر على هاتفك الآن'
+                  : 'نسخة أندرويد مستقلة بأيقونة فوكاشات بدون متصفح'}
               </div>
             </div>
           </div>
           <span className="h-8 px-3 rounded-xl bg-emerald-400 text-slate-950 font-black text-[11px] flex items-center gap-1 shrink-0">
             <Download className="w-3.5 h-3.5" />
-            <span>{isInstalling ? 'جاري...' : 'تنزيل'}</span>
+            <span>{isInstalling ? 'جاري...' : 'تثبيت'}</span>
           </span>
         </button>
 
@@ -281,6 +408,8 @@ export const ProfileInstallButton: React.FC<ProfileInstallButtonProps> = ({
           onClose={() => setShowGuide(false)}
           isIOS={isIOS}
           isAndroid={isAndroid}
+          isInIframe={isInIframe}
+          isInAppBrowser={isInAppBrowser}
         />
       </>
     );
@@ -293,7 +422,7 @@ export const ProfileInstallButton: React.FC<ProfileInstallButtonProps> = ({
         disabled={isInstalling}
         onClick={handleClick}
         className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-xl bg-emerald-500/15 border border-emerald-400/40 text-emerald-300 text-[11px] sm:text-xs font-bold flex items-center gap-1 hover:bg-emerald-500/25 transition-colors"
-        title="تثبيت التطبيق على جهازك"
+        title="تثبيت تطبيق فوكاشات على جهازك"
       >
         <Download className="w-3.5 h-3.5" />
         <span>تثبيت</span>
@@ -304,6 +433,8 @@ export const ProfileInstallButton: React.FC<ProfileInstallButtonProps> = ({
         onClose={() => setShowGuide(false)}
         isIOS={isIOS}
         isAndroid={isAndroid}
+        isInIframe={isInIframe}
+        isInAppBrowser={isInAppBrowser}
       />
     </>
   );

@@ -105,6 +105,7 @@ export const AdminDashboard: React.FC = () => {
     adminUpdateAgencyStatus,
     setCurrentView,
     firebaseUser,
+    adminSession,
     firebaseStatus,
     isCloudSyncing,
     cloudMessage,
@@ -1751,7 +1752,7 @@ export const AdminDashboard: React.FC = () => {
                                 durationDays: Math.max(1, draft.durationDays),
                               };
                               adminUpdateStoreItem(item.id, updatedPayload);
-                              equipInventoryItem(item.type, item.id);
+                              equipInventoryItem(item.type, item.id, true);
                               showAdminNotice(`تم حفظ وتفعيل (${draft.nameAr}) على حسابك الآن!`);
                             }}
                             className="w-full min-h-[38px] rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-[11px] transition-colors"
@@ -2860,15 +2861,17 @@ export const AdminDashboard: React.FC = () => {
                       type="button"
                       disabled={isSavingCert || !agoraCertInput.trim()}
                       onClick={async () => {
-                        if (!firebaseUser) {
-                          showAdminNotice('يرجى تسجيل الدخول بحساب المسؤول (Google) أولاً لحفظ شهادة الخادم.');
+                        if (!firebaseUser && !adminSession) {
+                          showAdminNotice('يرجى تسجيل الدخول بحساب المسؤول أولاً لحفظ شهادة الخادم.');
                           return;
                         }
                         setIsSavingCert(true);
                         try {
-                          const idToken = await firebaseUser.getIdToken();
+                          const authToken = firebaseUser
+                            ? await firebaseUser.getIdToken()
+                            : adminSession!.token;
                           const res = await saveServerAgoraCertificate(
-                            idToken,
+                            authToken,
                             agoraCertInput,
                             agoraAppIdInput
                           );

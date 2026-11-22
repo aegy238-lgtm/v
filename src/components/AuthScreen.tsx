@@ -174,13 +174,16 @@ export const AuthScreen: React.FC = () => {
             <div className="absolute inset-0 bg-gradient-to-t from-[#070a12] via-[#070a12]/70 to-transparent" />
 
             <div className="relative lg:absolute lg:inset-x-0 lg:bottom-0 p-5 sm:p-7 space-y-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-400 via-orange-500 to-rose-500 flex items-center justify-center shadow-lg shadow-amber-500/25 shrink-0">
-                  <Radio className="w-6 h-6 text-slate-950" />
-                </div>
+              <div className="flex items-center gap-3.5">
+                <img
+                  src="/logo.png"
+                  alt="شعار فوكاشات"
+                  referrerPolicy="no-referrer"
+                  className="w-14 h-14 rounded-2xl object-cover ring-1 ring-amber-400/50 shadow-lg shadow-amber-500/25 shrink-0"
+                />
                 <div>
                   <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white">
-                    AuraVoice <span className="text-amber-400">VIP</span>
+                    فوكاشات <span className="text-amber-400">VIP</span>
                   </h1>
                   <p className="text-xs sm:text-sm text-slate-300">
                     منصة الغرف الصوتية المباشرة والمايكات التفاعلية
@@ -398,7 +401,9 @@ export const AuthScreen: React.FC = () => {
               <>
                 <div className="space-y-1.5">
                   <h2 className="text-xl sm:text-2xl font-black text-white">
-                    {mode === 'login' ? 'تسجيل الدخول إلى الدردشة الصوتية' : 'إنشاء حساب صوتي جديد'}
+                    {mode === 'login'
+                      ? 'تسجيل الدخول إلى فوكاشات'
+                      : 'إنشاء حساب صوتي جديد'}
                   </h2>
                   <p className="text-xs sm:text-sm text-slate-400">
                     {mode === 'login'
@@ -429,7 +434,7 @@ export const AuthScreen: React.FC = () => {
                         : 'text-slate-300 hover:text-white'
                     }`}
                   >
-                    إنشاء حساب جديد
+                    حساب جديد
                   </button>
                 </div>
 

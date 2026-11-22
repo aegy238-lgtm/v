@@ -68,6 +68,7 @@ const MainLayout: React.FC = () => {
     activeModal,
     setActiveModal,
     firebaseUser,
+    adminSession,
     authReady,
     needsProfileCompletion,
     guestAccessBypass,
@@ -75,16 +76,19 @@ const MainLayout: React.FC = () => {
 
   if (!authReady) {
     return (
-      <div className="min-h-dvh bg-[#070a12] text-slate-200 font-tajawal flex flex-col items-center justify-center gap-3 p-6">
-        <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-400 to-orange-500 flex items-center justify-center text-slate-950 font-black text-xl shadow-lg">
-          🎙️
-        </div>
-        <div className="text-sm font-bold text-amber-300">جاري تجهيز غرف الدردشة الصوتية...</div>
+      <div className="min-h-dvh bg-[#020b1c] text-slate-200 font-tajawal flex flex-col items-center justify-center gap-3.5 p-6">
+        <img
+          src="/logo.png"
+          alt="فوكاشات"
+          referrerPolicy="no-referrer"
+          className="w-20 h-20 rounded-3xl object-cover ring-1 ring-amber-400/50 shadow-2xl shadow-amber-500/20"
+        />
+        <div className="text-sm font-black text-amber-300">جاري تجهيز فوكاشات...</div>
       </div>
     );
   }
 
-  if ((!firebaseUser && !guestAccessBypass) || needsProfileCompletion) {
+  if ((!firebaseUser && !guestAccessBypass && !adminSession) || needsProfileCompletion) {
     return (
       <>
         <Suspense fallback={<ScreenLoader />}>

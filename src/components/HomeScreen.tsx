@@ -114,13 +114,16 @@ export const HomeScreen: React.FC = () => {
         <div className="flex flex-wrap items-center justify-between gap-2.5">
           {/* Right in RTL: Brand Identity + Filter Tabs */}
           <div className="flex items-center gap-3.5 sm:gap-5 flex-wrap">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-amber-500 via-amber-400 to-orange-500 flex items-center justify-center text-slate-950 font-black shadow-lg shadow-amber-500/20">
-                <Crown className="w-4 h-4" />
-              </div>
+            <div className="flex items-center gap-2.5">
+              <img
+                src="/logo.png"
+                alt="فوكاشات"
+                referrerPolicy="no-referrer"
+                className="w-9 h-9 rounded-xl object-cover ring-1 ring-amber-400/50 shadow-lg shadow-amber-500/20 shrink-0"
+              />
               <div className="text-right">
-                <div className="text-sm font-black text-amber-300 leading-tight">عيوني شات</div>
-                <div className="text-[10px] text-slate-400 font-mono">ooyuni chat VIP</div>
+                <div className="text-sm font-black text-amber-300 leading-tight">فوكاشات</div>
+                <div className="text-[10px] text-slate-400 font-mono">Fokashat VIP</div>
               </div>
             </div>
 

@@ -19,11 +19,128 @@ const __dirname = path.dirname(__filename);
 
 const DEFAULT_AGORA_APP_ID = "d5c272d82b094c2f86ccc75df0819dfe";
 const ADMIN_ALLOWLIST_EMAILS = new Set([
+  "aegy238@gmail.com",
   "iejehdgdig@gmail.com",
   "hhsiggidfhkgogfc@gmail.com",
   "uhbijnokmpl098900@gmail.com",
-  (process.env.VITE_ADMIN_EMAIL || "aegy238@gmail.com").trim().toLowerCase(),
 ]);
+
+// =============================================================================
+// SERVER-SIDE ADMIN EMAIL + PASSWORD AUTH (scrypt + HMAC-SHA256 Bearer Tokens)
+// =============================================================================
+const ADMIN_SESSION_SECRET =
+  (process.env.ADMIN_SESSION_SECRET || "").trim() || crypto.randomBytes(32).toString("hex");
+const ADMIN_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+interface ClaimedAdminCredential {
+  email: string;
+  displayName: string;
+  saltHex: string;
+  hashHex: string;
+  claimedAt: number;
+}
+
+// One-time first-run claimed admin credential (held in server memory; overridden by process.env.ADMIN_PASSWORD)
+let claimedAdminCredential: ClaimedAdminCredential | null = null;
+
+// Sliding-window rate limit per IP for admin auth routes
+const adminAuthAttempts = new Map<string, number[]>();
+const ADMIN_AUTH_WINDOW_MS = 15 * 60 * 1000;
+const ADMIN_AUTH_MAX_ATTEMPTS = 12;
+
+function isAdminAuthRateLimited(ipKey: string): boolean {
+  const now = Date.now();
+  const prev = (adminAuthAttempts.get(ipKey) || []).filter(
+    (ts) => now - ts < ADMIN_AUTH_WINDOW_MS
+  );
+  if (prev.length >= ADMIN_AUTH_MAX_ATTEMPTS) {
+    adminAuthAttempts.set(ipKey, prev);
+    return true;
+  }
+  prev.push(now);
+  adminAuthAttempts.set(ipKey, prev);
+  return false;
+}
+
+function getEnvAdminConfig(): { email: string; password: string } | null {
+  const envPass = (process.env.ADMIN_PASSWORD || "").trim();
+  if (!envPass) return null;
+  const envEmail = (
+    process.env.ADMIN_EMAIL ||
+    process.env.VITE_ADMIN_EMAIL ||
+    "aegy238@gmail.com"
+  )
+    .trim()
+    .toLowerCase();
+  return { email: envEmail, password: envPass };
+}
+
+function isValidEmailFormat(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) && email.length <= 180;
+}
+
+function hashPasswordScrypt(password: string, saltHex: string): string {
+  return crypto.scryptSync(password, saltHex, 64).toString("hex");
+}
+
+function constantTimeStringEqual(a: string, b: string): boolean {
+  const digestA = crypto.createHash("sha256").update(a, "utf8").digest();
+  const digestB = crypto.createHash("sha256").update(b, "utf8").digest();
+  return crypto.timingSafeEqual(digestA, digestB);
+}
+
+function signAdminSessionToken(payload: {
+  email: string;
+  displayName: string;
+  exp: number;
+}): string {
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const sig = crypto
+    .createHmac("sha256", ADMIN_SESSION_SECRET)
+    .update(encoded)
+    .digest("base64url");
+  return `adm1.${encoded}.${sig}`;
+}
+
+function verifyAdminSessionToken(
+  token: string
+): { ok: true; email: string; displayName: string; exp: number } | { ok: false } {
+  if (!token || !token.startsWith("adm1.")) return { ok: false };
+  const parts = token.split(".");
+  if (parts.length !== 3) return { ok: false };
+  const [, encoded, sig] = parts;
+  if (!encoded || !sig) return { ok: false };
+
+  const expectedSig = crypto
+    .createHmac("sha256", ADMIN_SESSION_SECRET)
+    .update(encoded)
+    .digest("base64url");
+  if (!constantTimeStringEqual(sig, expectedSig)) return { ok: false };
+
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as {
+      email?: unknown;
+      displayName?: unknown;
+      exp?: unknown;
+    };
+    if (
+      typeof parsed.email !== "string" ||
+      typeof parsed.displayName !== "string" ||
+      typeof parsed.exp !== "number" ||
+      parsed.exp < Date.now()
+    ) {
+      return { ok: false };
+    }
+    return {
+      ok: true,
+      email: parsed.email,
+      displayName: parsed.displayName,
+      exp: parsed.exp,
+    };
+  } catch {
+    return { ok: false };
+  }
+}
 
 function readFirebaseWebApiKey(): string {
   try {
@@ -55,8 +172,19 @@ async function verifyAdminFirebaseToken(
 ): Promise<{ ok: boolean; email?: string; error?: string }> {
   const token = (authHeader || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) {
-    return { ok: false, error: "مطلوب توكن مصادقة Firebase Admin." };
+    return { ok: false, error: "مطلوب توكن مصادقة المدير." };
   }
+
+  // 1. Accept verified server-signed Admin Bearer token
+  if (token.startsWith("adm1.")) {
+    const sessionCheck = verifyAdminSessionToken(token);
+    if (sessionCheck.ok) {
+      return { ok: true, email: sessionCheck.email };
+    }
+    return { ok: false, error: "جلسة المدير منتهية أو غير صالحة." };
+  }
+
+  // 2. Otherwise verify Firebase ID token against allowlisted admin emails
   if (!FIREBASE_WEB_API_KEY) {
     return { ok: false, error: "إعدادات Firebase API غير متوفرة على الخادم." };
   }
@@ -684,6 +812,170 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
+  // Admin Email + Password Auth Routes (First-run claim + scrypt verification + Bearer token)
+  app.get("/api/admin/auth/status", (_req, res) => {
+    const envCfg = getEnvAdminConfig();
+    if (envCfg) {
+      res.json({
+        configured: true,
+        source: "env",
+        emailHint: envCfg.email,
+      });
+      return;
+    }
+    if (claimedAdminCredential) {
+      res.json({
+        configured: true,
+        source: "claimed",
+        emailHint: claimedAdminCredential.email,
+      });
+      return;
+    }
+    res.json({
+      configured: false,
+      source: "unclaimed",
+      emailHint: (process.env.VITE_ADMIN_EMAIL || "aegy238@gmail.com").trim().toLowerCase(),
+    });
+  });
+
+  app.post("/api/admin/auth/claim", (req, res) => {
+    const ipKey = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown")
+      .split(",")[0]
+      .trim();
+    if (isAdminAuthRateLimited(`claim:${ipKey}`)) {
+      res.status(429).json({ error: "محاولات كثيرة جداً، يرجى الانتظار قليلاً ثم المحاولة." });
+      return;
+    }
+
+    if (getEnvAdminConfig() || claimedAdminCredential) {
+      res.status(409).json({
+        error: "حساب المدير مُعدّ بالفعل. يرجى تسجيل الدخول بالبريد الإلكتروني وكلمة المرور.",
+      });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      email?: unknown;
+      password?: unknown;
+      displayName?: unknown;
+    };
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    const displayName =
+      typeof body.displayName === "string" && body.displayName.trim()
+        ? body.displayName.trim().slice(0, 60)
+        : "مدير التطبيق";
+
+    if (!isValidEmailFormat(email)) {
+      res.status(400).json({ error: "يرجى إدخال بريد إلكتروني صحيح." });
+      return;
+    }
+    if (password.length < 6 || password.length > 128) {
+      res.status(400).json({ error: "كلمة المرور يجب أن تكون بين 6 و 128 حرفاً." });
+      return;
+    }
+
+    const saltHex = crypto.randomBytes(16).toString("hex");
+    const hashHex = hashPasswordScrypt(password, saltHex);
+
+    claimedAdminCredential = {
+      email,
+      displayName,
+      saltHex,
+      hashHex,
+      claimedAt: Date.now(),
+    };
+
+    const exp = Date.now() + ADMIN_SESSION_TTL_MS;
+    const token = signAdminSessionToken({ email, displayName, exp });
+    res.status(201).json({
+      ok: true,
+      token,
+      email,
+      displayName,
+      expiresAt: exp,
+    });
+  });
+
+  app.post("/api/admin/auth/login", (req, res) => {
+    const ipKey = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown")
+      .split(",")[0]
+      .trim();
+    if (isAdminAuthRateLimited(`login:${ipKey}`)) {
+      res.status(429).json({ error: "محاولات دخول كثيرة، يرجى المحاولة لاحقاً." });
+      return;
+    }
+
+    const body = (req.body || {}) as { email?: unknown; password?: unknown };
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+
+    if (!isValidEmailFormat(email) || !password || password.length > 128) {
+      res.status(400).json({ error: "يرجى إدخال البريد الإلكتروني وكلمة المرور بشكل صحيح." });
+      return;
+    }
+
+    const envCfg = getEnvAdminConfig();
+    if (envCfg) {
+      const emailOk = constantTimeStringEqual(email, envCfg.email);
+      const passOk = constantTimeStringEqual(password, envCfg.password);
+      if (!emailOk || !passOk) {
+        res.status(401).json({ error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." });
+        return;
+      }
+      const displayName = "مدير التطبيق";
+      const exp = Date.now() + ADMIN_SESSION_TTL_MS;
+      const token = signAdminSessionToken({ email: envCfg.email, displayName, exp });
+      res.json({ ok: true, token, email: envCfg.email, displayName, expiresAt: exp });
+      return;
+    }
+
+    if (!claimedAdminCredential) {
+      res.status(404).json({
+        error: "لم يتم إنشاء حساب المدير بعد. قم بإنشائه أولاً من تبويب إعداد حساب المدير.",
+      });
+      return;
+    }
+
+    const emailOk = constantTimeStringEqual(email, claimedAdminCredential.email);
+    const derivedHash = hashPasswordScrypt(password, claimedAdminCredential.saltHex);
+    const passOk = constantTimeStringEqual(derivedHash, claimedAdminCredential.hashHex);
+
+    if (!emailOk || !passOk) {
+      res.status(401).json({ error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." });
+      return;
+    }
+
+    const exp = Date.now() + ADMIN_SESSION_TTL_MS;
+    const token = signAdminSessionToken({
+      email: claimedAdminCredential.email,
+      displayName: claimedAdminCredential.displayName,
+      exp,
+    });
+    res.json({
+      ok: true,
+      token,
+      email: claimedAdminCredential.email,
+      displayName: claimedAdminCredential.displayName,
+      expiresAt: exp,
+    });
+  });
+
+  app.get("/api/admin/auth/me", (req, res) => {
+    const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+    const check = verifyAdminSessionToken(token);
+    if (!check.ok) {
+      res.status(401).json({ error: "جلسة المدير غير صالحة أو منتهية." });
+      return;
+    }
+    res.json({
+      ok: true,
+      email: check.email,
+      displayName: check.displayName,
+      expiresAt: check.exp,
+    });
+  });
+
   app.get("/api/ip", (req, res) => {
     const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
     res.json({ ip });
@@ -950,14 +1242,8 @@ async function startServer() {
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
-    const disableHmr = process.env.DISABLE_HMR === "true";
     const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        allowedHosts: true,
-        ws: disableHmr ? false : { server },
-        hmr: !disableHmr,
-      },
+      server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);

@@ -104,6 +104,19 @@ interface EntranceBannerState {
   hasExplicitDuration?: boolean;
 }
 
+export interface AdminEmailSession {
+  token: string;
+  email: string;
+  displayName: string;
+  expiresAt: number;
+}
+
+export interface OwnedStoreItemRecord {
+  itemId: string;
+  purchasedAt: string;
+  expiresAt: string;
+}
+
 interface AppContextType {
   lang: Language;
   setLang: (lang: Language) => void;
@@ -112,6 +125,13 @@ interface AppContextType {
   setCurrentView: (view: 'user_app' | 'agent_portal' | 'admin_dashboard') => void;
   isAdminAccount: boolean;
   adminEmail: string;
+  adminSession: AdminEmailSession | null;
+  claimAdminEmailAccount: (params: {
+    email: string;
+    password: string;
+    displayName?: string;
+  }) => Promise<boolean>;
+  loginAdminEmailAccount: (email: string, password: string) => Promise<boolean>;
   activeTab: ActiveScreenTab;
   setActiveTab: (tab: ActiveScreenTab) => void;
   currentUser: User;
@@ -204,8 +224,14 @@ interface AppContextType {
   rechargeCoins: (coins: number, paymentMethod: string) => void;
   agentRechargeUser: (agentId: string, targetUserCode: string, coinAmount: number) => { success: boolean; message: string };
   purchaseVip: (level: number, durationMonths: number) => boolean;
+  ownedStoreItems: Record<string, OwnedStoreItemRecord>;
+  isStoreItemOwned: (itemId: string) => boolean;
   purchaseStoreItem: (itemId: string) => boolean;
-  equipInventoryItem: (type: 'frame' | 'entrance' | 'badge' | 'bubble' | 'vip', itemId: string) => void;
+  equipInventoryItem: (
+    type: 'frame' | 'entrance' | 'badge' | 'bubble' | 'vip',
+    itemId: string,
+    bypassOwnership?: boolean
+  ) => boolean;
   triggerEntranceEffect: (item?: StoreItem) => void;
   clearEntranceBanner: () => void;
   convertDiamondsToCoins: (diamonds: number) => boolean;
@@ -492,6 +518,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {};
   });
 
+  // Persistent Store Ownership Inventory per User (Store purchase -> Backpack -> Equip/Unequip)
+  const [ownedStoreInventory, setOwnedStoreInventory] = useState<
+    Record<string, Record<string, OwnedStoreItemRecord>>
+  >(() => {
+    try {
+      const saved = localStorage.getItem('auravoice_owned_store_inventory_v1');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return parsed as Record<string, Record<string, OwnedStoreItemRecord>>;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return {};
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        'auravoice_owned_store_inventory_v1',
+        JSON.stringify(ownedStoreInventory)
+      );
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [ownedStoreInventory]);
+
   // Global 3-Second Jackpot Ticker Banner across entire app & all rooms
   const [globalJackpotBanner, setGlobalJackpotBanner] = useState<GlobalJackpotBannerState | null>(null);
   const jackpotTimerRef = React.useRef<number | null>(null);
@@ -520,12 +575,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const hasBootstrappedRef = React.useRef<boolean>(false);
   const pendingEmailRegistrationRef = React.useRef<boolean>(false);
 
-  // Exclusive Admin Account Check (Authenticated Firebase Email + Password Account ONLY)
+  // Server-verified Admin Email+Password session held strictly in React memory (never persisted to storage)
+  const [adminSession, setAdminSession] = useState<AdminEmailSession | null>(null);
+
+  // Exclusive Admin Account Check (Authenticated Firebase Admin Email OR Server-Verified Admin Session)
   const isAdminAccount = Boolean(
-    firebaseUser &&
-      !guestAccessBypass &&
-      firebaseUser.email &&
-      firebaseUser.email.trim().toLowerCase() === ADMIN_EMAIL
+    adminSession ||
+      (firebaseUser &&
+        !guestAccessBypass &&
+        firebaseUser.email &&
+        firebaseUser.email.trim().toLowerCase() === ADMIN_EMAIL)
   );
 
   const setCurrentView = (view: 'user_app' | 'agent_portal' | 'admin_dashboard') => {
@@ -869,6 +928,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       setAuthError(null);
       setAuthLoading(true);
+      const cleanEmail = params.email.trim().toLowerCase();
+
+      // Seamless server-side claim for owner admin email without needing a separate Admin button
+      if (cleanEmail === ADMIN_EMAIL) {
+        try {
+          const statusRes = await fetch('/api/admin/auth/status');
+          if (statusRes.ok) {
+            const statusData = (await statusRes.json().catch(() => ({}))) as {
+              configured?: boolean;
+            };
+            if (!statusData.configured) {
+              const claimed = await claimAdminEmailAccount({
+                email: params.email.trim(),
+                password: params.password,
+                displayName: params.displayName.trim() || 'مدير التطبيق',
+              });
+              if (claimed) return true;
+            }
+          }
+        } catch {
+          // Fall through to standard registration
+        }
+      }
+
       const fbUser = await registerWithEmailPassword(
         params.email,
         params.password,
@@ -906,21 +989,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       setAuthError(null);
       setAuthLoading(true);
-      const fbUser = await loginWithEmailPassword(email, password);
-      const remoteProfile = await fetchAuraUserById(fbUser.uid);
-      const localProfile = users.find((u) => u.id === fbUser.uid) || null;
-      const resolved = remoteProfile || localProfile;
+      const cleanEmail = email.trim();
 
-      if (resolved && resolved.country && resolved.gender && typeof resolved.age === 'number') {
-        upsertUserIntoState({ ...resolved, online: true });
-        setCurrentUserId(resolved.id);
-        setNeedsProfileCompletion(false);
-        setGuestAccessBypass(false);
-      } else {
-        setNeedsProfileCompletion(true);
+      // 1. Check server-verified Admin Email + Password login first (works without Google Sign-In)
+      let adminStatusCode = 0;
+      try {
+        const adminRes = await fetch('/api/admin/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: cleanEmail, password }),
+        });
+        adminStatusCode = adminRes.status;
+        if (adminRes.ok) {
+          const adminData = (await adminRes.json().catch(() => ({}))) as {
+            ok?: boolean;
+            token?: string;
+            email?: string;
+            displayName?: string;
+            expiresAt?: number;
+          };
+          if (adminData.ok && adminData.token && adminData.email) {
+            activateAdminEmailSession({
+              token: adminData.token,
+              email: adminData.email,
+              displayName: adminData.displayName || 'مدير التطبيق',
+              expiresAt: adminData.expiresAt || Date.now() + 86400000,
+            });
+            return true;
+          }
+        }
+      } catch {
+        // Network error on admin route — continue to Firebase Email/Password auth
       }
-      setCloudMessage('مرحباً بعودتك! تم تسجيل الدخول بنجاح.');
-      return true;
+
+      // 2. Fall back to Firebase Email + Password authentication for regular accounts
+      try {
+        const fbUser = await loginWithEmailPassword(cleanEmail, password);
+        const remoteProfile = await fetchAuraUserById(fbUser.uid);
+        const localProfile = users.find((u) => u.id === fbUser.uid) || null;
+        const resolved = remoteProfile || localProfile;
+
+        if (resolved && resolved.country && resolved.gender && typeof resolved.age === 'number') {
+          upsertUserIntoState({ ...resolved, online: true });
+          setCurrentUserId(resolved.id);
+          setNeedsProfileCompletion(false);
+          setGuestAccessBypass(false);
+        } else {
+          setNeedsProfileCompletion(true);
+        }
+        if (fbUser.email && fbUser.email.trim().toLowerCase() === ADMIN_EMAIL) {
+          setCurrentViewRaw('admin_dashboard');
+        }
+        setCloudMessage('مرحباً بعودتك! تم تسجيل الدخول بنجاح.');
+        return true;
+      } catch (fbErr: unknown) {
+        const code = (fbErr as { code?: string })?.code || '';
+        if (adminStatusCode === 401) {
+          setAuthError('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
+          return false;
+        }
+        if (adminStatusCode === 404 && code === 'auth/operation-not-allowed') {
+          setAuthError(
+            'لم يتم إعداد بريد وكلمة مرور المدير بعد. اضغط على تبويب «المدير» لإعداده لمرة واحدة ثم سجّل الدخول بالبريد الإلكتروني مباشرة.'
+          );
+          return false;
+        }
+        const msg = translateFirebaseAuthError(fbErr);
+        setAuthError(msg);
+        return false;
+      }
     } catch (err: unknown) {
       const msg = translateFirebaseAuthError(err);
       setAuthError(msg);
@@ -969,14 +1106,126 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const activateAdminEmailSession = (session: AdminEmailSession) => {
+    setAdminSession(session);
+    const adminUserId = 'admin_email_owner';
+    const existingAdmin = users.find((u) => u.id === adminUserId);
+    const adminUserProfile: User = existingAdmin
+      ? { ...existingAdmin, displayName: session.displayName || existingAdmin.displayName, online: true }
+      : {
+          ...buildAuthenticatedVoiceUser({
+            uid: adminUserId,
+            displayName: session.displayName || 'مدير التطبيق',
+            country: 'مصر',
+            countryFlag: '🇪🇬',
+            age: 28,
+            gender: 'male',
+          }),
+          userCode: '1000001',
+          level: 50,
+          vipLevel: 10,
+          coins: 500000,
+          bio: 'الحساب الرسمي لمدير التطبيق 👑',
+        };
+    upsertUserIntoState(adminUserProfile);
+    setCurrentUserId(adminUserProfile.id);
+    setNeedsProfileCompletion(false);
+    setGuestAccessBypass(false);
+    setCurrentViewRaw('admin_dashboard');
+    setCloudMessage(`مرحباً ${session.displayName}! تم فتح لوحة تحكم المدير بنجاح.`);
+  };
+
+  const claimAdminEmailAccount = async (params: {
+    email: string;
+    password: string;
+    displayName?: string;
+  }): Promise<boolean> => {
+    try {
+      setAuthError(null);
+      setAuthLoading(true);
+      const res = await fetch('/api/admin/auth/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: params.email.trim(),
+          password: params.password,
+          displayName: params.displayName?.trim() || 'مدير التطبيق',
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        token?: string;
+        email?: string;
+        displayName?: string;
+        expiresAt?: number;
+        error?: string;
+      };
+      if (!res.ok || !data.ok || !data.token || !data.email) {
+        setAuthError(data.error || 'تعذر إنشاء حساب المدير.');
+        return false;
+      }
+      activateAdminEmailSession({
+        token: data.token,
+        email: data.email,
+        displayName: data.displayName || 'مدير التطبيق',
+        expiresAt: data.expiresAt || Date.now() + 86400000,
+      });
+      return true;
+    } catch {
+      setAuthError('تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى.');
+      return false;
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const loginAdminEmailAccount = async (email: string, password: string): Promise<boolean> => {
+    try {
+      setAuthError(null);
+      setAuthLoading(true);
+      const res = await fetch('/api/admin/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        token?: string;
+        email?: string;
+        displayName?: string;
+        expiresAt?: number;
+        error?: string;
+      };
+      if (!res.ok || !data.ok || !data.token || !data.email) {
+        setAuthError(data.error || 'البريد الإلكتروني أو كلمة المرور غير صحيحة.');
+        return false;
+      }
+      activateAdminEmailSession({
+        token: data.token,
+        email: data.email,
+        displayName: data.displayName || 'مدير التطبيق',
+        expiresAt: data.expiresAt || Date.now() + 86400000,
+      });
+      return true;
+    } catch {
+      setAuthError('تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى.');
+      return false;
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   const signOutCloud = async () => {
-    await signOutFirebase();
+    if (firebaseUser) {
+      await signOutFirebase().catch(() => {});
+    }
+    setAdminSession(null);
     hasBootstrappedRef.current = false;
     setActiveRoomId(null);
     setNeedsProfileCompletion(false);
     setGuestAccessBypass(false);
     setAuthError(null);
-    setCurrentView('user_app');
+    setCurrentViewRaw('user_app');
     setCloudMessage('تم تسجيل الخروج بنجاح.');
   };
 
@@ -2414,7 +2663,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, timerMs);
   };
 
-  // Purchase Store Item (Frame, Entrance, Badge, Bubble)
+  // Compute active owned store items for currentUser (including already-equipped legacy items)
+  const ownedStoreItems: Record<string, OwnedStoreItemRecord> = React.useMemo(() => {
+    const userOwned = ownedStoreInventory[currentUser.id] || {};
+    const now = Date.now();
+    const result: Record<string, OwnedStoreItemRecord> = {};
+
+    for (const [id, rec] of Object.entries(userOwned)) {
+      if (rec && rec.itemId && new Date(rec.expiresAt).getTime() > now) {
+        result[id] = rec;
+      }
+    }
+
+    // Backwards compatibility: ensure currently equipped store items remain visible in Backpack
+    const equippedIds = [
+      currentUser.activeFrameId,
+      currentUser.activeEntranceId,
+      currentUser.activeBadgeId,
+      currentUser.activeBubbleId,
+    ].filter((id): id is string => Boolean(id && id.trim().length > 0));
+
+    for (const eqId of equippedIds) {
+      if (!result[eqId] && storeItems.some((s) => s.id === eqId)) {
+        const matched = storeItems.find((s) => s.id === eqId);
+        const days = Math.max(1, matched?.durationDays || 30);
+        result[eqId] = {
+          itemId: eqId,
+          purchasedAt: new Date(now).toISOString(),
+          expiresAt: new Date(now + days * 24 * 60 * 60 * 1000).toISOString(),
+        };
+      }
+    }
+
+    return result;
+  }, [
+    ownedStoreInventory,
+    currentUser.id,
+    currentUser.activeFrameId,
+    currentUser.activeEntranceId,
+    currentUser.activeBadgeId,
+    currentUser.activeBubbleId,
+    storeItems,
+  ]);
+
+  const isStoreItemOwned = (itemId: string): boolean => {
+    if (!itemId) return false;
+    const rec = ownedStoreItems[itemId];
+    if (!rec) return false;
+    return new Date(rec.expiresAt).getTime() > Date.now();
+  };
+
+  // Purchase Store Item (Frame, Entrance, Badge, Bubble) -> Deducts coins and transfers item to Backpack
   const purchaseStoreItem = (itemId: string): boolean => {
     const item = storeItems.find((i) => i.id === itemId);
     if (!item) return false;
@@ -2427,14 +2726,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUsers((prev) =>
       prev.map((u) => {
         if (u.id === currentUser.id) {
-          const updates: Partial<User> = {
+          const updated: User = {
+            ...u,
             coins: u.coins - item.priceCoins,
           };
-          if (item.type === 'frame') updates.activeFrameId = item.id;
-          if (item.type === 'entrance') updates.activeEntranceId = item.id;
-          if (item.type === 'badge') updates.activeBadgeId = item.id;
-          if (item.type === 'bubble') updates.activeBubbleId = item.id;
-          const updated = { ...u, ...updates };
           void persistAuraUser(updated).catch(() => {});
           return updated;
         }
@@ -2442,12 +2737,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    if (item.type === 'frame') {
-      syncUserFrameToSeats(item.id);
-    }
-    if (item.type === 'entrance' && activeRoomId) {
-      triggerEntranceEffect(item);
-    }
+    const nowMs = Date.now();
+    const durationMs = Math.max(1, item.durationDays || 30) * 24 * 60 * 60 * 1000;
+    setOwnedStoreInventory((prev) => {
+      const userMap = { ...(prev[currentUser.id] || {}) };
+      const existing = userMap[item.id];
+      const baseMs =
+        existing && new Date(existing.expiresAt).getTime() > nowMs
+          ? new Date(existing.expiresAt).getTime()
+          : nowMs;
+      userMap[item.id] = {
+        itemId: item.id,
+        purchasedAt: existing?.purchasedAt || new Date(nowMs).toISOString(),
+        expiresAt: new Date(baseMs + durationMs).toISOString(),
+      };
+      return {
+        ...prev,
+        [currentUser.id]: userMap,
+      };
+    });
 
     const tx: Transaction = {
       id: `tx_${Date.now()}`,
@@ -2456,7 +2764,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'item_purchase',
       coinsDelta: -item.priceCoins,
       diamondsDelta: 0,
-      details: `شراء ${item.nameAr} من المتجر لمدة ${item.durationDays} يوم`,
+      details: `شراء ${item.nameAr} من المتجر ونقله إلى الحقيبة لمدة ${item.durationDays} يوم`,
       timestamp: new Date().toISOString().replace('T', ' ').slice(0, 16),
       status: 'completed',
     };
@@ -2467,8 +2775,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
-  // Equip or Unequip (itemId === '') Item from Backpack
-  const equipInventoryItem = (type: 'frame' | 'entrance' | 'badge' | 'bubble' | 'vip', itemId: string) => {
+  // Equip or Unequip (itemId === '') Item from Backpack (Strictly requires ownership to equip)
+  const equipInventoryItem = (
+    type: 'frame' | 'entrance' | 'badge' | 'bubble' | 'vip',
+    itemId: string,
+    bypassOwnership = false
+  ): boolean => {
+    if (itemId && type !== 'vip' && !bypassOwnership && !isStoreItemOwned(itemId)) {
+      return false;
+    }
+
     setUsers((prev) =>
       prev.map((u) => {
         if (u.id === currentUser.id) {
@@ -2495,6 +2811,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
     sound.playMicClick(Boolean(itemId));
+    return true;
   };
 
   // Convert Diamonds to Coins
@@ -2888,7 +3205,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentView,
         setCurrentView,
         isAdminAccount,
-        adminEmail: ADMIN_EMAIL,
+        adminEmail: adminSession?.email || ADMIN_EMAIL,
+        adminSession,
+        claimAdminEmailAccount,
+        loginAdminEmailAccount,
         activeTab,
         setActiveTab,
         currentUser,
@@ -2945,6 +3265,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         rechargeCoins,
         agentRechargeUser,
         purchaseVip,
+        ownedStoreItems,
+        isStoreItemOwned,
         purchaseStoreItem,
         equipInventoryItem,
         triggerEntranceEffect,

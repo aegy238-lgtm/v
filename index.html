@@ -7,16 +7,27 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="عيوني شات" />
+    <meta name="apple-mobile-web-app-title" content="فوكاشات" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
-    <title>عيوني شات - AuraVoice VIP</title>
-    <meta name="description" content="منصة الدردشة الصوتية الاجتماعية المتكاملة، الغرف الصوتية، نظام VIP، المحفظة والحقيبة، الهدايا التفاعلية، نظام الوكالات وشحن الرصيد، ولوحة تحكم الإدارة الشاملة." />
-    <meta property="og:title" content="عيوني شات - AuraVoice VIP" />
-    <meta property="og:description" content="منصة الدردشة الصوتية الاجتماعية المتكاملة، الغرف الصوتية، نظام VIP، المحفظة والحقيبة، الهدايا التفاعلية، نظام الوكالات وشحن الرصيد، ولوحة تحكم الإدارة الشاملة." />
+    <title>فوكاشات - غرف الدردشة الصوتية</title>
+    <meta name="description" content="منصة فوكاشات للدردشة الصوتية الاجتماعية، الغرف الصوتية المباشرة، المتجر والحقيبة الملكية، نظام VIP، والهدايا التفاعلية." />
+    <meta property="og:title" content="فوكاشات - غرف الدردشة الصوتية" />
+    <meta property="og:description" content="منصة فوكاشات للدردشة الصوتية الاجتماعية، الغرف الصوتية المباشرة، المتجر والحقيبة الملكية، نظام VIP، والهدايا التفاعلية." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      window.__deferredPWAInstallPrompt = null;
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__deferredPWAInstallPrompt = e;
+        window.dispatchEvent(new CustomEvent('fokashat:pwa-prompt-ready'));
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__deferredPWAInstallPrompt = null;
+      });
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Tajawal:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
