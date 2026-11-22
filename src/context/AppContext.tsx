@@ -362,6 +362,14 @@ const ADMIN_EMAIL = (
   .trim()
   .toLowerCase();
 
+const ADMIN_EMAILS = new Set([
+  ADMIN_EMAIL,
+  'aegy238@gmail.com',
+  'iejehdgdig@gmail.com',
+  'hhsiggidfhkgogfc@gmail.com',
+  'uhbijnokmpl098900@gmail.com',
+]);
+
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -584,7 +592,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       (firebaseUser &&
         !guestAccessBypass &&
         firebaseUser.email &&
-        firebaseUser.email.trim().toLowerCase() === ADMIN_EMAIL)
+        ADMIN_EMAILS.has(firebaseUser.email.trim().toLowerCase()))
   );
 
   const setCurrentView = (view: 'user_app' | 'agent_portal' | 'admin_dashboard') => {
@@ -1102,7 +1110,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const cleanEmail = params.email.trim().toLowerCase();
 
       // Seamless server-side claim for owner admin email without needing a separate Admin button
-      if (cleanEmail === ADMIN_EMAIL) {
+      if (ADMIN_EMAILS.has(cleanEmail)) {
         try {
           const statusRes = await fetch('/api/admin/auth/status');
           if (statusRes.ok) {
@@ -1216,13 +1224,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else {
           setNeedsProfileCompletion(true);
         }
-        if (fbUser.email && fbUser.email.trim().toLowerCase() === ADMIN_EMAIL) {
+        if (fbUser.email && ADMIN_EMAILS.has(fbUser.email.trim().toLowerCase())) {
           setCurrentViewRaw('admin_dashboard');
         }
         setCloudMessage('مرحباً بعودتك! تم تسجيل الدخول بنجاح.');
         return true;
       } catch (fbErr: unknown) {
-        if (adminServerError && cleanEmail.toLowerCase() === ADMIN_EMAIL) {
+        if (adminServerError && ADMIN_EMAILS.has(cleanEmail.toLowerCase())) {
           setAuthError(adminServerError);
           return false;
         }

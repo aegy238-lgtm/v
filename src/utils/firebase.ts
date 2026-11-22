@@ -23,29 +23,18 @@ interface FirebaseAppletConfigShape {
   measurementId?: string;
 }
 
-const localFirebaseConfigModules = import.meta.glob('../../firebase-applet-config.json', {
-  eager: true,
-}) as Record<string, { default?: Partial<FirebaseAppletConfigShape> }>;
-
-const localFirebaseConfig = Object.values(localFirebaseConfigModules)[0]?.default || {};
+export const PERMANENT_FIREBASE_CONFIG: FirebaseAppletConfigShape = {
+  apiKey: 'AIzaSyAAr9fCp9CsfGqTOpIMIx0EyVtechkLchQ',
+  authDomain: 'shosho-chat-3e571.firebaseapp.com',
+  projectId: 'shosho-chat-3e571',
+  storageBucket: 'shosho-chat-3e571.firebasestorage.app',
+  messagingSenderId: '633233573986',
+  appId: '1:633233573986:web:4bc3c29544f858b534a93b',
+  firestoreDatabaseId: '',
+};
 
 export const firebaseConfig: FirebaseAppletConfigShape = {
-  projectId: (import.meta.env.VITE_FIREBASE_PROJECT_ID || localFirebaseConfig.projectId || '').trim(),
-  appId: (import.meta.env.VITE_FIREBASE_APP_ID || localFirebaseConfig.appId || '').trim(),
-  apiKey: (import.meta.env.VITE_FIREBASE_API_KEY || localFirebaseConfig.apiKey || '').trim(),
-  authDomain: (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || localFirebaseConfig.authDomain || '').trim(),
-  firestoreDatabaseId: (
-    import.meta.env.VITE_FIREBASE_DATABASE_ID ||
-    localFirebaseConfig.firestoreDatabaseId ||
-    ''
-  ).trim(),
-  storageBucket: (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || localFirebaseConfig.storageBucket || '').trim(),
-  messagingSenderId: (
-    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ||
-    localFirebaseConfig.messagingSenderId ||
-    ''
-  ).trim(),
-  measurementId: (import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || localFirebaseConfig.measurementId || '').trim(),
+  ...PERMANENT_FIREBASE_CONFIG,
 };
 
 export enum OperationType {
@@ -102,11 +91,9 @@ let currentStatus: FirebaseConnectionStatus = {
   isConfigured: isFirebaseConfigured,
   isConnected: false,
   isTesting: false,
-  projectId: firebaseConfig.projectId || 'غير مضبوط',
+  projectId: firebaseConfig.projectId,
   databaseId: firebaseConfig.firestoreDatabaseId || '(default)',
-  message: isFirebaseConfigured
-    ? 'جاري تهيئة الاتصال السحابي...'
-    : 'التطبيق يعمل محلياً — أضف متغيرات VITE_FIREBASE_* في الاستضافة لتفعيل المزامنة السحابية.',
+  message: 'جاري تهيئة الاتصال السحابي بـ shosho-chat-3e571...',
 };
 
 const listeners = new Set<(status: FirebaseConnectionStatus) => void>();

@@ -2307,7 +2307,7 @@ export const VoiceRoomView: React.FC = () => {
                         /* Occupied Seat WITH Uploaded Frame: Concentrically centered avatar inside balanced frame */
                         <>
                           <div
-                            className={`relative z-10 w-[46px] h-[46px] rounded-full overflow-hidden transition-transform duration-150 group-active:scale-95 ${
+                            className={`relative z-10 w-[44px] h-[44px] rounded-full overflow-hidden flex items-center justify-center transition-transform duration-150 group-active:scale-95 ${
                               isSpeaking ? 'ring-2 ring-amber-400/70' : ''
                             }`}
                           >
@@ -2329,7 +2329,7 @@ export const VoiceRoomView: React.FC = () => {
                             src={seatFrame!.previewUrl}
                             alt={seatFrame!.nameAr}
                             referrerPolicy="no-referrer"
-                            className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[82px] h-[82px] object-contain z-20 drop-shadow-[0_6px_14px_rgba(0,0,0,0.45)]"
+                            className="pointer-events-none select-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[84px] h-[84px] object-contain z-20 drop-shadow-[0_6px_14px_rgba(0,0,0,0.45)]"
                           />
                         </>
                       ) : (

@@ -458,20 +458,14 @@ function verifyAdminSessionToken(
   }
 }
 
+const PERMANENT_FIREBASE_PROJECT_ID = "shosho-chat-3e571";
+const PERMANENT_FIREBASE_WEB_API_KEY = "AIzaSyAAr9fCp9CsfGqTOpIMIx0EyVtechkLchQ";
+
 function readFirebaseAppletConfig(): { apiKey: string; projectId: string } {
-  const envApiKey = (process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY || "").trim();
-  const envProjectId = (process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || "").trim();
-  try {
-    const cfgPath = path.join(__dirname, "firebase-applet-config.json");
-    const raw = fs.readFileSync(cfgPath, "utf8");
-    const parsed = JSON.parse(raw) as { apiKey?: string; projectId?: string };
-    return {
-      apiKey: (typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "") || envApiKey,
-      projectId: (typeof parsed.projectId === "string" ? parsed.projectId.trim() : "") || envProjectId,
-    };
-  } catch {
-    return { apiKey: envApiKey, projectId: envProjectId };
-  }
+  return {
+    apiKey: PERMANENT_FIREBASE_WEB_API_KEY,
+    projectId: PERMANENT_FIREBASE_PROJECT_ID,
+  };
 }
 
 const FIREBASE_APPLET_CFG = readFirebaseAppletConfig();
