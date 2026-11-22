@@ -50,11 +50,11 @@ export const COLLECTIONS = {
 } as const;
 
 export function isCloudWriteReady(): boolean {
-  return Boolean(auth.currentUser);
+  return Boolean(db && auth?.currentUser);
 }
 
 export async function fetchAuraUserById(userId: string): Promise<User | null> {
-  if (!auth.currentUser || !userId) return null;
+  if (!db || !auth?.currentUser || !userId) return null;
   const path = `${COLLECTIONS.users}/${userId}`;
   try {
     const snap = await getDoc(doc(db, COLLECTIONS.users, userId));
@@ -88,23 +88,24 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
   bagGifts: Record<string, number>;
   agoraConfig?: AgoraVoiceConfig;
 }): Promise<boolean> {
-  if (!auth.currentUser) return false;
+  if (!db || !auth?.currentUser) return false;
+  const firestore = db;
 
   try {
-    const roomsSnap = await getDocs(query(collection(db, COLLECTIONS.rooms), limit(1)));
-    const usersSnap = await getDocs(query(collection(db, COLLECTIONS.users), limit(1)));
+    const roomsSnap = await getDocs(query(collection(firestore, COLLECTIONS.rooms), limit(1)));
+    const usersSnap = await getDocs(query(collection(firestore, COLLECTIONS.users), limit(1)));
     if (!roomsSnap.empty && !usersSnap.empty) {
       return true;
     }
 
-    const memberBatch = writeBatch(db);
+    const memberBatch = writeBatch(firestore);
     let hasMemberOps = false;
     const nowIso = new Date().toISOString();
 
     if (usersSnap.empty) {
       seed.users.forEach((u) => {
         memberBatch.set(
-          doc(db, COLLECTIONS.users, u.id),
+          doc(firestore, COLLECTIONS.users, u.id),
           stripUndefinedForFirestore({ ...u, updatedAt: nowIso }),
           { merge: true }
         );
@@ -115,7 +116,7 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
     if (roomsSnap.empty) {
       seed.rooms.forEach((r) => {
         memberBatch.set(
-          doc(db, COLLECTIONS.rooms, r.id),
+          doc(firestore, COLLECTIONS.rooms, r.id),
           stripUndefinedForFirestore({ ...r, updatedAt: nowIso }),
           { merge: true }
         );
@@ -130,14 +131,14 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
     // Seed only operational admin collections (agencies, agents, staff, transactions, lucky/agora configs)
     // NEVER seed mock gifts, mock store items, or mock bag items.
     try {
-      const adminBatch = writeBatch(db);
+      const adminBatch = writeBatch(firestore);
       let hasAdminOps = false;
 
-      const agenciesSnap = await getDocs(query(collection(db, COLLECTIONS.agencies), limit(1)));
+      const agenciesSnap = await getDocs(query(collection(firestore, COLLECTIONS.agencies), limit(1)));
       if (agenciesSnap.empty) {
         seed.agencies.forEach((ag) => {
           adminBatch.set(
-            doc(db, COLLECTIONS.agencies, ag.id),
+            doc(firestore, COLLECTIONS.agencies, ag.id),
             stripUndefinedForFirestore({ ...ag, updatedAt: nowIso }),
             { merge: true }
           );
@@ -145,11 +146,11 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
         });
       }
 
-      const agentsSnap = await getDocs(query(collection(db, COLLECTIONS.agents), limit(1)));
+      const agentsSnap = await getDocs(query(collection(firestore, COLLECTIONS.agents), limit(1)));
       if (agentsSnap.empty) {
         seed.agents.forEach((agent) => {
           adminBatch.set(
-            doc(db, COLLECTIONS.agents, agent.id),
+            doc(firestore, COLLECTIONS.agents, agent.id),
             stripUndefinedForFirestore({ ...agent, updatedAt: nowIso }),
             { merge: true }
           );
@@ -157,11 +158,11 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
         });
       }
 
-      const staffSnap = await getDocs(query(collection(db, COLLECTIONS.staff), limit(1)));
+      const staffSnap = await getDocs(query(collection(firestore, COLLECTIONS.staff), limit(1)));
       if (staffSnap.empty) {
         seed.staff.forEach((member) => {
           adminBatch.set(
-            doc(db, COLLECTIONS.staff, member.id),
+            doc(firestore, COLLECTIONS.staff, member.id),
             stripUndefinedForFirestore({ ...member, updatedAt: nowIso }),
             { merge: true }
           );
@@ -169,11 +170,11 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
         });
       }
 
-      const txSnap = await getDocs(query(collection(db, COLLECTIONS.transactions), limit(1)));
+      const txSnap = await getDocs(query(collection(firestore, COLLECTIONS.transactions), limit(1)));
       if (txSnap.empty) {
         seed.transactions.slice(0, 50).forEach((tx) => {
           adminBatch.set(
-            doc(db, COLLECTIONS.transactions, tx.id),
+            doc(firestore, COLLECTIONS.transactions, tx.id),
             stripUndefinedForFirestore({ ...tx, updatedAt: nowIso }),
             { merge: true }
           );
@@ -182,7 +183,7 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
       }
 
       adminBatch.set(
-        doc(db, COLLECTIONS.config, 'lucky'),
+        doc(firestore, COLLECTIONS.config, 'lucky'),
         stripUndefinedForFirestore({ ...seed.luckyConfig, updatedAt: nowIso }),
         { merge: true }
       );
@@ -190,7 +191,7 @@ export async function bootstrapAuraVoiceFirestoreIfEmpty(seed: {
 
       if (seed.agoraConfig?.appId) {
         adminBatch.set(
-          doc(db, COLLECTIONS.config, 'agora'),
+          doc(firestore, COLLECTIONS.config, 'agora'),
           stripUndefinedForFirestore({ ...seed.agoraConfig, updatedAt: nowIso }),
           { merge: true }
         );
@@ -227,22 +228,23 @@ export async function syncAllAuraVoiceToFirestore(data: {
   bagGifts: Record<string, number>;
   agoraConfig?: AgoraVoiceConfig;
 }): Promise<{ success: boolean; count: number; message: string }> {
-  if (!auth.currentUser) {
+  if (!db || !auth?.currentUser) {
     return {
       success: false,
       count: 0,
       message: 'يرجى تسجيل الدخول بحساب Google أولاً لتفعيل المزامنة السحابية.',
     };
   }
+  const firestore = db;
 
   try {
-    const batch = writeBatch(db);
+    const batch = writeBatch(firestore);
     const nowIso = new Date().toISOString();
     let count = 0;
 
     data.users.forEach((u) => {
       batch.set(
-        doc(db, COLLECTIONS.users, u.id),
+        doc(firestore, COLLECTIONS.users, u.id),
         stripUndefinedForFirestore({ ...u, updatedAt: nowIso }),
         { merge: true }
       );
@@ -251,7 +253,7 @@ export async function syncAllAuraVoiceToFirestore(data: {
 
     data.rooms.forEach((r) => {
       batch.set(
-        doc(db, COLLECTIONS.rooms, r.id),
+        doc(firestore, COLLECTIONS.rooms, r.id),
         stripUndefinedForFirestore({ ...r, updatedAt: nowIso }),
         { merge: true }
       );
@@ -260,7 +262,7 @@ export async function syncAllAuraVoiceToFirestore(data: {
 
     (data.roomBackgrounds || []).forEach((bg) => {
       batch.set(
-        doc(db, COLLECTIONS.roomBackgrounds, bg.id),
+        doc(firestore, COLLECTIONS.roomBackgrounds, bg.id),
         stripUndefinedForFirestore({ ...bg, updatedAt: nowIso }),
         { merge: true }
       );
@@ -271,7 +273,7 @@ export async function syncAllAuraVoiceToFirestore(data: {
       .filter((g) => !g.isStarterDefault && g.id !== 'gift_starter_default')
       .forEach((g) => {
         batch.set(
-          doc(db, COLLECTIONS.gifts, g.id),
+          doc(firestore, COLLECTIONS.gifts, g.id),
           stripUndefinedForFirestore({ ...g, updatedAt: nowIso }),
           { merge: true }
         );
@@ -280,7 +282,7 @@ export async function syncAllAuraVoiceToFirestore(data: {
 
     data.storeItems.forEach((item) => {
       batch.set(
-        doc(db, COLLECTIONS.storeItems, item.id),
+        doc(firestore, COLLECTIONS.storeItems, item.id),
         stripUndefinedForFirestore({ ...item, updatedAt: nowIso }),
         { merge: true }
       );
@@ -289,7 +291,7 @@ export async function syncAllAuraVoiceToFirestore(data: {
 
     data.agencies.forEach((ag) => {
       batch.set(
-        doc(db, COLLECTIONS.agencies, ag.id),
+        doc(firestore, COLLECTIONS.agencies, ag.id),
         stripUndefinedForFirestore({ ...ag, updatedAt: nowIso }),
         { merge: true }
       );
@@ -298,7 +300,7 @@ export async function syncAllAuraVoiceToFirestore(data: {
 
     data.agents.forEach((agent) => {
       batch.set(
-        doc(db, COLLECTIONS.agents, agent.id),
+        doc(firestore, COLLECTIONS.agents, agent.id),
         stripUndefinedForFirestore({ ...agent, updatedAt: nowIso }),
         { merge: true }
       );
@@ -307,7 +309,7 @@ export async function syncAllAuraVoiceToFirestore(data: {
 
     data.staff.forEach((member) => {
       batch.set(
-        doc(db, COLLECTIONS.staff, member.id),
+        doc(firestore, COLLECTIONS.staff, member.id),
         stripUndefinedForFirestore({ ...member, updatedAt: nowIso }),
         { merge: true }
       );
@@ -316,7 +318,7 @@ export async function syncAllAuraVoiceToFirestore(data: {
 
     data.transactions.slice(0, 100).forEach((tx) => {
       batch.set(
-        doc(db, COLLECTIONS.transactions, tx.id),
+        doc(firestore, COLLECTIONS.transactions, tx.id),
         stripUndefinedForFirestore({ ...tx, updatedAt: nowIso }),
         { merge: true }
       );
@@ -324,12 +326,12 @@ export async function syncAllAuraVoiceToFirestore(data: {
     });
 
     batch.set(
-      doc(db, COLLECTIONS.config, 'lucky'),
+      doc(firestore, COLLECTIONS.config, 'lucky'),
       stripUndefinedForFirestore({ ...data.luckyConfig, updatedAt: nowIso }),
       { merge: true }
     );
     batch.set(
-      doc(db, COLLECTIONS.config, 'bag_gifts'),
+      doc(firestore, COLLECTIONS.config, 'bag_gifts'),
       stripUndefinedForFirestore({ items: data.bagGifts, updatedAt: nowIso }),
       { merge: true }
     );
@@ -337,7 +339,7 @@ export async function syncAllAuraVoiceToFirestore(data: {
 
     if (data.agoraConfig?.appId) {
       batch.set(
-        doc(db, COLLECTIONS.config, 'agora'),
+        doc(firestore, COLLECTIONS.config, 'agora'),
         stripUndefinedForFirestore({ ...data.agoraConfig, updatedAt: nowIso }),
         { merge: true }
       );
@@ -368,6 +370,7 @@ export function subscribeToPublicAuraCollections(handlers: {
   onAgoraConfig?: (cfg: AgoraVoiceConfig) => void;
   onJackpotBanner?: (banner: GlobalJackpotBannerState) => void;
 }): () => void {
+  if (!db) return () => {};
   const unsubRooms = onSnapshot(
     collection(db, COLLECTIONS.rooms),
     (snap) => {
@@ -497,7 +500,7 @@ export function subscribeToAuthAuraCollections(handlers: {
   onTransactions: (txs: Transaction[]) => void;
   onBagGifts: (bag: Record<string, number>) => void;
 }): () => void {
-  if (!auth.currentUser) return () => {};
+  if (!db || !auth?.currentUser) return () => {};
 
   const unsubUsers = onSnapshot(
     collection(db, COLLECTIONS.users),
@@ -577,7 +580,7 @@ export function subscribeToRoomMessages(
   roomId: string,
   onMessages: (messages: RoomChatMessage[]) => void
 ): () => void {
-  if (!auth.currentUser || !roomId) return () => {};
+  if (!db || !auth?.currentUser || !roomId) return () => {};
   const path = `${COLLECTIONS.rooms}/${roomId}/messages`;
   return onSnapshot(
     query(collection(db, COLLECTIONS.rooms, roomId, 'messages'), orderBy('id', 'desc'), limit(80)),
@@ -614,7 +617,7 @@ export interface FirestoreRtcSignalPayload {
 export async function publishFirestoreRtcSignal(
   payload: Omit<FirestoreRtcSignalPayload, 'id' | 'rtcCreatedAt'>
 ): Promise<void> {
-  if (!auth.currentUser || !payload.roomId) return;
+  if (!db || !auth?.currentUser || !payload.roomId) return;
   const now = Date.now();
   const safeId = `0rtc_${now}_${Math.random().toString(36).slice(2, 8)}`.replace(/[^a-zA-Z0-9_-]/g, '_');
   try {
@@ -649,7 +652,7 @@ export function subscribeToFirestoreRtcSignals(
   sinceMs: number,
   onSignal: (signal: FirestoreRtcSignalPayload) => void
 ): () => void {
-  if (!auth.currentUser || !roomId) return () => {};
+  if (!db || !auth?.currentUser || !roomId) return () => {};
   const seen = new Set<string>();
   return onSnapshot(
     query(
@@ -681,7 +684,7 @@ export function subscribeToFirestoreRtcSignals(
 }
 
 export async function publishRoomLiveEventToFirestore(event: RoomLiveEvent): Promise<void> {
-  if (!auth.currentUser || !event.roomId) return;
+  if (!db || !auth?.currentUser || !event.roomId) return;
   const safeId = `msg_${event.createdAt}_${event.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48)}`;
   const msgDoc: RoomChatMessage = {
     id: safeId,
@@ -723,7 +726,7 @@ export async function publishRoomLiveEventToFirestore(event: RoomLiveEvent): Pro
 }
 
 export async function persistAuraUser(user: User): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.users}/${user.id}`;
   try {
     await setDoc(
@@ -737,7 +740,7 @@ export async function persistAuraUser(user: User): Promise<void> {
 }
 
 export async function persistAuraRoom(room: VoiceRoom): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.rooms}/${room.id}`;
   try {
     await setDoc(
@@ -751,7 +754,7 @@ export async function persistAuraRoom(room: VoiceRoom): Promise<void> {
 }
 
 export async function removeAuraRoom(roomId: string): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.rooms}/${roomId}`;
   try {
     await deleteDoc(doc(db, COLLECTIONS.rooms, roomId));
@@ -761,7 +764,7 @@ export async function removeAuraRoom(roomId: string): Promise<void> {
 }
 
 export async function persistAuraRoomBackground(bg: RoomBackground): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.roomBackgrounds}/${bg.id}`;
   try {
     await setDoc(
@@ -774,7 +777,7 @@ export async function persistAuraRoomBackground(bg: RoomBackground): Promise<voi
 }
 
 export async function removeAuraRoomBackground(bgId: string): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.roomBackgrounds}/${bgId}`;
   try {
     await deleteDoc(doc(db, COLLECTIONS.roomBackgrounds, bgId));
@@ -784,7 +787,7 @@ export async function removeAuraRoomBackground(bgId: string): Promise<void> {
 }
 
 export async function persistRoomMessage(msg: RoomChatMessage): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const safeId = msg.id.replace(/[^a-zA-Z0-9_-]/g, '_');
   const path = `${COLLECTIONS.rooms}/${msg.roomId}/messages/${safeId}`;
   try {
@@ -799,7 +802,7 @@ export async function persistRoomMessage(msg: RoomChatMessage): Promise<void> {
 }
 
 export async function persistAuraGift(gift: GiftItem): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.gifts}/${gift.id}`;
   try {
     await setDoc(
@@ -812,7 +815,7 @@ export async function persistAuraGift(gift: GiftItem): Promise<void> {
 }
 
 export async function removeAuraGift(giftId: string): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.gifts}/${giftId}`;
   try {
     await deleteDoc(doc(db, COLLECTIONS.gifts, giftId));
@@ -822,7 +825,7 @@ export async function removeAuraGift(giftId: string): Promise<void> {
 }
 
 export async function persistAuraStoreItem(item: StoreItem): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.storeItems}/${item.id}`;
   try {
     await setDoc(
@@ -835,7 +838,7 @@ export async function persistAuraStoreItem(item: StoreItem): Promise<void> {
 }
 
 export async function removeAuraStoreItem(itemId: string): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.storeItems}/${itemId}`;
   try {
     await deleteDoc(doc(db, COLLECTIONS.storeItems, itemId));
@@ -845,7 +848,7 @@ export async function removeAuraStoreItem(itemId: string): Promise<void> {
 }
 
 export async function persistAuraAgent(agent: RechargeAgent): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.agents}/${agent.id}`;
   try {
     await setDoc(
@@ -859,7 +862,7 @@ export async function persistAuraAgent(agent: RechargeAgent): Promise<void> {
 }
 
 export async function persistAuraAgency(agency: Agency): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.agencies}/${agency.id}`;
   try {
     await setDoc(
@@ -873,7 +876,7 @@ export async function persistAuraAgency(agency: Agency): Promise<void> {
 }
 
 export async function persistAuraTransaction(tx: Transaction): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const safeId = tx.id.replace(/[^a-zA-Z0-9_-]/g, '_');
   const path = `${COLLECTIONS.transactions}/${safeId}`;
   try {
@@ -888,7 +891,7 @@ export async function persistAuraTransaction(tx: Transaction): Promise<void> {
 }
 
 export async function persistLuckyConfig(cfg: LuckyGiftConfig): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.config}/lucky`;
   try {
     await setDoc(
@@ -902,7 +905,7 @@ export async function persistLuckyConfig(cfg: LuckyGiftConfig): Promise<void> {
 }
 
 export async function persistBagGifts(items: Record<string, number>): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.config}/bag_gifts`;
   try {
     await setDoc(
@@ -916,7 +919,7 @@ export async function persistBagGifts(items: Record<string, number>): Promise<vo
 }
 
 export async function persistAgoraConfig(cfg: AgoraVoiceConfig): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.config}/agora`;
   try {
     await setDoc(
@@ -930,7 +933,7 @@ export async function persistAgoraConfig(cfg: AgoraVoiceConfig): Promise<void> {
 }
 
 export async function persistJackpotBanner(banner: GlobalJackpotBannerState): Promise<void> {
-  if (!auth.currentUser) return;
+  if (!db || !auth?.currentUser) return;
   const path = `${COLLECTIONS.config}/jackpot`;
   try {
     await setDoc(
@@ -947,7 +950,7 @@ export async function purgeLegacyMockCatalogFromFirestore(
   legacyGiftIds: string[],
   legacyStoreIds: string[]
 ): Promise<{ removedGifts: number; removedStore: number }> {
-  if (!auth.currentUser) {
+  if (!db || !auth?.currentUser) {
     throw new Error('يرجى تسجيل الدخول بحساب المسؤول أولاً.');
   }
 

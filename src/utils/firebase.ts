@@ -94,13 +94,19 @@ let authInstance: Auth | null = null;
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
+export const isFirebaseConfigured = Boolean(
+  firebaseConfig.apiKey && firebaseConfig.projectId
+);
+
 let currentStatus: FirebaseConnectionStatus = {
-  isConfigured: Boolean(firebaseConfig?.projectId),
+  isConfigured: isFirebaseConfigured,
   isConnected: false,
   isTesting: false,
-  projectId: firebaseConfig.projectId,
+  projectId: firebaseConfig.projectId || 'غير مضبوط',
   databaseId: firebaseConfig.firestoreDatabaseId || '(default)',
-  message: 'جاري تهيئة الاتصال السحابي...',
+  message: isFirebaseConfigured
+    ? 'جاري تهيئة الاتصال السحابي...'
+    : 'التطبيق يعمل محلياً — أضف متغيرات VITE_FIREBASE_* في الاستضافة لتفعيل المزامنة السحابية.',
 };
 
 const listeners = new Set<(status: FirebaseConnectionStatus) => void>();
@@ -126,30 +132,51 @@ function updateStatus(updates: Partial<FirebaseConnectionStatus>) {
   });
 }
 
-export function initFirebase(): { app: FirebaseApp; db: Firestore; auth: Auth } {
-  if (!appInstance) {
-    appInstance = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-    dbInstance = firebaseConfig.firestoreDatabaseId
-      ? getFirestore(appInstance, firebaseConfig.firestoreDatabaseId)
-      : getFirestore(appInstance);
-    authInstance = getAuth(appInstance);
+export function initFirebase(): {
+  app: FirebaseApp | null;
+  db: Firestore | null;
+  auth: Auth | null;
+} {
+  if (!isFirebaseConfigured) {
+    return { app: null, db: null, auth: null };
   }
-  return { app: appInstance, db: dbInstance!, auth: authInstance! };
+  if (!appInstance) {
+    try {
+      appInstance = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+      dbInstance = firebaseConfig.firestoreDatabaseId
+        ? getFirestore(appInstance, firebaseConfig.firestoreDatabaseId)
+        : getFirestore(appInstance);
+      authInstance = getAuth(appInstance);
+    } catch (err) {
+      console.warn('[Firebase] Safe init fallback (missing or invalid config):', err);
+      appInstance = null;
+      dbInstance = null;
+      authInstance = null;
+      updateStatus({
+        isConfigured: false,
+        isConnected: false,
+        isTesting: false,
+        error: err instanceof Error ? err.message : 'تعذر تهيئة Firebase',
+        message: 'يرجى التحقق من متغيرات البيئة VITE_FIREBASE_* في إعدادات الاستضافة.',
+      });
+    }
+  }
+  return { app: appInstance, db: dbInstance, auth: authInstance };
 }
 
 const initialized = initFirebase();
-export const app = initialized.app;
-export const db = initialized.db;
-export const auth = initialized.auth;
+export const app: FirebaseApp | null = initialized.app;
+export const db: Firestore | null = initialized.db;
+export const auth: Auth | null = initialized.auth;
 
-export function getFirebaseDb(): Firestore {
-  if (!dbInstance) initFirebase();
-  return dbInstance!;
+export function getFirebaseDb(): Firestore | null {
+  if (!dbInstance && isFirebaseConfigured) initFirebase();
+  return dbInstance;
 }
 
-export function getFirebaseAuth(): Auth {
-  if (!authInstance) initFirebase();
-  return authInstance!;
+export function getFirebaseAuth(): Auth | null {
+  if (!authInstance && isFirebaseConfigured) initFirebase();
+  return authInstance;
 }
 
 export function handleFirestoreError(
@@ -161,13 +188,13 @@ export function handleFirestoreError(
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: currentAuth.currentUser?.uid,
-      email: currentAuth.currentUser?.email,
-      emailVerified: currentAuth.currentUser?.emailVerified,
-      isAnonymous: currentAuth.currentUser?.isAnonymous,
-      tenantId: currentAuth.currentUser?.tenantId,
+      userId: currentAuth?.currentUser?.uid,
+      email: currentAuth?.currentUser?.email,
+      emailVerified: currentAuth?.currentUser?.emailVerified,
+      isAnonymous: currentAuth?.currentUser?.isAnonymous,
+      tenantId: currentAuth?.currentUser?.tenantId,
       providerInfo:
-        currentAuth.currentUser?.providerData?.map((provider) => ({
+        currentAuth?.currentUser?.providerData?.map((provider) => ({
           providerId: provider.providerId,
           email: provider.email,
         })) || [],
@@ -210,8 +237,18 @@ export function translateFirebaseAuthError(error: unknown): string {
   }
 }
 
+function requireFirebaseAuth(): Auth {
+  const currentAuth = getFirebaseAuth();
+  if (!currentAuth) {
+    throw new Error(
+      'إعدادات Firebase غير مضافة في الاستضافة بعد (VITE_FIREBASE_API_KEY / VITE_FIREBASE_PROJECT_ID). يمكنك الدخول كزائر أو إضافة متغيرات Firebase في إعدادات الاستضافة.'
+    );
+  }
+  return currentAuth;
+}
+
 export async function signInWithGoogle(): Promise<FirebaseUser> {
-  const cred = await signInWithPopup(getFirebaseAuth(), googleProvider);
+  const cred = await signInWithPopup(requireFirebaseAuth(), googleProvider);
   return cred.user;
 }
 
@@ -220,7 +257,11 @@ export async function registerWithEmailPassword(
   password: string,
   displayName: string
 ): Promise<FirebaseUser> {
-  const cred = await createUserWithEmailAndPassword(getFirebaseAuth(), email.trim(), password);
+  const cred = await createUserWithEmailAndPassword(
+    requireFirebaseAuth(),
+    email.trim(),
+    password
+  );
   if (displayName.trim()) {
     await updateProfile(cred.user, { displayName: displayName.trim() }).catch(() => {});
   }
@@ -231,24 +272,54 @@ export async function loginWithEmailPassword(
   email: string,
   password: string
 ): Promise<FirebaseUser> {
-  const cred = await signInWithEmailAndPassword(getFirebaseAuth(), email.trim(), password);
+  const cred = await signInWithEmailAndPassword(
+    requireFirebaseAuth(),
+    email.trim(),
+    password
+  );
   return cred.user;
 }
 
 export async function signOutFirebase(): Promise<void> {
-  await signOut(getFirebaseAuth());
+  const currentAuth = getFirebaseAuth();
+  if (!currentAuth) return;
+  await signOut(currentAuth);
 }
 
 export function subscribeToAuthState(
   callback: (user: FirebaseUser | null) => void
 ): () => void {
-  return onAuthStateChanged(getFirebaseAuth(), callback);
+  const currentAuth = getFirebaseAuth();
+  if (!currentAuth) {
+    queueMicrotask(() => callback(null));
+    return () => {};
+  }
+  try {
+    return onAuthStateChanged(currentAuth, callback);
+  } catch (err) {
+    console.warn('[Firebase] onAuthStateChanged fallback:', err);
+    queueMicrotask(() => callback(null));
+    return () => {};
+  }
 }
 
 async function testConnection(): Promise<void> {
+  const currentDb = getFirebaseDb();
+  if (!isFirebaseConfigured || !currentDb) {
+    updateStatus({
+      isConfigured: false,
+      isConnected: false,
+      isTesting: false,
+      projectId: firebaseConfig.projectId || 'غير مضبوط',
+      databaseId: firebaseConfig.firestoreDatabaseId || '(default)',
+      lastCheckedAt: new Date().toISOString(),
+      message: 'أضف متغيرات VITE_FIREBASE_* في الاستضافة لتفعيل الربط السحابي.',
+    });
+    return;
+  }
   const start = performance.now();
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    await getDocFromServer(doc(currentDb, 'test', 'connection'));
     const latency = Math.round(performance.now() - start);
     updateStatus({
       isConfigured: true,
@@ -296,13 +367,31 @@ if (typeof window !== 'undefined') {
 
 export async function testFirebaseConnection(force = false): Promise<FirebaseConnectionStatus> {
   if (currentStatus.isTesting && !force) return currentStatus;
+  if (!isFirebaseConfigured) {
+    const result: FirebaseConnectionStatus = {
+      isConfigured: false,
+      isConnected: false,
+      isTesting: false,
+      projectId: firebaseConfig.projectId || 'غير مضبوط',
+      databaseId: firebaseConfig.firestoreDatabaseId || '(default)',
+      lastCheckedAt: new Date().toISOString(),
+      error: 'متغيرات Firebase غير مضافة في الاستضافة',
+      message: 'أضف متغيرات VITE_FIREBASE_* في إعدادات البيئة بالاستضافة ثم أعد النشر.',
+    };
+    updateStatus(result);
+    return result;
+  }
   updateStatus({ isTesting: true });
   const start = performance.now();
 
   try {
     initFirebase();
+    const currentDb = getFirebaseDb();
+    if (!currentDb) {
+      throw new Error('تعذر تهيئة Firestore');
+    }
     try {
-      await getDocFromServer(doc(getFirebaseDb(), 'test', 'connection'));
+      await getDocFromServer(doc(currentDb, 'test', 'connection'));
       const latency = Math.round(performance.now() - start);
       const result: FirebaseConnectionStatus = {
         isConfigured: true,
