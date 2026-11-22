@@ -33,7 +33,7 @@ import {
   STARTER_DEFAULT_GIFT_ID,
   LEGACY_MOCK_GIFT_IDS,
   LEGACY_MOCK_STORE_IDS,
-} from '../data/mockData';
+} from '../data/appDefaults';
 import { sound } from '../utils/audio';
 import type { User as FirebaseUser } from 'firebase/auth';
 import {

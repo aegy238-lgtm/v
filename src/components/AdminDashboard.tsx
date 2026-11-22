@@ -57,7 +57,7 @@ import {
   ServerAgoraStatus,
   VoiceServerStatusSnapshot,
 } from '../utils/agoraVoice';
-import { STARTER_DEFAULT_GIFT_ID } from '../data/mockData';
+import { STARTER_DEFAULT_GIFT_ID } from '../data/appDefaults';
 
 function parseOptionalDurationSec(raw: string): number | undefined {
   const trimmed = raw.trim();

@@ -15,7 +15,7 @@ import {
   Wallet,
   Crown,
 } from 'lucide-react';
-import { RECHARGE_PACKAGES } from '../data/mockData';
+import { RECHARGE_PACKAGES } from '../data/appDefaults';
 
 interface WalletModalProps {
   isOpen: boolean;

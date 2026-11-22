@@ -1959,7 +1959,12 @@ async function startServer() {
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+        ws: { server },
+        hmr: process.env.DISABLE_HMR === "true" ? false : true,
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
