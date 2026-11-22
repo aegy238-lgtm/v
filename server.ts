@@ -26,10 +26,32 @@ const ADMIN_ALLOWLIST_EMAILS = new Set([
 ]);
 
 // =============================================================================
+// PERSISTENT SERVER DATA STORAGE (Admin Auth + Authoritative Real-Time Catalog)
+// =============================================================================
+const SERVER_DATA_DIR = path.join(__dirname, "data");
+const ADMIN_AUTH_FILE = path.join(SERVER_DATA_DIR, "admin-auth.json");
+const CATALOG_FILE = path.join(SERVER_DATA_DIR, "catalog.json");
+
+function ensureServerDataDir(): void {
+  try {
+    if (!fs.existsSync(SERVER_DATA_DIR)) {
+      fs.mkdirSync(SERVER_DATA_DIR, { recursive: true, mode: 0o700 });
+    }
+  } catch (err) {
+    console.warn("Could not ensure server data directory:", err);
+  }
+}
+
+function writeJsonAtomic(filePath: string, data: unknown, mode = 0o600): void {
+  ensureServerDataDir();
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), { encoding: "utf8", mode });
+  fs.renameSync(tmpPath, filePath);
+}
+
+// =============================================================================
 // SERVER-SIDE ADMIN EMAIL + PASSWORD AUTH (scrypt + HMAC-SHA256 Bearer Tokens)
 // =============================================================================
-const ADMIN_SESSION_SECRET =
-  (process.env.ADMIN_SESSION_SECRET || "").trim() || crypto.randomBytes(32).toString("hex");
 const ADMIN_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface ClaimedAdminCredential {
@@ -40,26 +62,89 @@ interface ClaimedAdminCredential {
   claimedAt: number;
 }
 
-// One-time first-run claimed admin credential (held in server memory; overridden by process.env.ADMIN_PASSWORD)
-let claimedAdminCredential: ClaimedAdminCredential | null = null;
+interface PersistedAdminAuthFile {
+  sessionSecret?: string;
+  claimedAdminCredential?: ClaimedAdminCredential | null;
+}
 
-// Sliding-window rate limit per IP for admin auth routes
-const adminAuthAttempts = new Map<string, number[]>();
+function loadPersistedAdminAuth(): PersistedAdminAuthFile {
+  try {
+    if (fs.existsSync(ADMIN_AUTH_FILE)) {
+      const raw = fs.readFileSync(ADMIN_AUTH_FILE, "utf8");
+      const parsed = JSON.parse(raw) as PersistedAdminAuthFile;
+      if (parsed && typeof parsed === "object") {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn("Could not read persisted admin auth file:", err);
+  }
+  return {};
+}
+
+const persistedAdminAuth = loadPersistedAdminAuth();
+
+const ADMIN_SESSION_SECRET =
+  (process.env.ADMIN_SESSION_SECRET || "").trim() ||
+  (typeof persistedAdminAuth.sessionSecret === "string" &&
+  persistedAdminAuth.sessionSecret.length >= 32
+    ? persistedAdminAuth.sessionSecret
+    : crypto.randomBytes(32).toString("hex"));
+
+// Persisted scrypt-hashed admin credential (survives server restarts; overridden by process.env.ADMIN_PASSWORD)
+let claimedAdminCredential: ClaimedAdminCredential | null =
+  persistedAdminAuth.claimedAdminCredential &&
+  typeof persistedAdminAuth.claimedAdminCredential.email === "string" &&
+  typeof persistedAdminAuth.claimedAdminCredential.saltHex === "string" &&
+  typeof persistedAdminAuth.claimedAdminCredential.hashHex === "string"
+    ? persistedAdminAuth.claimedAdminCredential
+    : null;
+
+function savePersistedAdminAuth(): void {
+  try {
+    writeJsonAtomic(
+      ADMIN_AUTH_FILE,
+      {
+        sessionSecret: ADMIN_SESSION_SECRET,
+        claimedAdminCredential,
+      },
+      0o600
+    );
+  } catch (err) {
+    console.warn("Could not persist admin auth file:", err);
+  }
+}
+
+// Persist stable session secret on startup so active sessions survive restarts
+if (!persistedAdminAuth.sessionSecret) {
+  savePersistedAdminAuth();
+}
+
+// Sliding-window rate limit per IP for FAILED admin auth attempts only
+const adminAuthFailures = new Map<string, number[]>();
 const ADMIN_AUTH_WINDOW_MS = 15 * 60 * 1000;
-const ADMIN_AUTH_MAX_ATTEMPTS = 12;
+const ADMIN_AUTH_MAX_FAILURES = 20;
 
 function isAdminAuthRateLimited(ipKey: string): boolean {
   const now = Date.now();
-  const prev = (adminAuthAttempts.get(ipKey) || []).filter(
+  const prev = (adminAuthFailures.get(ipKey) || []).filter(
     (ts) => now - ts < ADMIN_AUTH_WINDOW_MS
   );
-  if (prev.length >= ADMIN_AUTH_MAX_ATTEMPTS) {
-    adminAuthAttempts.set(ipKey, prev);
-    return true;
-  }
+  adminAuthFailures.set(ipKey, prev);
+  return prev.length >= ADMIN_AUTH_MAX_FAILURES;
+}
+
+function recordAdminAuthFailure(ipKey: string): void {
+  const now = Date.now();
+  const prev = (adminAuthFailures.get(ipKey) || []).filter(
+    (ts) => now - ts < ADMIN_AUTH_WINDOW_MS
+  );
   prev.push(now);
-  adminAuthAttempts.set(ipKey, prev);
-  return false;
+  adminAuthFailures.set(ipKey, prev);
+}
+
+function clearAdminAuthFailures(ipKey: string): void {
+  adminAuthFailures.delete(ipKey);
 }
 
 function getEnvAdminConfig(): { email: string; password: string } | null {
@@ -100,6 +185,234 @@ function signAdminSessionToken(payload: {
     .update(encoded)
     .digest("base64url");
   return `adm1.${encoded}.${sig}`;
+}
+
+// =============================================================================
+// AUTHORITATIVE MULTI-USER CATALOG STORE (Gifts, Store Items, Room Backgrounds)
+// =============================================================================
+interface ServerCatalogState {
+  version: number;
+  updatedAt: string;
+  gifts: Record<string, unknown>[];
+  storeItems: Record<string, unknown>[];
+  roomBackgrounds: Record<string, unknown>[];
+}
+
+const LEGACY_MOCK_GIFT_IDS = new Set([
+  "g_lollipop",
+  "g_rose",
+  "g_heart_ring",
+  "g_crown",
+  "g_luxury_car",
+  "g_private_jet",
+  "g_royal_castle",
+  "g_dragon_aura",
+]);
+
+const LEGACY_MOCK_STORE_IDS = new Set([
+  "f_gold",
+  "f_royal",
+  "f_cyber",
+  "f_dragon",
+  "e_lambo",
+  "e_pegasus",
+  "e_throne",
+  "b_king",
+  "b_legend",
+  "b_vip_diamond",
+  "bu_gold",
+  "bu_neon",
+]);
+
+function sanitizeCatalogMediaUrl(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 15 * 1024 * 1024) return undefined;
+  if (
+    trimmed.startsWith("https://") ||
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("data:image/") ||
+    trimmed.startsWith("data:video/") ||
+    trimmed.startsWith("data:audio/") ||
+    trimmed.startsWith("data:application/octet-stream")
+  ) {
+    return trimmed;
+  }
+  return undefined;
+}
+
+function sanitizeCatalogGift(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const g = raw as Record<string, unknown>;
+  const id = sanitizeShortString(g.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
+  if (!id || id === "gift_starter_default" || LEGACY_MOCK_GIFT_IDS.has(id) || g.isStarterDefault) {
+    return null;
+  }
+  const nameAr = sanitizeShortString(g.nameAr || g.name, 100);
+  if (!nameAr) return null;
+  const allowedCats = new Set(["classic", "luxury", "vip", "magic", "lucky"]);
+  const catRaw = sanitizeShortString(g.category, 24);
+  const category = allowedCats.has(catRaw) ? catRaw : "classic";
+  const allowedAnim = new Set([
+    "float",
+    "particle",
+    "explosion",
+    "luxury_banner",
+    "fullscreen_dragon",
+    "lollipop_matrix",
+  ]);
+  const animRaw = sanitizeShortString(g.animationType, 32);
+  const animationType = allowedAnim.has(animRaw) ? animRaw : "luxury_banner";
+  const allowedSound = new Set(["chime", "fanfare", "roar", "sparkle", "magic"]);
+  const sndRaw = sanitizeShortString(g.soundEffect, 24);
+  const soundEffect = allowedSound.has(sndRaw) ? sndRaw : "chime";
+
+  const out: Record<string, unknown> = {
+    id,
+    name: sanitizeShortString(g.name || nameAr, 100) || nameAr,
+    nameAr,
+    category,
+    coinPrice: Math.max(1, Math.min(100000000, Math.round(Number(g.coinPrice) || 100))),
+    diamondReward: Math.max(0, Math.min(100000000, Math.round(Number(g.diamondReward) || 0))),
+    icon: sanitizeShortString(g.icon, 24) || "🎁",
+    accentColor: sanitizeShortString(g.accentColor, 32) || "#f59e0b",
+    animationType,
+    soundEffect,
+    descriptionAr: sanitizeShortString(g.descriptionAr, 240) || "هدية حصرية من الإدارة",
+    isLucky: Boolean(g.isLucky || category === "lucky"),
+  };
+
+  const imageUrl = sanitizeCatalogMediaUrl(g.imageUrl);
+  const videoUrl = sanitizeCatalogMediaUrl(g.videoUrl);
+  const soundUrl = sanitizeCatalogMediaUrl(g.soundUrl);
+  if (imageUrl) out.imageUrl = imageUrl;
+  if (videoUrl) out.videoUrl = videoUrl;
+  if (soundUrl) out.soundUrl = soundUrl;
+  if (
+    typeof g.effectDurationSec === "number" &&
+    Number.isFinite(g.effectDurationSec) &&
+    g.effectDurationSec >= 1 &&
+    g.effectDurationSec <= 120
+  ) {
+    out.effectDurationSec = Math.round(g.effectDurationSec * 10) / 10;
+  }
+  return out;
+}
+
+function sanitizeCatalogStoreItem(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const item = raw as Record<string, unknown>;
+  const id = sanitizeShortString(item.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
+  if (!id || LEGACY_MOCK_STORE_IDS.has(id)) return null;
+  const nameAr = sanitizeShortString(item.nameAr || item.name, 100);
+  if (!nameAr) return null;
+  const allowedTypes = new Set(["frame", "entrance", "badge", "bubble"]);
+  const typeRaw = sanitizeShortString(item.type, 24);
+  if (!allowedTypes.has(typeRaw)) return null;
+
+  const out: Record<string, unknown> = {
+    id,
+    type: typeRaw,
+    name: sanitizeShortString(item.name || nameAr, 100) || nameAr,
+    nameAr,
+    priceCoins: Math.max(0, Math.min(100000000, Math.round(Number(item.priceCoins) || 0))),
+    durationDays: Math.max(1, Math.min(3650, Math.round(Number(item.durationDays) || 30))),
+    icon: sanitizeShortString(item.icon, 24) || "✨",
+    accentColor: sanitizeShortString(item.accentColor, 32) || "#f59e0b",
+    descriptionAr: sanitizeShortString(item.descriptionAr, 240) || "عنصر حصري من المتجر",
+  };
+  const previewUrl = sanitizeCatalogMediaUrl(item.previewUrl);
+  const videoUrl = sanitizeCatalogMediaUrl(item.videoUrl);
+  if (previewUrl) out.previewUrl = previewUrl;
+  if (videoUrl) out.videoUrl = videoUrl;
+  if (
+    typeof item.effectDurationSec === "number" &&
+    Number.isFinite(item.effectDurationSec) &&
+    item.effectDurationSec >= 1 &&
+    item.effectDurationSec <= 120
+  ) {
+    out.effectDurationSec = Math.round(item.effectDurationSec * 10) / 10;
+  }
+  return out;
+}
+
+function sanitizeCatalogBackground(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const bg = raw as Record<string, unknown>;
+  const id = sanitizeShortString(bg.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
+  const imageUrl = sanitizeCatalogMediaUrl(bg.imageUrl);
+  if (!id || !imageUrl) return null;
+  return {
+    id,
+    nameAr: sanitizeShortString(bg.nameAr, 100) || "خلفية غرفة مخصصة",
+    imageUrl,
+    createdAt: sanitizeShortString(bg.createdAt, 32) || new Date().toISOString().slice(0, 10),
+  };
+}
+
+function loadServerCatalog(): ServerCatalogState {
+  try {
+    if (fs.existsSync(CATALOG_FILE)) {
+      const raw = fs.readFileSync(CATALOG_FILE, "utf8");
+      const parsed = JSON.parse(raw) as Partial<ServerCatalogState>;
+      const gifts = Array.isArray(parsed.gifts)
+        ? parsed.gifts
+            .map(sanitizeCatalogGift)
+            .filter((x): x is Record<string, unknown> => Boolean(x))
+        : [];
+      const storeItems = Array.isArray(parsed.storeItems)
+        ? parsed.storeItems
+            .map(sanitizeCatalogStoreItem)
+            .filter((x): x is Record<string, unknown> => Boolean(x))
+        : [];
+      const roomBackgrounds = Array.isArray(parsed.roomBackgrounds)
+        ? parsed.roomBackgrounds
+            .map(sanitizeCatalogBackground)
+            .filter((x): x is Record<string, unknown> => Boolean(x))
+        : [];
+      return {
+        version: typeof parsed.version === "number" ? parsed.version : 1,
+        updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
+        gifts,
+        storeItems,
+        roomBackgrounds,
+      };
+    }
+  } catch (err) {
+    console.warn("Could not read server catalog file:", err);
+  }
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    gifts: [],
+    storeItems: [],
+    roomBackgrounds: [],
+  };
+}
+
+let serverCatalog: ServerCatalogState = loadServerCatalog();
+const catalogSseClients = new Set<express.Response>();
+
+function persistAndBroadcastCatalog(): void {
+  serverCatalog = {
+    ...serverCatalog,
+    version: serverCatalog.version + 1,
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    writeJsonAtomic(CATALOG_FILE, serverCatalog, 0o644);
+  } catch (err) {
+    console.warn("Could not persist server catalog:", err);
+  }
+  const frame = `event: catalog:update\ndata: ${JSON.stringify(serverCatalog)}\n\n`;
+  catalogSseClients.forEach((clientRes) => {
+    try {
+      clientRes.write(frame);
+    } catch {
+      catalogSseClients.delete(clientRes);
+    }
+  });
 }
 
 function verifyAdminSessionToken(
@@ -444,7 +757,14 @@ function safeWsSend(ws: WebSocket, payload: unknown): void {
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: "256kb" }));
+  const catalogJsonParser = express.json({ limit: "25mb" });
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api/admin/catalog")) {
+      catalogJsonParser(req, res, next);
+      return;
+    }
+    express.json({ limit: "256kb" })(req, res, next);
+  });
   const server = http.createServer(app);
   const PORT = 3000;
   const startedAt = Date.now();
@@ -866,8 +1186,9 @@ async function startServer() {
         ? body.displayName.trim().slice(0, 60)
         : "مدير التطبيق";
 
-    if (!isValidEmailFormat(email)) {
-      res.status(400).json({ error: "يرجى إدخال بريد إلكتروني صحيح." });
+    if (!isValidEmailFormat(email) || !ADMIN_ALLOWLIST_EMAILS.has(email)) {
+      recordAdminAuthFailure(`claim:${ipKey}`);
+      res.status(403).json({ error: "هذا البريد الإلكتروني غير مصرح له كحساب مدير." });
       return;
     }
     if (password.length < 6 || password.length > 128) {
@@ -885,6 +1206,8 @@ async function startServer() {
       hashHex,
       claimedAt: Date.now(),
     };
+    savePersistedAdminAuth();
+    clearAdminAuthFailures(`claim:${ipKey}`);
 
     const exp = Date.now() + ADMIN_SESSION_TTL_MS;
     const token = signAdminSessionToken({ email, displayName, exp });
@@ -902,7 +1225,7 @@ async function startServer() {
       .split(",")[0]
       .trim();
     if (isAdminAuthRateLimited(`login:${ipKey}`)) {
-      res.status(429).json({ error: "محاولات دخول كثيرة، يرجى المحاولة لاحقاً." });
+      res.status(429).json({ error: "محاولات دخول خاطئة كثيرة، يرجى الانتظار قليلاً ثم المحاولة." });
       return;
     }
 
@@ -920,9 +1243,13 @@ async function startServer() {
       const emailOk = constantTimeStringEqual(email, envCfg.email);
       const passOk = constantTimeStringEqual(password, envCfg.password);
       if (!emailOk || !passOk) {
-        res.status(401).json({ error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." });
+        if (emailOk) recordAdminAuthFailure(`login:${ipKey}`);
+        res.status(emailOk ? 401 : 404).json({
+          error: "البريد الإلكتروني أو كلمة المرور غير صحيحة.",
+        });
         return;
       }
+      clearAdminAuthFailures(`login:${ipKey}`);
       const displayName = "مدير التطبيق";
       const exp = Date.now() + ADMIN_SESSION_TTL_MS;
       const token = signAdminSessionToken({ email: envCfg.email, displayName, exp });
@@ -930,22 +1257,60 @@ async function startServer() {
       return;
     }
 
+    // First-run seamless claim strictly for allowlisted owner email (persisted to data/admin-auth.json)
     if (!claimedAdminCredential) {
-      res.status(404).json({
-        error: "لم يتم إنشاء حساب المدير بعد. قم بإنشائه أولاً من تبويب إعداد حساب المدير.",
+      if (!ADMIN_ALLOWLIST_EMAILS.has(email)) {
+        res.status(404).json({ error: "الحساب غير مسجل كمدير." });
+        return;
+      }
+      if (password.length < 6) {
+        res.status(400).json({ error: "كلمة المرور يجب أن تكون 6 أحرف على الأقل." });
+        return;
+      }
+      const saltHex = crypto.randomBytes(16).toString("hex");
+      const hashHex = hashPasswordScrypt(password, saltHex);
+      claimedAdminCredential = {
+        email,
+        displayName: "مدير التطبيق",
+        saltHex,
+        hashHex,
+        claimedAt: Date.now(),
+      };
+      savePersistedAdminAuth();
+      clearAdminAuthFailures(`login:${ipKey}`);
+      const exp = Date.now() + ADMIN_SESSION_TTL_MS;
+      const token = signAdminSessionToken({
+        email: claimedAdminCredential.email,
+        displayName: claimedAdminCredential.displayName,
+        exp,
+      });
+      res.json({
+        ok: true,
+        token,
+        email: claimedAdminCredential.email,
+        displayName: claimedAdminCredential.displayName,
+        expiresAt: exp,
       });
       return;
     }
 
     const emailOk = constantTimeStringEqual(email, claimedAdminCredential.email);
-    const derivedHash = hashPasswordScrypt(password, claimedAdminCredential.saltHex);
-    const passOk = constantTimeStringEqual(derivedHash, claimedAdminCredential.hashHex);
-
-    if (!emailOk || !passOk) {
-      res.status(401).json({ error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." });
+    if (!emailOk) {
+      // Non-admin email: return 404 so normal users continue cleanly to Firebase auth
+      res.status(404).json({ error: "الحساب غير مسجل كمدير." });
       return;
     }
 
+    const derivedHash = hashPasswordScrypt(password, claimedAdminCredential.saltHex);
+    const passOk = constantTimeStringEqual(derivedHash, claimedAdminCredential.hashHex);
+
+    if (!passOk) {
+      recordAdminAuthFailure(`login:${ipKey}`);
+      res.status(401).json({ error: "كلمة مرور حساب المدير غير صحيحة." });
+      return;
+    }
+
+    clearAdminAuthFailures(`login:${ipKey}`);
     const exp = Date.now() + ADMIN_SESSION_TTL_MS;
     const token = signAdminSessionToken({
       email: claimedAdminCredential.email,
@@ -974,6 +1339,231 @@ async function startServer() {
       displayName: check.displayName,
       expiresAt: check.exp,
     });
+  });
+
+  // ===========================================================================
+  // PUBLIC + REAL-TIME SSE CATALOG SYNC ROUTES (All Users Receive Instantly)
+  // ===========================================================================
+  app.get("/api/catalog", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, ...serverCatalog });
+  });
+
+  app.get("/api/catalog/stream", (req, res) => {
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    catalogSseClients.add(res);
+    res.write(`event: catalog:init\ndata: ${JSON.stringify(serverCatalog)}\n\n`);
+
+    const keepAlive = setInterval(() => {
+      try {
+        res.write(`: ping ${Date.now()}\n\n`);
+      } catch {
+        clearInterval(keepAlive);
+        catalogSseClients.delete(res);
+      }
+    }, 20000);
+
+    req.on("close", () => {
+      clearInterval(keepAlive);
+      catalogSseClients.delete(res);
+    });
+  });
+
+  // Admin-Protected Catalog Mutation Endpoints (Persist + Broadcast to All Users)
+  app.post("/api/admin/catalog/gifts", async (req, res) => {
+    const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
+    if (!authCheck.ok) {
+      res.status(403).json({ error: authCheck.error || "غير مصرح" });
+      return;
+    }
+    const clean = sanitizeCatalogGift(req.body);
+    if (!clean) {
+      res.status(400).json({ error: "بيانات الهدية غير صالحة." });
+      return;
+    }
+    const giftId = String(clean.id);
+    serverCatalog.gifts = [clean, ...serverCatalog.gifts.filter((g) => String(g.id) !== giftId)];
+    persistAndBroadcastCatalog();
+    res.status(201).json({ ok: true, gift: clean, version: serverCatalog.version });
+  });
+
+  app.put("/api/admin/catalog/gifts/:id", async (req, res) => {
+    const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
+    if (!authCheck.ok) {
+      res.status(403).json({ error: authCheck.error || "غير مصرح" });
+      return;
+    }
+    const giftId = sanitizeShortString(req.params.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const existing = serverCatalog.gifts.find((g) => String(g.id) === giftId) || { id: giftId };
+    const merged = sanitizeCatalogGift({ ...existing, ...(req.body || {}), id: giftId });
+    if (!merged) {
+      res.status(400).json({ error: "تحديث الهدية غير صالح." });
+      return;
+    }
+    const exists = serverCatalog.gifts.some((g) => String(g.id) === giftId);
+    serverCatalog.gifts = exists
+      ? serverCatalog.gifts.map((g) => (String(g.id) === giftId ? merged : g))
+      : [merged, ...serverCatalog.gifts];
+    persistAndBroadcastCatalog();
+    res.json({ ok: true, gift: merged, version: serverCatalog.version });
+  });
+
+  app.delete("/api/admin/catalog/gifts/:id", async (req, res) => {
+    const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
+    if (!authCheck.ok) {
+      res.status(403).json({ error: authCheck.error || "غير مصرح" });
+      return;
+    }
+    const giftId = sanitizeShortString(req.params.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
+    serverCatalog.gifts = serverCatalog.gifts.filter((g) => String(g.id) !== giftId);
+    persistAndBroadcastCatalog();
+    res.json({ ok: true, deletedId: giftId, version: serverCatalog.version });
+  });
+
+  app.post("/api/admin/catalog/store-items", async (req, res) => {
+    const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
+    if (!authCheck.ok) {
+      res.status(403).json({ error: authCheck.error || "غير مصرح" });
+      return;
+    }
+    const clean = sanitizeCatalogStoreItem(req.body);
+    if (!clean) {
+      res.status(400).json({ error: "بيانات عنصر المتجر غير صالحة." });
+      return;
+    }
+    const itemId = String(clean.id);
+    serverCatalog.storeItems = [
+      clean,
+      ...serverCatalog.storeItems.filter((i) => String(i.id) !== itemId),
+    ];
+    persistAndBroadcastCatalog();
+    res.status(201).json({ ok: true, item: clean, version: serverCatalog.version });
+  });
+
+  app.put("/api/admin/catalog/store-items/:id", async (req, res) => {
+    const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
+    if (!authCheck.ok) {
+      res.status(403).json({ error: authCheck.error || "غير مصرح" });
+      return;
+    }
+    const itemId = sanitizeShortString(req.params.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const existing = serverCatalog.storeItems.find((i) => String(i.id) === itemId) || { id: itemId };
+    const merged = sanitizeCatalogStoreItem({ ...existing, ...(req.body || {}), id: itemId });
+    if (!merged) {
+      res.status(400).json({ error: "تحديث عنصر المتجر غير صالح." });
+      return;
+    }
+    const exists = serverCatalog.storeItems.some((i) => String(i.id) === itemId);
+    serverCatalog.storeItems = exists
+      ? serverCatalog.storeItems.map((i) => (String(i.id) === itemId ? merged : i))
+      : [merged, ...serverCatalog.storeItems];
+    persistAndBroadcastCatalog();
+    res.json({ ok: true, item: merged, version: serverCatalog.version });
+  });
+
+  app.delete("/api/admin/catalog/store-items/:id", async (req, res) => {
+    const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
+    if (!authCheck.ok) {
+      res.status(403).json({ error: authCheck.error || "غير مصرح" });
+      return;
+    }
+    const itemId = sanitizeShortString(req.params.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
+    serverCatalog.storeItems = serverCatalog.storeItems.filter((i) => String(i.id) !== itemId);
+    persistAndBroadcastCatalog();
+    res.json({ ok: true, deletedId: itemId, version: serverCatalog.version });
+  });
+
+  app.post("/api/admin/catalog/backgrounds", async (req, res) => {
+    const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
+    if (!authCheck.ok) {
+      res.status(403).json({ error: authCheck.error || "غير مصرح" });
+      return;
+    }
+    const clean = sanitizeCatalogBackground(req.body);
+    if (!clean) {
+      res.status(400).json({ error: "بيانات الخلفية غير صالحة." });
+      return;
+    }
+    const bgId = String(clean.id);
+    serverCatalog.roomBackgrounds = [
+      clean,
+      ...serverCatalog.roomBackgrounds.filter((b) => String(b.id) !== bgId),
+    ];
+    persistAndBroadcastCatalog();
+    res.status(201).json({ ok: true, background: clean, version: serverCatalog.version });
+  });
+
+  app.delete("/api/admin/catalog/backgrounds/:id", async (req, res) => {
+    const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
+    if (!authCheck.ok) {
+      res.status(403).json({ error: authCheck.error || "غير مصرح" });
+      return;
+    }
+    const bgId = sanitizeShortString(req.params.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
+    serverCatalog.roomBackgrounds = serverCatalog.roomBackgrounds.filter(
+      (b) => String(b.id) !== bgId
+    );
+    persistAndBroadcastCatalog();
+    res.json({ ok: true, deletedId: bgId, version: serverCatalog.version });
+  });
+
+  app.post("/api/admin/catalog/sync", async (req, res) => {
+    const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
+    if (!authCheck.ok) {
+      res.status(403).json({ error: authCheck.error || "غير مصرح" });
+      return;
+    }
+    const body = (req.body || {}) as {
+      gifts?: unknown[];
+      storeItems?: unknown[];
+      roomBackgrounds?: unknown[];
+    };
+    let changed = false;
+
+    if (Array.isArray(body.gifts)) {
+      const existingIds = new Set(serverCatalog.gifts.map((g) => String(g.id)));
+      for (const raw of body.gifts) {
+        const clean = sanitizeCatalogGift(raw);
+        if (clean && !existingIds.has(String(clean.id))) {
+          serverCatalog.gifts.push(clean);
+          existingIds.add(String(clean.id));
+          changed = true;
+        }
+      }
+    }
+    if (Array.isArray(body.storeItems)) {
+      const existingIds = new Set(serverCatalog.storeItems.map((i) => String(i.id)));
+      for (const raw of body.storeItems) {
+        const clean = sanitizeCatalogStoreItem(raw);
+        if (clean && !existingIds.has(String(clean.id))) {
+          serverCatalog.storeItems.push(clean);
+          existingIds.add(String(clean.id));
+          changed = true;
+        }
+      }
+    }
+    if (Array.isArray(body.roomBackgrounds)) {
+      const existingIds = new Set(serverCatalog.roomBackgrounds.map((b) => String(b.id)));
+      for (const raw of body.roomBackgrounds) {
+        const clean = sanitizeCatalogBackground(raw);
+        if (clean && !existingIds.has(String(clean.id))) {
+          serverCatalog.roomBackgrounds.push(clean);
+          existingIds.add(String(clean.id));
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      persistAndBroadcastCatalog();
+    }
+    res.json({ ok: true, changed, ...serverCatalog });
   });
 
   app.get("/api/ip", (req, res) => {

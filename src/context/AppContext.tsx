@@ -767,6 +767,175 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
+  // Authoritative Server + Secondary Firestore Catalog Merge Refs
+  const serverCatalogRef = React.useRef<{
+    loaded: boolean;
+    gifts: GiftItem[];
+    storeItems: StoreItem[];
+    roomBackgrounds: RoomBackground[];
+  }>({
+    loaded: false,
+    gifts: [],
+    storeItems: [],
+    roomBackgrounds: [],
+  });
+  const firestoreCatalogRef = React.useRef<{
+    gifts: GiftItem[];
+    storeItems: StoreItem[];
+    roomBackgrounds: RoomBackground[];
+  }>({
+    gifts: [],
+    storeItems: [],
+    roomBackgrounds: [],
+  });
+
+  const applyMergedCatalog = React.useCallback(() => {
+    const mergeById = <T extends { id: string }>(primary: T[], secondary: T[]): T[] => {
+      const seen = new Set<string>();
+      const out: T[] = [];
+      for (const item of primary) {
+        if (!seen.has(item.id)) {
+          seen.add(item.id);
+          out.push(item);
+        }
+      }
+      for (const item of secondary) {
+        if (!seen.has(item.id)) {
+          seen.add(item.id);
+          out.push(item);
+        }
+      }
+      return out;
+    };
+
+    const mergedGifts = sanitizeRealGifts(
+      mergeById(serverCatalogRef.current.gifts, firestoreCatalogRef.current.gifts)
+    );
+    if (serverCatalogRef.current.loaded || firestoreCatalogRef.current.gifts.length > 0) {
+      setGifts(mergedGifts.length > 0 ? mergedGifts : [STARTER_DEFAULT_GIFT]);
+    }
+
+    const mergedStore = sanitizeRealStoreItems(
+      mergeById(serverCatalogRef.current.storeItems, firestoreCatalogRef.current.storeItems)
+    );
+    if (serverCatalogRef.current.loaded || firestoreCatalogRef.current.storeItems.length > 0) {
+      setStoreItems(mergedStore);
+    }
+
+    const mergedBgs = mergeById(
+      serverCatalogRef.current.roomBackgrounds,
+      firestoreCatalogRef.current.roomBackgrounds
+    );
+    if (serverCatalogRef.current.loaded || hasRemoteRoomBackgroundsRef.current) {
+      setRoomBackgrounds(mergedBgs);
+    }
+  }, []);
+
+  // Real-Time Multi-User Server Catalog Sync (Initial Fetch + Live SSE Stream + Reconnect)
+  useEffect(() => {
+    let closed = false;
+    let eventSource: EventSource | null = null;
+    let reconnectTimer: number | null = null;
+
+    const handleServerCatalogPayload = (payload: {
+      gifts?: GiftItem[];
+      storeItems?: StoreItem[];
+      roomBackgrounds?: RoomBackground[];
+    }) => {
+      if (!payload || typeof payload !== 'object') return;
+      serverCatalogRef.current = {
+        loaded: true,
+        gifts: Array.isArray(payload.gifts) ? sanitizeRealGifts(payload.gifts) : [],
+        storeItems: Array.isArray(payload.storeItems)
+          ? sanitizeRealStoreItems(payload.storeItems)
+          : [],
+        roomBackgrounds: Array.isArray(payload.roomBackgrounds) ? payload.roomBackgrounds : [],
+      };
+      applyMergedCatalog();
+    };
+
+    const fetchServerCatalogNow = async () => {
+      try {
+        const res = await fetch('/api/catalog', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          gifts?: GiftItem[];
+          storeItems?: StoreItem[];
+          roomBackgrounds?: RoomBackground[];
+        };
+        if (!closed) {
+          handleServerCatalogPayload(data);
+        }
+      } catch {
+        // Ignore transient offline fetch errors
+      }
+    };
+
+    const connectCatalogStream = () => {
+      if (closed || typeof EventSource === 'undefined') return;
+      try {
+        eventSource?.close();
+        const es = new EventSource('/api/catalog/stream');
+        eventSource = es;
+
+        const onCatalogEvent = (evt: MessageEvent) => {
+          try {
+            const parsed = JSON.parse(evt.data);
+            if (!closed) handleServerCatalogPayload(parsed);
+          } catch {
+            // ignore malformed event
+          }
+        };
+
+        es.addEventListener('catalog:init', onCatalogEvent as EventListener);
+        es.addEventListener('catalog:update', onCatalogEvent as EventListener);
+
+        es.onerror = () => {
+          es.close();
+          if (eventSource === es) eventSource = null;
+          if (!closed && !reconnectTimer) {
+            reconnectTimer = window.setTimeout(() => {
+              reconnectTimer = null;
+              void fetchServerCatalogNow();
+              connectCatalogStream();
+            }, 3000);
+          }
+        };
+      } catch {
+        // Fallback already handled by fetchServerCatalogNow
+      }
+    };
+
+    void fetchServerCatalogNow();
+    connectCatalogStream();
+
+    const handleResumeSync = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchServerCatalogNow();
+        if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+          connectCatalogStream();
+        }
+      }
+    };
+    const handleOnline = () => {
+      void fetchServerCatalogNow();
+      if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+        connectCatalogStream();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleResumeSync);
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      closed = true;
+      document.removeEventListener('visibilitychange', handleResumeSync);
+      window.removeEventListener('online', handleOnline);
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      eventSource?.close();
+    };
+  }, [applyMergedCatalog]);
+
   // Public Firestore real-time listeners (rooms, room backgrounds, gifts, store items, agencies, lucky config)
   useEffect(() => {
     const unsubPublic = subscribeToPublicAuraCollections({
@@ -774,16 +943,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       onRoomBackgrounds: (remoteBgs) => {
         if (remoteBgs.length > 0) {
           hasRemoteRoomBackgroundsRef.current = true;
-          setRoomBackgrounds(remoteBgs);
-        } else if (hasRemoteRoomBackgroundsRef.current) {
-          setRoomBackgrounds([]);
         }
+        firestoreCatalogRef.current.roomBackgrounds = remoteBgs;
+        applyMergedCatalog();
       },
       onGifts: (remoteGifts) => {
-        const realGifts = sanitizeRealGifts(remoteGifts);
-        setGifts(realGifts.length > 0 ? realGifts : [STARTER_DEFAULT_GIFT]);
+        firestoreCatalogRef.current.gifts = sanitizeRealGifts(remoteGifts);
+        applyMergedCatalog();
       },
-      onStoreItems: (remoteStore) => setStoreItems(sanitizeRealStoreItems(remoteStore)),
+      onStoreItems: (remoteStore) => {
+        firestoreCatalogRef.current.storeItems = sanitizeRealStoreItems(remoteStore);
+        applyMergedCatalog();
+      },
       onAgencies: (remoteAgencies) => setAgencies(remoteAgencies),
       onLuckyConfig: (remoteLucky) => setLuckyConfig(remoteLucky),
       onAgoraConfig: (remoteAgora) => {
@@ -810,7 +981,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       unsubPublic();
     };
-  }, []);
+  }, [applyMergedCatalog]);
 
   // Authenticated Firestore bootstrap + real-time listeners (users, agents, staff, transactions, bag gifts)
   useEffect(() => {
@@ -993,6 +1164,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // 1. Check server-verified Admin Email + Password login first (works without Google Sign-In)
       let adminStatusCode = 0;
+      let adminServerError = '';
       try {
         const adminRes = await fetch('/api/admin/auth/login', {
           method: 'POST',
@@ -1000,23 +1172,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           body: JSON.stringify({ email: cleanEmail, password }),
         });
         adminStatusCode = adminRes.status;
-        if (adminRes.ok) {
-          const adminData = (await adminRes.json().catch(() => ({}))) as {
-            ok?: boolean;
-            token?: string;
-            email?: string;
-            displayName?: string;
-            expiresAt?: number;
-          };
-          if (adminData.ok && adminData.token && adminData.email) {
-            activateAdminEmailSession({
-              token: adminData.token,
-              email: adminData.email,
-              displayName: adminData.displayName || 'مدير التطبيق',
-              expiresAt: adminData.expiresAt || Date.now() + 86400000,
-            });
-            return true;
-          }
+        const adminData = (await adminRes.json().catch(() => ({}))) as {
+          ok?: boolean;
+          token?: string;
+          email?: string;
+          displayName?: string;
+          expiresAt?: number;
+          error?: string;
+        };
+        if (adminRes.ok && adminData.ok && adminData.token && adminData.email) {
+          activateAdminEmailSession({
+            token: adminData.token,
+            email: adminData.email,
+            displayName: adminData.displayName || 'مدير التطبيق',
+            expiresAt: adminData.expiresAt || Date.now() + 86400000,
+          });
+          return true;
+        }
+        if (adminData.error) {
+          adminServerError = adminData.error;
+        }
+        // Admin email recognized by server, but wrong password or rate limited -> return immediately
+        if (adminStatusCode === 401 || adminStatusCode === 429) {
+          setAuthError(adminServerError || 'كلمة مرور حساب المدير غير صحيحة.');
+          return false;
         }
       } catch {
         // Network error on admin route — continue to Firebase Email/Password auth
@@ -1043,15 +1222,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCloudMessage('مرحباً بعودتك! تم تسجيل الدخول بنجاح.');
         return true;
       } catch (fbErr: unknown) {
-        const code = (fbErr as { code?: string })?.code || '';
-        if (adminStatusCode === 401) {
-          setAuthError('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
-          return false;
-        }
-        if (adminStatusCode === 404 && code === 'auth/operation-not-allowed') {
-          setAuthError(
-            'لم يتم إعداد بريد وكلمة مرور المدير بعد. اضغط على تبويب «المدير» لإعداده لمرة واحدة ثم سجّل الدخول بالبريد الإلكتروني مباشرة.'
-          );
+        if (adminServerError && cleanEmail.toLowerCase() === ADMIN_EMAIL) {
+          setAuthError(adminServerError);
           return false;
         }
         const msg = translateFirebaseAuthError(fbErr);
@@ -3055,6 +3227,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void removeAuraRoom(roomId).catch(() => {});
   };
 
+  // Build Authorization header for Server-Authoritative Admin Catalog API
+  const getAdminAuthHeaders = React.useCallback(async (): Promise<Record<string, string> | null> => {
+    if (adminSession?.token) {
+      return {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminSession.token}`,
+      };
+    }
+    if (firebaseUser) {
+      try {
+        const idToken = await firebaseUser.getIdToken();
+        if (idToken) {
+          return {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+          };
+        }
+      } catch {
+        // ignore token retrieval error
+      }
+    }
+    return null;
+  }, [adminSession, firebaseUser]);
+
+  const sendAdminCatalogMutation = React.useCallback(
+    async (url: string, method: 'POST' | 'PUT' | 'DELETE', body?: unknown) => {
+      const headers = await getAdminAuthHeaders();
+      if (!headers) {
+        setCloudMessage('يرجى تسجيل الدخول بحساب المدير لمزامنة التعديلات لجميع المستخدمين.');
+        return;
+      }
+      try {
+        const res = await fetch(url, {
+          method,
+          headers,
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+        });
+        if (!res.ok) {
+          const errData = (await res.json().catch(() => ({}))) as { error?: string };
+          setCloudMessage(errData.error || 'تعذر مزامنة التعديل مع الخادم لجميع المستخدمين.');
+        }
+      } catch {
+        setCloudMessage('تعذر الاتصال بالخادم لمزامنة التعديل، يرجى المحاولة مرة أخرى.');
+      }
+    },
+    [getAdminAuthHeaders]
+  );
+
+  // When Admin logs in, push any existing local real gifts/storeItems/backgrounds once to Server Catalog
+  const hasSyncedLocalCatalogToServerRef = React.useRef<boolean>(false);
+  useEffect(() => {
+    if (!isAdminAccount || hasSyncedLocalCatalogToServerRef.current) return;
+    const realLocalGifts = sanitizeRealGifts(gifts);
+    const realLocalStore = sanitizeRealStoreItems(storeItems);
+    const realLocalBgs = roomBackgrounds;
+    if (realLocalGifts.length === 0 && realLocalStore.length === 0 && realLocalBgs.length === 0) {
+      return;
+    }
+    hasSyncedLocalCatalogToServerRef.current = true;
+    void sendAdminCatalogMutation('/api/admin/catalog/sync', 'POST', {
+      gifts: realLocalGifts,
+      storeItems: realLocalStore,
+      roomBackgrounds: realLocalBgs,
+    });
+  }, [isAdminAccount, gifts, storeItems, roomBackgrounds, sendAdminCatalogMutation]);
+
   const adminCreateRoomBackground = (bg: { nameAr: string; imageUrl: string }): RoomBackground => {
     const newBg: RoomBackground = {
       id: `roombg_${Date.now()}`,
@@ -3063,24 +3301,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString().slice(0, 10),
     };
     setRoomBackgrounds((prev) => [newBg, ...prev]);
+    void sendAdminCatalogMutation('/api/admin/catalog/backgrounds', 'POST', newBg);
     void persistAuraRoomBackground(newBg).catch(() => {});
     return newBg;
   };
 
   const adminDeleteRoomBackground = (bgId: string) => {
     setRoomBackgrounds((prev) => prev.filter((b) => b.id !== bgId));
+    void sendAdminCatalogMutation(
+      `/api/admin/catalog/backgrounds/${encodeURIComponent(bgId)}`,
+      'DELETE'
+    );
     void removeAuraRoomBackground(bgId).catch(() => {});
   };
 
   const adminCreateGift = (gift: GiftItem) => {
     setGifts((prev) => [
       gift,
-      ...prev.filter((g) => !g.isStarterDefault && g.id !== STARTER_DEFAULT_GIFT_ID),
+      ...prev.filter((g) => g.id !== gift.id && !g.isStarterDefault && g.id !== STARTER_DEFAULT_GIFT_ID),
     ]);
+    void sendAdminCatalogMutation('/api/admin/catalog/gifts', 'POST', gift);
     void persistAuraGift(gift).catch(() => {});
   };
 
   const adminUpdateGift = (giftId: string, updates: Partial<GiftItem>) => {
+    const currentGift = gifts.find((g) => g.id === giftId);
+    const mergedGift = currentGift ? { ...currentGift, ...updates } : updates;
     setGifts((prev) =>
       prev.map((g) => {
         if (g.id === giftId) {
@@ -3093,6 +3339,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return g;
       })
     );
+    if (giftId !== STARTER_DEFAULT_GIFT_ID) {
+      void sendAdminCatalogMutation(
+        `/api/admin/catalog/gifts/${encodeURIComponent(giftId)}`,
+        'PUT',
+        mergedGift
+      );
+    }
   };
 
   const adminDeleteGift = (giftId: string) => {
@@ -3103,15 +3356,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
       return remaining.length > 0 ? remaining : [STARTER_DEFAULT_GIFT];
     });
+    void sendAdminCatalogMutation(`/api/admin/catalog/gifts/${encodeURIComponent(giftId)}`, 'DELETE');
     void removeAuraGift(giftId).catch(() => {});
   };
 
   const adminCreateStoreItem = (item: StoreItem) => {
-    setStoreItems((prev) => [item, ...prev]);
+    setStoreItems((prev) => [item, ...prev.filter((i) => i.id !== item.id)]);
+    void sendAdminCatalogMutation('/api/admin/catalog/store-items', 'POST', item);
     void persistAuraStoreItem(item).catch(() => {});
   };
 
   const adminUpdateStoreItem = (itemId: string, updates: Partial<StoreItem>) => {
+    const currentItem = storeItems.find((item) => item.id === itemId);
+    const mergedItem = currentItem ? { ...currentItem, ...updates } : updates;
     setStoreItems((prev) =>
       prev.map((item) => {
         if (item.id === itemId) {
@@ -3122,10 +3379,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return item;
       })
     );
+    void sendAdminCatalogMutation(
+      `/api/admin/catalog/store-items/${encodeURIComponent(itemId)}`,
+      'PUT',
+      mergedItem
+    );
   };
 
   const adminDeleteStoreItem = (itemId: string) => {
     setStoreItems((prev) => prev.filter((item) => item.id !== itemId));
+    void sendAdminCatalogMutation(
+      `/api/admin/catalog/store-items/${encodeURIComponent(itemId)}`,
+      'DELETE'
+    );
     void removeAuraStoreItem(itemId).catch(() => {});
   };
 
