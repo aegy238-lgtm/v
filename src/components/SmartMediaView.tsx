@@ -157,7 +157,14 @@ const TransparentStageVideo: React.FC<TransparentStageVideoProps> = ({
     typeof window !== 'undefined' &&
     !primaryUrl.startsWith(window.location.origin);
 
-  const [videoSrc, setVideoSrc] = useState<string>(primaryUrl);
+  const shouldPreferProxyFirst =
+    isExternalHttp && !primaryUrl.startsWith('blob:') && isLikelyVapUrl(rawUrl || primaryUrl);
+
+  const initialSrc = shouldPreferProxyFirst
+    ? getMediaProxyUrl(rawUrl || primaryUrl) || primaryUrl
+    : primaryUrl;
+
+  const [videoSrc, setVideoSrc] = useState<string>(initialSrc);
   const [useCrossOrigin, setUseCrossOrigin] = useState<boolean>(true);
   const [fallbackRawVideo, setFallbackRawVideo] = useState<boolean>(false);
   const [autoplayMutedFallback, setAutoplayMutedFallback] = useState<boolean>(false);
@@ -167,7 +174,8 @@ const TransparentStageVideo: React.FC<TransparentStageVideoProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<VapWebGLRenderer | null>(null);
   const vapConfigRef = useRef<VapConfig | null>(getCachedVapConfig(rawUrl) ?? null);
-  const triedProxyRef = useRef<boolean>(false);
+  const triedProxyRef = useRef<boolean>(shouldPreferProxyFirst);
+  const triedDirectCorsRef = useRef<boolean>(!shouldPreferProxyFirst);
   const triedNoCorsRef = useRef<boolean>(false);
   const detectAttemptsRef = useRef<number>(0);
   const rafIdRef = useRef<number | null>(null);
@@ -192,12 +200,16 @@ const TransparentStageVideo: React.FC<TransparentStageVideoProps> = ({
   // Reset source & inspect Tencent VAP `vapc` box whenever URL changes
   useEffect(() => {
     let cancelled = false;
-    triedProxyRef.current = false;
+    const preferProxy =
+      isExternalHttp && !primaryUrl.startsWith('blob:') && isLikelyVapUrl(rawUrl || primaryUrl);
+    const nextSrc = preferProxy ? getMediaProxyUrl(rawUrl || primaryUrl) || primaryUrl : primaryUrl;
+    triedProxyRef.current = preferProxy;
+    triedDirectCorsRef.current = !preferProxy;
     triedNoCorsRef.current = false;
     detectAttemptsRef.current = 0;
     readyEmittedForKeyRef.current = undefined;
     vapConfigRef.current = getCachedVapConfig(rawUrl) ?? null;
-    setVideoSrc(primaryUrl);
+    setVideoSrc(nextSrc);
     setUseCrossOrigin(true);
     setFallbackRawVideo(false);
     setAutoplayMutedFallback(false);
@@ -214,7 +226,7 @@ const TransparentStageVideo: React.FC<TransparentStageVideoProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [rawUrl, primaryUrl]);
+  }, [rawUrl, primaryUrl, isExternalHttp]);
 
   // Initialize WebGL renderer on canvas mount
   useEffect(() => {
@@ -241,10 +253,18 @@ const TransparentStageVideo: React.FC<TransparentStageVideoProps> = ({
       triedProxyRef.current = true;
       const proxied = getMediaProxyUrl(rawUrl || primaryUrl);
       if (proxied && proxied !== videoSrc) {
+        detectAttemptsRef.current = 0;
         setUseCrossOrigin(true);
         setVideoSrc(proxied);
         return true;
       }
+    }
+    if (!triedDirectCorsRef.current && primaryUrl && primaryUrl !== videoSrc) {
+      triedDirectCorsRef.current = true;
+      detectAttemptsRef.current = 0;
+      setUseCrossOrigin(true);
+      setVideoSrc(primaryUrl);
+      return true;
     }
     if (!triedNoCorsRef.current) {
       triedNoCorsRef.current = true;
@@ -296,9 +316,14 @@ const TransparentStageVideo: React.FC<TransparentStageVideoProps> = ({
       if (vid && renderer && vid.readyState >= 2 && vid.videoWidth > 0 && vid.videoHeight > 0) {
         let cfg = vapConfigRef.current;
 
-        // If no `vapc` box yet, run live pixel heuristic across the first few active frames
-        // (skip pure blank frame 0 by re-checking up to 12 frames if we haven't locked a VAP/white-chroma layout yet)
-        if (!cfg || (cfg.source === 'pixel_heuristic' && detectAttemptsRef.current < 12 && cfg.mode === 'chroma_black')) {
+        // If no `vapc` box yet, run live pixel heuristic across the first ~60 frames (~2s)
+        // so videos with dark/blank fade-in frames still accurately lock onto VAP split-alpha or white-background removal
+        if (
+          !cfg ||
+          (cfg.source === 'pixel_heuristic' &&
+            detectAttemptsRef.current < 60 &&
+            (cfg.mode === 'chroma_black' || cfg.mode === 'passthrough'))
+        ) {
           detectAttemptsRef.current += 1;
           const detected = detectVideoLayoutFromFrame(vid, isLikelyVapUrl(rawUrl));
           if (detected) {
@@ -413,14 +438,14 @@ const TransparentStageVideo: React.FC<TransparentStageVideoProps> = ({
         }}
         className={
           fallbackRawVideo
-            ? `w-full h-full object-contain mix-blend-screen brightness-[1.06] contrast-[1.12] ${
+            ? `w-full h-full object-cover object-center mix-blend-screen brightness-[1.06] contrast-[1.12] ${
                 canvasReady ? 'opacity-100' : 'opacity-0'
               }`
             : 'absolute w-px h-px opacity-0 pointer-events-none'
         }
       />
 
-      {/* Hardware-accelerated Transparent VAP / Chroma-Keyed Canvas */}
+      {/* Hardware-accelerated Transparent VAP / Chroma-Keyed Canvas — Full Room Dimensions */}
       {!fallbackRawVideo && (
         <canvas
           ref={canvasRef}
@@ -428,7 +453,7 @@ const TransparentStageVideo: React.FC<TransparentStageVideoProps> = ({
             transform: 'translate3d(0, 0, 0)',
             backfaceVisibility: 'hidden',
           }}
-          className={`w-full h-full object-contain transition-opacity duration-150 ${
+          className={`w-full h-full object-cover object-center transition-opacity duration-150 ${
             canvasReady ? 'opacity-100' : 'opacity-0'
           }`}
         />
@@ -720,7 +745,7 @@ const SmartMediaStage: React.FC<SmartMediaStageProps> = ({
           transform: 'translate3d(0, 0, 0)',
           backfaceVisibility: 'hidden',
         }}
-        className={`relative w-full h-full object-contain drop-shadow-[0_18px_44px_rgba(0,0,0,0.6)] ${
+        className={`relative w-full h-full object-cover object-center drop-shadow-[0_18px_44px_rgba(0,0,0,0.6)] ${
           ready ? 'opacity-100' : 'opacity-0'
         }`}
       />

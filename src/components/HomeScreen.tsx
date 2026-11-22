@@ -35,6 +35,7 @@ export const HomeScreen: React.FC = () => {
     joinRoom,
     setActiveModal,
     setCurrentView,
+    isAdminAccount,
   } = useApp();
   const [activeTopTab, setActiveTopTab] = useState<'all' | 'mine' | 'vip'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -165,14 +166,16 @@ export const HomeScreen: React.FC = () => {
               <span>الوكيل</span>
             </button>
 
-            <button
-              onClick={() => setCurrentView('admin_dashboard')}
-              className="hidden sm:flex h-9 px-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 items-center gap-1.5 text-xs text-indigo-300 font-semibold transition-colors"
-              title="لوحة الإدارة"
-            >
-              <ShieldAlert className="w-3.5 h-3.5" />
-              <span>الإدارة</span>
-            </button>
+            {isAdminAccount && (
+              <button
+                onClick={() => setCurrentView('admin_dashboard')}
+                className="hidden sm:flex h-9 px-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 items-center gap-1.5 text-xs text-indigo-300 font-semibold transition-colors"
+                title="لوحة الإدارة"
+              >
+                <ShieldAlert className="w-3.5 h-3.5" />
+                <span>الإدارة</span>
+              </button>
+            )}
 
             <button
               onClick={() => setShowSearch((prev) => !prev)}

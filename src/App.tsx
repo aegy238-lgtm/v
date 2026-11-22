@@ -5,6 +5,7 @@ import { HomeScreen } from './components/HomeScreen';
 import { BottomNavBar } from './components/BottomNavBar';
 import { GlobalJackpotBanner } from './components/GlobalJackpotBanner';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { PWAInstallPromptBanner, OfflineIndicator } from './components/PWAInstallManager';
 
 const AuthScreen = lazy(() =>
   import('./components/AuthScreen').then((m) => ({ default: m.AuthScreen }))
@@ -62,6 +63,7 @@ const MainLayout: React.FC = () => {
   const {
     activeRoom,
     currentView,
+    isAdminAccount,
     activeTab,
     activeModal,
     setActiveModal,
@@ -84,9 +86,13 @@ const MainLayout: React.FC = () => {
 
   if ((!firebaseUser && !guestAccessBypass) || needsProfileCompletion) {
     return (
-      <Suspense fallback={<ScreenLoader />}>
-        <AuthScreen />
-      </Suspense>
+      <>
+        <Suspense fallback={<ScreenLoader />}>
+          <AuthScreen />
+        </Suspense>
+        <PWAInstallPromptBanner />
+        <OfflineIndicator />
+      </>
     );
   }
 
@@ -122,11 +128,19 @@ const MainLayout: React.FC = () => {
             </div>
           ) : currentView === 'agent_portal' ? (
             <RechargeAgentPortal />
-          ) : (
+          ) : isAdminAccount ? (
             <AdminDashboard />
+          ) : (
+            <div className="relative">
+              {renderUserAppTab()}
+              <BottomNavBar />
+            </div>
           )}
         </Suspense>
       </main>
+
+      {!activeRoom && <PWAInstallPromptBanner />}
+      <OfflineIndicator />
 
       <Suspense fallback={null}>
         {activeModal === 'wallet' && (

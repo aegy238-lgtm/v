@@ -28,6 +28,7 @@ export const Navbar: React.FC = () => {
     switchUserIdentity,
     currentView,
     setCurrentView,
+    isAdminAccount,
     setActiveModal,
     setViewingProfileUser,
     firebaseUser,
@@ -105,17 +106,19 @@ export const Navbar: React.FC = () => {
               <span>{t.rechargeAgent}</span>
             </button>
 
-            <button
-              onClick={() => setCurrentView('admin_dashboard')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
-                currentView === 'admin_dashboard'
-                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-sm font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Shield className="w-3.5 h-3.5" />
-              <span>{t.adminDashboard}</span>
-            </button>
+            {isAdminAccount && (
+              <button
+                onClick={() => setCurrentView('admin_dashboard')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                  currentView === 'admin_dashboard'
+                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-sm font-bold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Shield className="w-3.5 h-3.5" />
+                <span>{t.adminDashboard}</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -145,17 +148,19 @@ export const Navbar: React.FC = () => {
             <span className="truncate">{t.rechargeAgent}</span>
           </button>
 
-          <button
-            onClick={() => setCurrentView('admin_dashboard')}
-            className={`flex-1 min-h-[38px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-xl transition-all ${
-              currentView === 'admin_dashboard'
-                ? 'bg-indigo-500 text-white'
-                : 'bg-white/5 text-slate-300 hover:bg-white/10'
-            }`}
-          >
-            <Shield className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">{t.adminDashboard}</span>
-          </button>
+          {isAdminAccount && (
+            <button
+              onClick={() => setCurrentView('admin_dashboard')}
+              className={`flex-1 min-h-[38px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-xl transition-all ${
+                currentView === 'admin_dashboard'
+                  ? 'bg-indigo-500 text-white'
+                  : 'bg-white/5 text-slate-300 hover:bg-white/10'
+              }`}
+            >
+              <Shield className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">{t.adminDashboard}</span>
+            </button>
+          )}
         </div>
 
         {/* Center: Currency Pills (Coins & Diamonds) */}

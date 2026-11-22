@@ -20,6 +20,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { VOICE_COUNTRIES } from '../utils/voiceProfileOptions';
+import { ProfileInstallButton } from './PWAInstallManager';
 
 type ProfileSubModal =
   | 'none'
@@ -44,6 +45,7 @@ export const ProfileScreen: React.FC = () => {
     setActiveModal,
     setViewingProfileUser,
     setCurrentView,
+    isAdminAccount,
     updateUserProfile,
     rechargeCoins,
     bagGifts,
@@ -173,6 +175,7 @@ export const ProfileScreen: React.FC = () => {
         </span>
 
         <div className="flex items-center gap-1.5 sm:gap-2">
+          <ProfileInstallButton variant="header" />
           <button
             onClick={() => setCurrentView('agent_portal')}
             className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-xl bg-teal-500/15 border border-teal-400/35 text-teal-300 text-[11px] sm:text-xs font-bold flex items-center gap-1 hover:bg-teal-500/25 transition-colors"
@@ -180,13 +183,15 @@ export const ProfileScreen: React.FC = () => {
             <CreditCard className="w-3.5 h-3.5" />
             <span>الوكيل</span>
           </button>
-          <button
-            onClick={() => setCurrentView('admin_dashboard')}
-            className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-xl bg-indigo-500/15 border border-indigo-400/35 text-indigo-300 text-[11px] sm:text-xs font-bold flex items-center gap-1 hover:bg-indigo-500/25 transition-colors"
-          >
-            <ShieldAlert className="w-3.5 h-3.5" />
-            <span>الإدارة</span>
-          </button>
+          {isAdminAccount && (
+            <button
+              onClick={() => setCurrentView('admin_dashboard')}
+              className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-xl bg-indigo-500/15 border border-indigo-400/35 text-indigo-300 text-[11px] sm:text-xs font-bold flex items-center gap-1 hover:bg-indigo-500/25 transition-colors"
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              <span>الإدارة</span>
+            </button>
+          )}
           <button
             onClick={() => {
               setEditName(currentUser.displayName);
@@ -223,6 +228,7 @@ export const ProfileScreen: React.FC = () => {
       <div className="px-3 sm:px-6 pt-2.5 lg:pt-5 grid grid-cols-1 lg:grid-cols-12 gap-2.5 lg:gap-5 items-start">
         {/* Column 1: Compact Horizontal Hero Identity + Slim 2-Col Wallet */}
         <div className="lg:col-span-5 space-y-2.5 lg:space-y-4">
+          <ProfileInstallButton variant="card" />
           {/* Compact Hero Profile Card */}
           <div className="relative rounded-2xl lg:rounded-3xl overflow-visible bg-gradient-to-b from-[#13192c] to-[#0c101d] border border-amber-400/25 p-3 lg:p-5 shadow-xl">
             <div className="flex items-center gap-3.5 text-right">

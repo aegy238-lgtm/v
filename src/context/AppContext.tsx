@@ -110,6 +110,8 @@ interface AppContextType {
   t: Translations;
   currentView: 'user_app' | 'agent_portal' | 'admin_dashboard';
   setCurrentView: (view: 'user_app' | 'agent_portal' | 'admin_dashboard') => void;
+  isAdminAccount: boolean;
+  adminEmail: string;
   activeTab: ActiveScreenTab;
   setActiveTab: (tab: ActiveScreenTab) => void;
   currentUser: User;
@@ -328,11 +330,17 @@ function sanitizeBagGiftsRecord(raw: Record<string, number>): Record<string, num
   return clean;
 }
 
+const ADMIN_EMAIL = (
+  import.meta.env.VITE_ADMIN_EMAIL || 'aegy238@gmail.com'
+)
+  .trim()
+  .toLowerCase();
+
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [lang, setLangState] = useState<Language>('ar');
-  const [currentView, setCurrentView] = useState<'user_app' | 'agent_portal' | 'admin_dashboard'>('user_app');
+  const [currentView, setCurrentViewRaw] = useState<'user_app' | 'agent_portal' | 'admin_dashboard'>('user_app');
   const [activeTab, setActiveTab] = useState<ActiveScreenTab>('room');
   
   // State loaded from localStorage or clean initial defaults
@@ -511,6 +519,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [cloudMessage, setCloudMessage] = useState<string | null>(null);
   const hasBootstrappedRef = React.useRef<boolean>(false);
   const pendingEmailRegistrationRef = React.useRef<boolean>(false);
+
+  // Exclusive Admin Account Check (Authenticated Firebase Email + Password Account ONLY)
+  const isAdminAccount = Boolean(
+    firebaseUser &&
+      !guestAccessBypass &&
+      firebaseUser.email &&
+      firebaseUser.email.trim().toLowerCase() === ADMIN_EMAIL
+  );
+
+  const setCurrentView = (view: 'user_app' | 'agent_portal' | 'admin_dashboard') => {
+    if (view === 'admin_dashboard' && !isAdminAccount) {
+      setCurrentViewRaw('user_app');
+      return;
+    }
+    setCurrentViewRaw(view);
+  };
+
+  useEffect(() => {
+    if (currentView === 'admin_dashboard' && !isAdminAccount) {
+      setCurrentViewRaw('user_app');
+    }
+  }, [currentView, isAdminAccount]);
 
   const upsertUserIntoState = (userObj: User) => {
     setUsers((prev) => {
@@ -2857,6 +2887,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         t,
         currentView,
         setCurrentView,
+        isAdminAccount,
+        adminEmail: ADMIN_EMAIL,
         activeTab,
         setActiveTab,
         currentUser,

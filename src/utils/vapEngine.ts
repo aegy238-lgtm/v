@@ -297,16 +297,15 @@ export function detectVideoLayoutFromFrame(
     const right = measureRegion(halfW, 0, sampleW, sampleH);
 
     // Check horizontal split VAP (Left vs Right)
-    // An alpha channel half is almost 100% grayscale (>= 94%) AND contains black/white contrast or is mostly black/white,
-    // while the RGB half has colored pixels (vividColorRatio >= 4% or significantly more color than alpha half)
+    // An alpha channel half is almost all grayscale (>= 90%) while the RGB half has colored pixels
     const leftLooksAlpha =
-      left.grayscaleRatio >= 0.93 &&
-      right.vividColorRatio >= 0.03 &&
-      right.grayscaleRatio < left.grayscaleRatio - 0.05;
+      left.grayscaleRatio >= 0.9 &&
+      right.vividColorRatio >= 0.015 &&
+      right.grayscaleRatio < left.grayscaleRatio - 0.03;
     const rightLooksAlpha =
-      right.grayscaleRatio >= 0.93 &&
-      left.vividColorRatio >= 0.03 &&
-      left.grayscaleRatio < right.grayscaleRatio - 0.05;
+      right.grayscaleRatio >= 0.9 &&
+      left.vividColorRatio >= 0.015 &&
+      left.grayscaleRatio < right.grayscaleRatio - 0.03;
 
     if (leftLooksAlpha) {
       return {
@@ -338,13 +337,13 @@ export function detectVideoLayoutFromFrame(
     const top = measureRegion(0, 0, sampleW, halfH);
     const bottom = measureRegion(0, halfH, sampleW, sampleH);
     const topLooksAlpha =
-      top.grayscaleRatio >= 0.93 &&
-      bottom.vividColorRatio >= 0.03 &&
-      bottom.grayscaleRatio < top.grayscaleRatio - 0.05;
+      top.grayscaleRatio >= 0.9 &&
+      bottom.vividColorRatio >= 0.015 &&
+      bottom.grayscaleRatio < top.grayscaleRatio - 0.03;
     const bottomLooksAlpha =
-      bottom.grayscaleRatio >= 0.93 &&
-      top.vividColorRatio >= 0.03 &&
-      top.grayscaleRatio < bottom.grayscaleRatio - 0.05;
+      bottom.grayscaleRatio >= 0.9 &&
+      top.vividColorRatio >= 0.015 &&
+      top.grayscaleRatio < bottom.grayscaleRatio - 0.03;
 
     if (topLooksAlpha) {
       return {
@@ -372,8 +371,8 @@ export function detectVideoLayoutFromFrame(
       };
     }
 
-    // If the URL explicitly says .vap and aspect ratio is wide (>= 1.45), assume standard Left-RGB / Right-Alpha or Left-Alpha / Right-RGB
-    if (urlHintIsVap && vw / vh >= 1.45) {
+    // If the URL explicitly says .vap and aspect ratio is wide (>= 1.4), assume standard Left-RGB/Right-Alpha or Left-Alpha/Right-RGB
+    if (urlHintIsVap && vw / vh >= 1.4) {
       const pickRightAlpha = right.grayscaleRatio >= left.grayscaleRatio;
       return {
         mode: pickRightAlpha ? 'vap_lr' : 'vap_rl',
@@ -391,12 +390,12 @@ export function detectVideoLayoutFromFrame(
       };
     }
 
-    // Check border pixels for White-Screen ("البرومة البيضاء") vs Black-Screen!
+    // Check border pixels + corners for White-Screen ("البرومة البيضاء") vs Black-Screen!
     const borderCoords: [number, number][] = [];
-    for (let x = 2; x < sampleW - 2; x += 6) {
+    for (let x = 2; x < sampleW - 2; x += 5) {
       borderCoords.push([x, 2], [x, sampleH - 3]);
     }
-    for (let y = 2; y < sampleH - 2; y += 6) {
+    for (let y = 2; y < sampleH - 2; y += 5) {
       borderCoords.push([2, y], [sampleW - 3, y]);
     }
 
@@ -411,12 +410,13 @@ export function detectVideoLayoutFromFrame(
       const minC = Math.min(r, g, b);
       const chroma = maxC - minC;
       const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-      if (luma >= 228 && chroma <= 18) whiteBorder++;
-      if (luma <= 24 && chroma <= 18) blackBorder++;
+      // Generous threshold so compressed MP4 off-white (#d8d8d8..#ffffff) is caught reliably
+      if (luma >= 210 && chroma <= 28) whiteBorder++;
+      if (luma <= 26 && chroma <= 22) blackBorder++;
     }
 
     const totalBorder = borderCoords.length || 1;
-    if (whiteBorder / totalBorder >= 0.6) {
+    if (whiteBorder / totalBorder >= 0.48) {
       return {
         mode: 'chroma_white',
         width: vw,
@@ -429,7 +429,7 @@ export function detectVideoLayoutFromFrame(
       };
     }
 
-    if (blackBorder / totalBorder >= 0.6) {
+    if (blackBorder / totalBorder >= 0.55) {
       return {
         mode: 'chroma_black',
         width: vw,
@@ -447,6 +447,48 @@ export function detectVideoLayoutFromFrame(
     // Tainted canvas (CORS blocked) — caller should retry via /api/media-proxy
     return null;
   }
+}
+
+export function buildExplicitVapConfig(
+  video: HTMLVideoElement,
+  mode: 'vap_lr' | 'vap_rl' | 'chroma_white' | 'chroma_black' | 'passthrough'
+): VapConfig {
+  const vw = video.videoWidth || 640;
+  const vh = video.videoHeight || 640;
+  if (mode === 'vap_lr') {
+    return {
+      mode: 'vap_lr',
+      width: Math.floor(vw / 2),
+      height: vh,
+      videoWidth: vw,
+      videoHeight: vh,
+      rgbFrame: { x: 0, y: 0, w: Math.floor(vw / 2), h: vh },
+      alphaFrame: { x: Math.floor(vw / 2), y: 0, w: Math.floor(vw / 2), h: vh },
+      source: 'url_hint',
+    };
+  }
+  if (mode === 'vap_rl') {
+    return {
+      mode: 'vap_rl',
+      width: Math.floor(vw / 2),
+      height: vh,
+      videoWidth: vw,
+      videoHeight: vh,
+      alphaFrame: { x: 0, y: 0, w: Math.floor(vw / 2), h: vh },
+      rgbFrame: { x: Math.floor(vw / 2), y: 0, w: Math.floor(vw / 2), h: vh },
+      source: 'url_hint',
+    };
+  }
+  return {
+    mode,
+    width: vw,
+    height: vh,
+    videoWidth: vw,
+    videoHeight: vh,
+    rgbFrame: { x: 0, y: 0, w: vw, h: vh },
+    alphaFrame: { x: 0, y: 0, w: vw, h: vh },
+    source: 'url_hint',
+  };
 }
 
 // ============================================================================
@@ -479,8 +521,8 @@ const FRAGMENT_SHADER = `
       vec3 maskRgb = texture2D(u_tex, alphaUv).rgb;
       float alpha = dot(maskRgb, vec3(0.299, 0.587, 0.114));
       // Clean threshold to eliminate MP4 compression mosquito noise around alpha edges
-      alpha = smoothstep(0.035, 0.96, alpha);
-      if (alpha < 0.01) discard;
+      alpha = smoothstep(0.04, 0.95, alpha);
+      if (alpha < 0.015) discard;
       gl_FragColor = vec4(color * alpha, alpha);
       return;
     }
@@ -488,18 +530,19 @@ const FRAGMENT_SHADER = `
     vec4 src = texture2D(u_tex, v_uv);
 
     if (u_mode == 2) {
-      // Smooth White-Screen ("البرومة البيضاء") Removal with Edge Feathering
+      // Crisp White-Screen ("البرومة البيضاء") Removal with Anti-Halo Edge Decontamination
       vec3 c = src.rgb;
       float maxC = max(c.r, max(c.g, c.b));
       float minC = min(c.r, min(c.g, c.b));
       float sat = maxC - minC;
       float distToWhite = length(vec3(1.0) - c);
-      // Key out near-white low-saturation background while keeping colorful & dark details crisp
-      float whiteMask = smoothstep(0.06, 0.28, distToWhite + sat * 0.95);
+      // Key out near-white / light-gray background while preserving vivid colors & dark lines
+      float whiteMask = smoothstep(0.09, 0.34, distToWhite + sat * 1.15);
       float alpha = clamp(whiteMask, 0.0, 1.0);
-      if (alpha < 0.015) discard;
-      // Subtle white-edge decontamination so fringes never look chalky
-      vec3 cleanColor = mix(c * 0.92, c, smoothstep(0.2, 0.85, alpha));
+      if (alpha < 0.02) discard;
+      // Remove residual white matte fringe on semi-transparent edges
+      vec3 unmatted = clamp((c - vec3(1.0 - alpha)) / max(alpha, 0.25), 0.0, 1.0);
+      vec3 cleanColor = mix(unmatted, c, smoothstep(0.35, 0.9, alpha));
       gl_FragColor = vec4(cleanColor * alpha, alpha);
       return;
     }
@@ -509,7 +552,7 @@ const FRAGMENT_SHADER = `
       vec3 c = src.rgb;
       float peak = max(c.r, max(c.g, c.b));
       float alpha = smoothstep(0.03, 0.22, peak);
-      if (alpha < 0.01) discard;
+      if (alpha < 0.015) discard;
       gl_FragColor = vec4(c * alpha, alpha);
       return;
     }
