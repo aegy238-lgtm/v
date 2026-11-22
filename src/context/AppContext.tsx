@@ -862,25 +862,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       applyMergedCatalog();
     };
 
-    const fetchServerCatalogNow = async () => {
+    const isServerlessModeRef = { active: false };
+
+    const fetchServerCatalogNow = async (): Promise<boolean> => {
       try {
         const res = await fetch('/api/catalog', { cache: 'no-store' });
-        if (!res.ok) return;
+        if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) {
+          return false;
+        }
         const data = (await res.json()) as {
+          mode?: string;
           gifts?: GiftItem[];
           storeItems?: StoreItem[];
           roomBackgrounds?: RoomBackground[];
         };
+        if (data?.mode === 'serverless_cloud') {
+          isServerlessModeRef.active = true;
+        }
         if (!closed) {
           handleServerCatalogPayload(data);
         }
+        return true;
       } catch {
         // Ignore transient offline fetch errors
+        return false;
       }
     };
 
     const connectCatalogStream = () => {
-      if (closed || typeof EventSource === 'undefined') return;
+      if (closed || isServerlessModeRef.active || typeof EventSource === 'undefined') return;
       try {
         eventSource?.close();
         const es = new EventSource('/api/catalog/stream');
@@ -901,12 +911,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         es.onerror = () => {
           es.close();
           if (eventSource === es) eventSource = null;
-          if (!closed && !reconnectTimer) {
+          if (!closed && !isServerlessModeRef.active && !reconnectTimer) {
             reconnectTimer = window.setTimeout(() => {
               reconnectTimer = null;
-              void fetchServerCatalogNow();
-              connectCatalogStream();
-            }, 3000);
+              void fetchServerCatalogNow().then((ok) => {
+                if (ok && !isServerlessModeRef.active) {
+                  connectCatalogStream();
+                }
+              });
+            }, 6000);
           }
         };
       } catch {
@@ -914,20 +927,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
-    void fetchServerCatalogNow();
-    connectCatalogStream();
+    void fetchServerCatalogNow().then((ok) => {
+      if (ok && !isServerlessModeRef.active) {
+        connectCatalogStream();
+      }
+    });
 
     const handleResumeSync = () => {
       if (document.visibilityState === 'visible') {
         void fetchServerCatalogNow();
-        if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+        if (!isServerlessModeRef.active && (!eventSource || eventSource.readyState === EventSource.CLOSED)) {
           connectCatalogStream();
         }
       }
     };
     const handleOnline = () => {
       void fetchServerCatalogNow();
-      if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+      if (!isServerlessModeRef.active && (!eventSource || eventSource.readyState === EventSource.CLOSED)) {
         connectCatalogStream();
       }
     };
@@ -1332,6 +1348,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           displayName: params.displayName?.trim() || 'مدير التطبيق',
         }),
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (res.status === 404 || !contentType.includes('application/json')) {
+        const fbUser = await registerWithEmailPassword(
+          params.email,
+          params.password,
+          params.displayName?.trim() || 'مدير التطبيق'
+        );
+        const adminProfile = buildAuthenticatedVoiceUser({
+          uid: fbUser.uid,
+          displayName: params.displayName?.trim() || 'مدير التطبيق',
+          country: 'مصر',
+          countryFlag: '🇪🇬',
+          age: 28,
+          gender: 'male',
+        });
+        upsertUserIntoState(adminProfile);
+        setCurrentUserId(adminProfile.id);
+        setNeedsProfileCompletion(false);
+        setGuestAccessBypass(false);
+        await persistAuraUser(adminProfile).catch(() => {});
+        setCurrentViewRaw('admin_dashboard');
+        return true;
+      }
       const data = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
         token?: string;
@@ -1351,8 +1390,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         expiresAt: data.expiresAt || Date.now() + 86400000,
       });
       return true;
-    } catch {
-      setAuthError('تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى.');
+    } catch (err: unknown) {
+      setAuthError(translateFirebaseAuthError(err));
       return false;
     } finally {
       setAuthLoading(false);
@@ -1368,6 +1407,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), password }),
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (res.status === 404 || !contentType.includes('application/json')) {
+        const fbUser = await loginWithEmailPassword(email.trim(), password);
+        if (fbUser.email && ADMIN_EMAILS.has(fbUser.email.trim().toLowerCase())) {
+          setCurrentViewRaw('admin_dashboard');
+        }
+        return true;
+      }
       const data = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
         token?: string;
@@ -1387,8 +1434,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         expiresAt: data.expiresAt || Date.now() + 86400000,
       });
       return true;
-    } catch {
-      setAuthError('تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى.');
+    } catch (err: unknown) {
+      setAuthError(translateFirebaseAuthError(err));
       return false;
     } finally {
       setAuthLoading(false);
@@ -3272,15 +3319,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           headers,
           body: body !== undefined ? JSON.stringify(body) : undefined,
         });
+        const contentType = res.headers.get('content-type') || '';
+        // On serverless/static hosting (e.g. Vercel), /api/admin/catalog/* is not mounted; Firestore handles sync directly
+        if (res.status === 404 || !contentType.includes('application/json')) {
+          return;
+        }
         if (!res.ok) {
           const errData = (await res.json().catch(() => ({}))) as { error?: string };
-          setCloudMessage(errData.error || 'تعذر مزامنة التعديل مع الخادم لجميع المستخدمين.');
+          if (!firebaseUser) {
+            setCloudMessage(errData.error || 'تعذر مزامنة التعديل مع الخادم لجميع المستخدمين.');
+          }
         }
       } catch {
-        setCloudMessage('تعذر الاتصال بالخادم لمزامنة التعديل، يرجى المحاولة مرة أخرى.');
+        // Only warn if direct Firestore auth isn't active to handle sync
+        if (!firebaseUser) {
+          setCloudMessage('تعذر الاتصال بالخادم لمزامنة التعديل، يرجى المحاولة مرة أخرى.');
+        }
       }
     },
-    [getAdminAuthHeaders]
+    [getAdminAuthHeaders, firebaseUser]
   );
 
   // When Admin logs in, push any existing local real gifts/storeItems/backgrounds once to Server Catalog

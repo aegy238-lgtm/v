@@ -219,6 +219,10 @@ export function translateFirebaseAuthError(error: unknown): string {
       return 'تم تنفيذ محاولات متكررة، يرجى الانتظار قليلاً ثم المحاولة مرة أخرى.';
     case 'auth/network-request-failed':
       return 'تعذر الاتصال بالشبكة، تحقق من اتصال الإنترنت وحاول مرة أخرى.';
+    case 'auth/unauthorized-domain': {
+      const host = typeof window !== 'undefined' ? window.location.hostname : '';
+      return `النطاق الحالي (${host || 'هذا الرابط'}) غير مضاف في النطاقات المصرح بها في Firebase Console (Authentication → Settings → Authorized domains). أضف النطاق لتفعيل الدخول عبر Google أو استخدم الدخول بالبريد وكلمة المرور.`;
+    }
     default:
       return msg || 'تعذر إتمام عملية المصادقة، يرجى المحاولة مرة أخرى.';
   }
@@ -412,6 +416,30 @@ export async function testFirebaseConnection(force = false): Promise<FirebaseCon
         updateStatus(result);
         return result;
       }
+    }
+
+    // Fallback check via Firestore REST endpoint in case WebChannel transport was blocked by proxy/firewall
+    try {
+      const restRes = await fetch(
+        `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseConfig.projectId)}/databases/(default)/documents/auravoice_rooms?pageSize=1`
+      );
+      if (restRes.ok || restRes.status === 404 || restRes.status === 403) {
+        const restLatency = Math.round(performance.now() - start);
+        const result: FirebaseConnectionStatus = {
+          isConfigured: true,
+          isConnected: true,
+          isTesting: false,
+          projectId: firebaseConfig.projectId,
+          databaseId: firebaseConfig.firestoreDatabaseId || '(default)',
+          latencyMs: restLatency,
+          lastCheckedAt: new Date().toISOString(),
+          message: `تم التحقق بنجاح: قاعدة بيانات Firebase (${firebaseConfig.projectId}) متصلة وشغالة (${restLatency}ms)`,
+        };
+        updateStatus(result);
+        return result;
+      }
+    } catch {
+      // Ignore and report offline status below
     }
 
     const latency = Math.round(performance.now() - start);

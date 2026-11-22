@@ -2516,7 +2516,11 @@ export const AdminDashboard: React.FC = () => {
                           : 'bg-amber-500/15 text-amber-300 border-amber-400/40'
                       }`}
                     >
-                      {firebaseStatus.isConnected ? '● متصل بنجاح' : '● جاري التحقق'}
+                      {firebaseStatus.isConnected
+                        ? '● متصل بنجاح'
+                        : firebaseStatus.isTesting
+                        ? '● جاري التحقق...'
+                        : '● جاري الربط'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-400 mt-1 font-mono" dir="ltr">
@@ -2549,9 +2553,9 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </div>
 
-            {cloudMessage && (
+            {(cloudMessage || firebaseStatus.message) && (
               <div className="p-3 rounded-2xl bg-slate-950/80 border border-white/10 text-xs text-emerald-300 font-semibold">
-                {cloudMessage}
+                {cloudMessage || firebaseStatus.message}
               </div>
             )}
 
@@ -2635,7 +2639,7 @@ export const AdminDashboard: React.FC = () => {
                     </h3>
                     <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold border bg-emerald-500/15 text-emerald-300 border-emerald-400/40">
                       {isSelfHostedActive
-                        ? voiceServerSnapshot?.status === 'online'
+                        ? voiceServerSnapshot?.status === 'online' || firebaseStatus.isConnected
                           ? '● متصل ويعمل مباشرة'
                           : '● مفعّل · السيرفر الخاص'
                         : '● وضع Agora مفعّل'}
@@ -2643,7 +2647,11 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                   <p className="text-xs text-slate-400 mt-1 font-mono" dir="ltr">
                     {isSelfHostedActive
-                      ? `Self-Hosted Signaling: /ws/voice · Media: WebRTC Full-Duplex`
+                      ? voiceServerSnapshot?.mode === 'serverless_cloud' ||
+                        voiceServerSnapshot?.engine === 'firestore_rtc' ||
+                        (!voiceServerSnapshot && firebaseStatus.isConnected)
+                        ? `Cloud Signaling: Firestore WebRTC (${firebaseStatus.projectId}) · Media: WebRTC Full-Duplex`
+                        : `Self-Hosted Signaling: /ws/voice · Media: WebRTC Full-Duplex`
                       : `Active App ID: ${agoraConfig.appId}`}
                   </p>
                 </div>
@@ -2771,7 +2779,16 @@ export const AdminDashboard: React.FC = () => {
                     <div className="p-3 rounded-2xl bg-slate-900/90 border border-white/8">
                       <div className="text-slate-400 text-[11px]">حالة السيرفر</div>
                       <div className="text-emerald-300 font-black text-base mt-1">
-                        {voiceServerSnapshot?.status === 'online' ? 'متصل Online' : 'جاري التحقق'}
+                        {isRefreshingVoiceServer
+                          ? 'جاري الفحص...'
+                          : voiceServerSnapshot?.status === 'online'
+                          ? voiceServerSnapshot.mode === 'serverless_cloud' ||
+                            voiceServerSnapshot.engine === 'firestore_rtc'
+                            ? 'متصل سحابياً (Cloud)'
+                            : 'متصل Online'
+                          : firebaseStatus.isConnected
+                          ? 'متصل سحابياً (Firestore)'
+                          : 'جاري التحقق'}
                       </div>
                     </div>
                     <div className="p-3 rounded-2xl bg-slate-900/90 border border-white/8">

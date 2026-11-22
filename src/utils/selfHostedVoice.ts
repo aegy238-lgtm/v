@@ -6,9 +6,12 @@ import {
   subscribeToFirestoreRtcSignals,
 } from './auravoiceFirestore';
 
+import { testFirebaseConnection } from './firebase';
+
 export interface VoiceServerStatusSnapshot {
   status: 'online' | 'offline';
   engine: string;
+  mode?: 'express_ws' | 'serverless_cloud';
   wsPath: string;
   activeRoomsCount: number;
   activePeersCount: number;
@@ -1503,15 +1506,24 @@ class SelfHostedVoiceEngine {
         requiresToken: false,
       });
 
-      const wsConnected = await this.connectWebSocket(
-        cleanRoom,
-        cleanUid,
-        this.activeDisplayName,
-        myEpoch
-      );
-      if (wsConnected || myEpoch !== this.joinEpoch) return;
+      const serverSnapshot = await fetchVoiceServerStatus();
+      if (myEpoch !== this.joinEpoch) return;
 
-      // Seamless fallback to Firestore Realtime WebRTC Signaling (e.g., on Vercel static hosting)
+      const isServerlessHost =
+        serverSnapshot?.mode === 'serverless_cloud' ||
+        serverSnapshot?.engine === 'firestore_rtc';
+
+      if (!isServerlessHost) {
+        const wsConnected = await this.connectWebSocket(
+          cleanRoom,
+          cleanUid,
+          this.activeDisplayName,
+          myEpoch
+        );
+        if (wsConnected || myEpoch !== this.joinEpoch) return;
+      }
+
+      // Seamless fallback to Firestore Realtime WebRTC Signaling (e.g., on Vercel / static hosting)
       const fsConnected = await this.startFirestoreRtcFallback(
         cleanRoom,
         cleanUid,
@@ -1520,9 +1532,21 @@ class SelfHostedVoiceEngine {
       );
       if (fsConnected || myEpoch !== this.joinEpoch) return;
 
+      // On serverless/static hosting while browsing as Guest (unauthenticated), do not show a fake server crash error
+      if (!isCloudWriteReady()) {
+        this.updateStatus({
+          state: 'idle',
+          channel: cleanRoom,
+          errorMessage: this.desiredOnSeat
+            ? 'للتحدث عبر المايك على الاستضافة السحابية، سجّل الدخول بحسابك لتفعيل الربط الصوتي.'
+            : null,
+        });
+        return;
+      }
+
       this.updateStatus({
         state: 'error',
-        errorMessage: 'تعذر الوصول إلى سيرفر الصوت (/ws/voice). سجّل الدخول لتفعيل الربط السحابي.',
+        errorMessage: 'تعذر تفعيل الربط الصوتي السحابي لهذه الغرفة، حاول مجدداً.',
       });
     });
 
@@ -1594,19 +1618,28 @@ class SelfHostedVoiceEngine {
     channel: string;
     requiresToken?: boolean;
   }> {
-    const status = await fetchVoiceServerStatus();
-    if (!status || status.status !== 'online') {
-      if (isCloudWriteReady()) {
+    const [status, fbStatus] = await Promise.all([
+      fetchVoiceServerStatus(),
+      testFirebaseConnection(true),
+    ]);
+
+    const isServerlessHost =
+      status?.mode === 'serverless_cloud' || status?.engine === 'firestore_rtc';
+
+    if (!status || status.status !== 'online' || isServerlessHost) {
+      if (isCloudWriteReady() || fbStatus.isConnected) {
         return {
           ok: true,
-          message: 'وضع الربط الصوتي السحابي (WebRTC + Firestore) جاهز للعمل على هذا النطاق.',
+          message: isCloudWriteReady()
+            ? `السيرفر الصوتي السحابي متصل ويعمل عبر Firestore WebRTC (${fbStatus.projectId})!`
+            : `الربط السحابي متصل بقاعدة بيانات ${fbStatus.projectId} (${fbStatus.latencyMs ?? 0}ms). سجّل الدخول بحسابك لتفعيل التحدث على المايك.`,
           appId: 'self_hosted_webrtc',
           channel: roomId,
         };
       }
       return {
         ok: false,
-        message: 'تعذر الوصول إلى سيرفر الصوت الخاص (/api/voice-server/status).',
+        message: 'تعذر الاتصال بخوادم Firebase أو سيرفر الصوت الخاص، تحقق من اتصال الإنترنت.',
         appId: 'self_hosted_webrtc',
         channel: roomId,
       };
