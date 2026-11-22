@@ -12,9 +12,41 @@ import {
   updateProfile,
   User as FirebaseUser,
 } from 'firebase/auth';
-import firebaseAppletConfig from '../../firebase-applet-config.json';
+interface FirebaseAppletConfigShape {
+  projectId: string;
+  appId: string;
+  apiKey: string;
+  authDomain: string;
+  firestoreDatabaseId?: string;
+  storageBucket?: string;
+  messagingSenderId?: string;
+  measurementId?: string;
+}
 
-export const firebaseConfig = firebaseAppletConfig;
+const localFirebaseConfigModules = import.meta.glob('../../firebase-applet-config.json', {
+  eager: true,
+}) as Record<string, { default?: Partial<FirebaseAppletConfigShape> }>;
+
+const localFirebaseConfig = Object.values(localFirebaseConfigModules)[0]?.default || {};
+
+export const firebaseConfig: FirebaseAppletConfigShape = {
+  projectId: (import.meta.env.VITE_FIREBASE_PROJECT_ID || localFirebaseConfig.projectId || '').trim(),
+  appId: (import.meta.env.VITE_FIREBASE_APP_ID || localFirebaseConfig.appId || '').trim(),
+  apiKey: (import.meta.env.VITE_FIREBASE_API_KEY || localFirebaseConfig.apiKey || '').trim(),
+  authDomain: (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || localFirebaseConfig.authDomain || '').trim(),
+  firestoreDatabaseId: (
+    import.meta.env.VITE_FIREBASE_DATABASE_ID ||
+    localFirebaseConfig.firestoreDatabaseId ||
+    ''
+  ).trim(),
+  storageBucket: (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || localFirebaseConfig.storageBucket || '').trim(),
+  messagingSenderId: (
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ||
+    localFirebaseConfig.messagingSenderId ||
+    ''
+  ).trim(),
+  measurementId: (import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || localFirebaseConfig.measurementId || '').trim(),
+};
 
 export enum OperationType {
   CREATE = 'create',

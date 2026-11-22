@@ -459,16 +459,18 @@ function verifyAdminSessionToken(
 }
 
 function readFirebaseAppletConfig(): { apiKey: string; projectId: string } {
+  const envApiKey = (process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY || "").trim();
+  const envProjectId = (process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || "").trim();
   try {
     const cfgPath = path.join(__dirname, "firebase-applet-config.json");
     const raw = fs.readFileSync(cfgPath, "utf8");
     const parsed = JSON.parse(raw) as { apiKey?: string; projectId?: string };
     return {
-      apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "",
-      projectId: typeof parsed.projectId === "string" ? parsed.projectId.trim() : "",
+      apiKey: (typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "") || envApiKey,
+      projectId: (typeof parsed.projectId === "string" ? parsed.projectId.trim() : "") || envProjectId,
     };
   } catch {
-    return { apiKey: "", projectId: "" };
+    return { apiKey: envApiKey, projectId: envProjectId };
   }
 }
 
