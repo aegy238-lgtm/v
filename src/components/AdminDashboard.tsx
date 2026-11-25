@@ -35,6 +35,8 @@ import {
   Mic,
   Copy,
   Check,
+  Mail,
+  Lock,
 } from 'lucide-react';
 import { GiftCategory, GiftItem, SoundEffectType, StoreItem } from '../types';
 import { SmartMediaView } from './SmartMediaView';
@@ -106,6 +108,9 @@ export const AdminDashboard: React.FC = () => {
     setCurrentView,
     firebaseUser,
     adminSession,
+    adminEmail,
+    adminAuthStatus,
+    updateAdminEmailCredentials,
     firebaseStatus,
     isCloudSyncing,
     cloudMessage,
@@ -239,6 +244,30 @@ export const AdminDashboard: React.FC = () => {
   const [isMicProbing, setIsMicProbing] = useState(false);
   const [micProbeLevel, setMicProbeLevel] = useState(0);
   const [micProbeMsg, setMicProbeMsg] = useState<string | null>(null);
+
+  // Clean Admin Dashboard Email + Password Account Management
+  const [newAdminEmailInput, setNewAdminEmailInput] = useState(
+    adminSession?.email || adminAuthStatus?.emailHint || adminEmail || ''
+  );
+  const [newAdminDisplayNameInput, setNewAdminDisplayNameInput] = useState(
+    adminSession?.displayName || 'مدير التطبيق'
+  );
+  const [newAdminPasswordInput, setNewAdminPasswordInput] = useState('');
+  const [newAdminPasswordConfirm, setNewAdminPasswordConfirm] = useState('');
+  const [isUpdatingAdminCreds, setIsUpdatingAdminCreds] = useState(false);
+  const [adminCredsFeedback, setAdminCredsFeedback] = useState<{ ok: boolean; text: string } | null>(
+    null
+  );
+
+  useEffect(() => {
+    const activeEmail = adminSession?.email || adminAuthStatus?.emailHint || adminEmail;
+    if (activeEmail && !newAdminEmailInput) {
+      setNewAdminEmailInput(activeEmail);
+    }
+    if (adminSession?.displayName) {
+      setNewAdminDisplayNameInput(adminSession.displayName);
+    }
+  }, [adminSession?.email, adminSession?.displayName, adminAuthStatus?.emailHint, adminEmail]);
 
   const refreshVoiceDiagnostics = async () => {
     setIsRefreshingVoiceServer(true);
@@ -1120,7 +1149,12 @@ export const AdminDashboard: React.FC = () => {
                   <h3 className="font-bold text-sm text-white">
                     هدايا السيرفر المفعلة ({gifts.filter((g) => !g.isStarterDefault && g.id !== STARTER_DEFAULT_GIFT_ID).length})
                   </h3>
-                  <span className="text-[11px] text-slate-400">اضغط تعديل لإضافة رابط MP4 أو صورة</span>
+                  <span className="text-[11px] text-slate-400">
+                    اضغط تعديل لإضافة رابط MP4 أو صورة ·{' '}
+                    <span className="text-emerald-300 font-semibold">
+                      تحديث فوري لجميع المستخدمين ({firebaseStatus.projectId})
+                    </span>
+                  </span>
                 </div>
                 <button
                   type="button"
@@ -2613,6 +2647,167 @@ export const AdminDashboard: React.FC = () => {
                 <div className="text-cyan-300 font-black text-base mt-1">{transactions.length}</div>
               </div>
             </div>
+          </div>
+
+          {/* Clean Single Admin Email + Password Account Card */}
+          <div className="p-5 rounded-3xl bg-gradient-to-br from-[#13192b] via-[#101524] to-[#0b101d] border border-amber-400/25 shadow-xl space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-3.5">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-amber-400/15 border border-amber-400/40 flex items-center justify-center text-amber-300 shrink-0">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black text-white">
+                    حساب لوحة التحكم (البريد الإلكتروني وكلمة السر)
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    البريد النشط حالياً:{' '}
+                    <span className="font-mono text-amber-300" dir="ltr">
+                      {adminSession?.email || adminAuthStatus?.emailHint || adminEmail}
+                    </span>
+                  </p>
+                </div>
+              </div>
+              <span className="px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/35 text-emerald-300 text-[11px] font-bold self-start sm:self-auto">
+                حساب إدارة واحد نظيف
+              </span>
+            </div>
+
+            {adminSession && !firebaseUser && (
+              <div className="p-3 rounded-2xl bg-indigo-500/12 border border-indigo-400/30 text-xs text-indigo-200 leading-relaxed">
+                أنت مسجّل الآن بحساب البريد الإلكتروني وكلمة السر وتُحدَّث الهدايا والمتجر فوراً لجميع متصلي السيرفر. يمكنك أيضاً الضغط على «ربط بحساب Google» أعلاه للمزامنة السحابية بين أكثر من رابط استضافة.
+              </div>
+            )}
+
+            {adminCredsFeedback && (
+              <div
+                className={`p-3 rounded-2xl border text-xs font-bold ${
+                  adminCredsFeedback.ok
+                    ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-200'
+                    : 'bg-rose-500/15 border-rose-400/40 text-rose-200'
+                }`}
+              >
+                {adminCredsFeedback.text}
+              </div>
+            )}
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setAdminCredsFeedback(null);
+                const cleanEmail = newAdminEmailInput.trim();
+                if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+                  setAdminCredsFeedback({
+                    ok: false,
+                    text: 'يرجى إدخال بريد إلكتروني صحيح.',
+                  });
+                  return;
+                }
+                if (newAdminPasswordInput.length < 6) {
+                  setAdminCredsFeedback({
+                    ok: false,
+                    text: 'كلمة السر يجب أن تكون 6 أحرف على الأقل.',
+                  });
+                  return;
+                }
+                if (newAdminPasswordInput !== newAdminPasswordConfirm) {
+                  setAdminCredsFeedback({
+                    ok: false,
+                    text: 'كلمتا المرور غير متطابقتين.',
+                  });
+                  return;
+                }
+                setIsUpdatingAdminCreds(true);
+                try {
+                  const res = await updateAdminEmailCredentials({
+                    email: cleanEmail,
+                    password: newAdminPasswordInput,
+                    displayName: newAdminDisplayNameInput.trim() || 'مدير التطبيق',
+                  });
+                  setAdminCredsFeedback({ ok: res.ok, text: res.message });
+                  if (res.ok) {
+                    setNewAdminPasswordInput('');
+                    setNewAdminPasswordConfirm('');
+                    showAdminNotice(res.message);
+                  }
+                } finally {
+                  setIsUpdatingAdminCreds(false);
+                }
+              }}
+              className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs"
+            >
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">اسم المدير:</label>
+                <input
+                  type="text"
+                  value={newAdminDisplayNameInput}
+                  onChange={(e) => setNewAdminDisplayNameInput(e.target.value)}
+                  placeholder="مدير التطبيق"
+                  required
+                  className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-white focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <div>
+                <label className="flex items-center gap-1.5 text-slate-300 font-semibold mb-1">
+                  <Mail className="w-3.5 h-3.5 text-amber-400" />
+                  <span>البريد الإلكتروني الجديد للمدير:</span>
+                </label>
+                <input
+                  type="email"
+                  dir="ltr"
+                  required
+                  value={newAdminEmailInput}
+                  onChange={(e) => setNewAdminEmailInput(e.target.value)}
+                  placeholder="admin@yourdomain.com"
+                  className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-amber-300 font-mono text-left focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <div>
+                <label className="flex items-center gap-1.5 text-slate-300 font-semibold mb-1">
+                  <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>كلمة السر الجديدة (6 أحرف على الأقل):</span>
+                </label>
+                <input
+                  type="password"
+                  dir="ltr"
+                  required
+                  minLength={6}
+                  value={newAdminPasswordInput}
+                  onChange={(e) => setNewAdminPasswordInput(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-emerald-300 font-mono text-left focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+
+              <div>
+                <label className="flex items-center gap-1.5 text-slate-300 font-semibold mb-1">
+                  <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>تأكيد كلمة السر الجديدة:</span>
+                </label>
+                <input
+                  type="password"
+                  dir="ltr"
+                  required
+                  minLength={6}
+                  value={newAdminPasswordConfirm}
+                  onChange={(e) => setNewAdminPasswordConfirm(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full min-h-[42px] bg-slate-950 border border-white/12 rounded-xl px-3 text-emerald-300 font-mono text-left focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <button
+                  type="submit"
+                  disabled={isUpdatingAdminCreds}
+                  className="w-full sm:w-auto min-h-[42px] px-5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 disabled:opacity-60 text-slate-950 font-black text-xs transition-colors"
+                >
+                  {isUpdatingAdminCreds ? 'جاري التحديث...' : 'حفظ البريد وكلمة السر لحساب المدير'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

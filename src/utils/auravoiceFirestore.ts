@@ -391,7 +391,7 @@ export function subscribeToPublicAuraCollections(handlers: {
       });
       if (list.length > 0) handlers.onRooms(list);
     },
-    (error) => handleFirestoreError(error, OperationType.LIST, COLLECTIONS.rooms)
+    (error) => console.warn('subscribeRooms notice:', error)
   );
 
   const unsubRoomBgs = onSnapshot(
@@ -404,7 +404,7 @@ export function subscribeToPublicAuraCollections(handlers: {
       });
       handlers.onRoomBackgrounds?.(list);
     },
-    (error) => handleFirestoreError(error, OperationType.LIST, COLLECTIONS.roomBackgrounds)
+    (error) => console.warn('subscribeRoomBackgrounds notice:', error)
   );
 
   const unsubGifts = onSnapshot(
@@ -419,7 +419,7 @@ export function subscribeToPublicAuraCollections(handlers: {
       });
       handlers.onGifts(list);
     },
-    (error) => handleFirestoreError(error, OperationType.LIST, COLLECTIONS.gifts)
+    (error) => console.warn('subscribeGifts notice:', error)
   );
 
   const unsubStore = onSnapshot(
@@ -432,7 +432,7 @@ export function subscribeToPublicAuraCollections(handlers: {
       });
       handlers.onStoreItems(list);
     },
-    (error) => handleFirestoreError(error, OperationType.LIST, COLLECTIONS.storeItems)
+    (error) => console.warn('subscribeStoreItems notice:', error)
   );
 
   const unsubAgencies = onSnapshot(
@@ -445,7 +445,7 @@ export function subscribeToPublicAuraCollections(handlers: {
       });
       if (list.length > 0) handlers.onAgencies(list);
     },
-    (error) => handleFirestoreError(error, OperationType.LIST, COLLECTIONS.agencies)
+    (error) => console.warn('subscribeAgencies notice:', error)
   );
 
   const unsubLucky = onSnapshot(
@@ -458,7 +458,7 @@ export function subscribeToPublicAuraCollections(handlers: {
         }
       }
     },
-    (error) => handleFirestoreError(error, OperationType.GET, `${COLLECTIONS.config}/lucky`)
+    (error) => console.warn('subscribeLucky notice:', error)
   );
 
   const unsubAgora = onSnapshot(
@@ -471,7 +471,7 @@ export function subscribeToPublicAuraCollections(handlers: {
         }
       }
     },
-    (error) => handleFirestoreError(error, OperationType.GET, `${COLLECTIONS.config}/agora`)
+    (error) => console.warn('subscribeAgora notice:', error)
   );
 
   const unsubJackpot = onSnapshot(
@@ -484,7 +484,7 @@ export function subscribeToPublicAuraCollections(handlers: {
         }
       }
     },
-    (error) => handleFirestoreError(error, OperationType.GET, `${COLLECTIONS.config}/jackpot`)
+    (error) => console.warn('subscribeJackpot notice:', error)
   );
 
   const unsubDashboardSync = onSnapshot(

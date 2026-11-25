@@ -14,12 +14,13 @@ import {
   Headphones,
   Volume2,
   ArrowLeft,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { VOICE_COUNTRIES, buildVoiceAvatarSvg } from '../utils/voiceProfileOptions';
 import loungeBg from '../assets/images/room_bg_midnight_lounge_1795294231147.jpg';
 
-type AuthMode = 'login' | 'register';
+type AuthMode = 'login' | 'register' | 'admin_setup';
 
 export const AuthScreen: React.FC = () => {
   const {
@@ -34,6 +35,8 @@ export const AuthScreen: React.FC = () => {
     completeGoogleOnboardingProfile,
     signOutCloud,
     enterAsGuestDemo,
+    adminAuthStatus,
+    claimAdminEmailAccount,
   } = useApp();
 
   const [mode, setMode] = useState<AuthMode>('login');
@@ -44,6 +47,8 @@ export const AuthScreen: React.FC = () => {
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [adminDisplayName, setAdminDisplayName] = useState('مدير التطبيق');
   const [selectedCountryName, setSelectedCountryName] = useState('السعودية');
   const [ageInput, setAgeInput] = useState('22');
   const [gender, setGender] = useState<'female' | 'male' | ''>('');
@@ -144,6 +149,32 @@ export const AuthScreen: React.FC = () => {
       age: validAge,
       gender,
       avatar: firebaseUser?.photoURL || buildVoiceAvatarSvg(gender, displayName.trim()),
+    });
+  };
+
+  const handleAdminSetupSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLocalError(null);
+    clearAuthError();
+
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setLocalError('يرجى إدخال بريد إلكتروني صحيح لحساب المدير.');
+      return;
+    }
+    if (password.length < 6) {
+      setLocalError('كلمة سر لوحة التحكم يجب أن تكون 6 أحرف على الأقل.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setLocalError('كلمتا المرور غير متطابقتين.');
+      return;
+    }
+
+    await claimAdminEmailAccount({
+      email: cleanEmail,
+      password,
+      displayName: adminDisplayName.trim() || 'مدير التطبيق',
     });
   };
 
@@ -403,17 +434,44 @@ export const AuthScreen: React.FC = () => {
                   <h2 className="text-xl sm:text-2xl font-black text-white">
                     {mode === 'login'
                       ? 'تسجيل الدخول إلى فوكاشات'
+                      : mode === 'admin_setup'
+                      ? 'إعداد حساب المدير الجديد (لوحة التحكم)'
                       : 'إنشاء حساب صوتي جديد'}
                   </h2>
                   <p className="text-xs sm:text-sm text-slate-400">
                     {mode === 'login'
-                      ? 'سجّل دخولك للانضمام إلى المايكات والغرف الصوتية المباشرة.'
+                      ? 'سجّل دخولك للانضمام إلى المايكات والغرف الصوتية المباشرة، أو أدخل بريد المدير للدخول إلى لوحة التحكم.'
+                      : mode === 'admin_setup'
+                      ? 'تم مسح جميع حسابات المديرين القديمة. أدخل بريدك الإلكتروني النظيف وكلمة السر لتعيين حساب الإدارة الوحيد.'
                       : 'أنشئ هويتك الصوتية واختر بلدك وعمرك للانضمام فوراً.'}
                   </p>
                 </div>
 
+                {adminAuthStatus && !adminAuthStatus.configured && mode !== 'admin_setup' && (
+                  <div className="rounded-2xl bg-emerald-500/12 border border-emerald-400/40 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div className="flex items-start gap-2.5">
+                      <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                      <div className="text-xs text-emerald-100 leading-relaxed">
+                        <div className="font-black text-emerald-300">حساب لوحة التحكم جاهز للتعيين النظيف</div>
+                        <div className="text-emerald-200/85">تم حذف جميع حسابات المديرين السابقة. أنشئ بريدك الإلكتروني وكلمة السر الآن.</div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => switchMode('admin_setup')}
+                      className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-black text-xs shrink-0 transition-colors"
+                    >
+                      إعداد حساب المدير
+                    </button>
+                  </div>
+                )}
+
                 {/* Mode Tabs */}
-                <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-slate-950/90 border border-white/10">
+                <div
+                  className={`grid gap-1.5 p-1 rounded-2xl bg-slate-950/90 border border-white/10 ${
+                    adminAuthStatus && !adminAuthStatus.configured ? 'grid-cols-3' : 'grid-cols-2'
+                  }`}
+                >
                   <button
                     type="button"
                     onClick={() => switchMode('login')}
@@ -436,6 +494,19 @@ export const AuthScreen: React.FC = () => {
                   >
                     حساب جديد
                   </button>
+                  {adminAuthStatus && !adminAuthStatus.configured && (
+                    <button
+                      type="button"
+                      onClick={() => switchMode('admin_setup')}
+                      className={`min-h-[44px] rounded-xl text-xs sm:text-sm font-black transition-all ${
+                        mode === 'admin_setup'
+                          ? 'bg-gradient-to-r from-emerald-400 to-teal-500 text-slate-950 shadow'
+                          : 'text-emerald-300 hover:text-emerald-200'
+                      }`}
+                    >
+                      حساب المدير
+                    </button>
+                  )}
                 </div>
 
                 {activeError && (
@@ -444,47 +515,144 @@ export const AuthScreen: React.FC = () => {
                   </div>
                 )}
 
-                {/* Google Sign-In Button */}
-                <button
-                  type="button"
-                  disabled={authLoading}
-                  onClick={() => void signInWithGoogleCloud()}
-                  className="w-full min-h-[48px] rounded-2xl bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-900 font-black text-sm flex items-center justify-center gap-3 shadow-lg transition-all"
-                >
-                  <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                      fill="#4285F4"
-                      d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
-                    />
-                    <path
-                      fill="#34A853"
-                      d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
-                    />
-                    <path
-                      fill="#FBBC05"
-                      d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
-                    />
-                    <path
-                      fill="#EA4335"
-                      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
-                    />
-                  </svg>
-                  <span>
-                    {mode === 'login' ? 'الدخول السريع بحساب Google' : 'التسجيل السريع بحساب Google'}
-                  </span>
-                </button>
+                {mode !== 'admin_setup' && (
+                  <>
+                    {/* Google Sign-In Button */}
+                    <button
+                      type="button"
+                      disabled={authLoading}
+                      onClick={() => void signInWithGoogleCloud()}
+                      className="w-full min-h-[48px] rounded-2xl bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-900 font-black text-sm flex items-center justify-center gap-3 shadow-lg transition-all"
+                    >
+                      <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                          fill="#4285F4"
+                          d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+                        />
+                        <path
+                          fill="#34A853"
+                          d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
+                        />
+                        <path
+                          fill="#FBBC05"
+                          d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
+                        />
+                        <path
+                          fill="#EA4335"
+                          d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
+                        />
+                      </svg>
+                      <span>
+                        {mode === 'login' ? 'الدخول السريع بحساب Google' : 'التسجيل السريع بحساب Google'}
+                      </span>
+                    </button>
 
-                <div className="flex items-center gap-3 text-[11px] text-slate-400">
-                  <div className="h-px flex-1 bg-white/10" />
-                  <span>
-                    {mode === 'login'
-                      ? 'أو الدخول بالبريد الإلكتروني'
-                      : 'أو إنشاء حساب بالبريد الإلكتروني'}
-                  </span>
-                  <div className="h-px flex-1 bg-white/10" />
-                </div>
+                    <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                      <div className="h-px flex-1 bg-white/10" />
+                      <span>
+                        {mode === 'login'
+                          ? 'أو الدخول بالبريد الإلكتروني'
+                          : 'أو إنشاء حساب بالبريد الإلكتروني'}
+                      </span>
+                      <div className="h-px flex-1 bg-white/10" />
+                    </div>
+                  </>
+                )}
 
-                {mode === 'login' ? (
+                {mode === 'admin_setup' ? (
+                  <form onSubmit={handleAdminSetupSubmit} className="space-y-3.5">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-200 mb-1.5">
+                        اسم المدير الظاهر في لوحة التحكم
+                      </label>
+                      <div className="relative">
+                        <UserIcon className="w-4 h-4 text-emerald-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={adminDisplayName}
+                          onChange={(e) => setAdminDisplayName(e.target.value)}
+                          placeholder="مدير التطبيق"
+                          maxLength={40}
+                          required
+                          className="w-full min-h-[46px] rounded-2xl bg-slate-950/90 border border-white/15 pr-10 pl-4 text-sm text-white placeholder:text-slate-500 focus:border-emerald-400 focus:outline-none transition-colors"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-200 mb-1.5">
+                        البريد الإلكتروني النظيف للمدير
+                      </label>
+                      <div className="relative">
+                        <Mail className="w-4 h-4 text-emerald-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="email"
+                          dir="ltr"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          placeholder="admin@yourdomain.com"
+                          required
+                          className="w-full min-h-[46px] rounded-2xl bg-slate-950/90 border border-white/15 pr-10 pl-4 text-sm text-white placeholder:text-slate-500 focus:border-emerald-400 focus:outline-none transition-colors text-left"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-200 mb-1.5">
+                        كلمة سر لوحة التحكم (6 أحرف على الأقل)
+                      </label>
+                      <div className="relative">
+                        <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          dir="ltr"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="••••••••"
+                          required
+                          minLength={6}
+                          className="w-full min-h-[46px] rounded-2xl bg-slate-950/90 border border-white/15 pr-10 pl-11 text-sm text-white placeholder:text-slate-500 focus:border-emerald-400 focus:outline-none transition-colors text-left"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword((v) => !v)}
+                          aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                          className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-white transition-colors"
+                        >
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-200 mb-1.5">
+                        تأكيد كلمة السر
+                      </label>
+                      <div className="relative">
+                        <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          dir="ltr"
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          placeholder="••••••••"
+                          required
+                          minLength={6}
+                          className="w-full min-h-[46px] rounded-2xl bg-slate-950/90 border border-white/15 pr-10 pl-4 text-sm text-white placeholder:text-slate-500 focus:border-emerald-400 focus:outline-none transition-colors text-left"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={authLoading}
+                      className="w-full min-h-[48px] rounded-2xl bg-gradient-to-r from-emerald-400 via-emerald-500 to-teal-500 hover:brightness-105 disabled:opacity-60 text-slate-950 font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>{authLoading ? 'جاري تفعيل حساب المدير...' : 'حفظ ودخول لوحة التحكم فوراً'}</span>
+                    </button>
+                  </form>
+                ) : mode === 'login' ? (
                   <form onSubmit={handleLoginSubmit} className="space-y-3.5">
                     <div>
                       <label className="block text-xs font-bold text-slate-200 mb-1.5">

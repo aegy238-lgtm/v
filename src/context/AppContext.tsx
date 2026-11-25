@@ -122,6 +122,12 @@ export interface OwnedStoreItemRecord {
   expiresAt: string;
 }
 
+export interface AdminAuthStatus {
+  configured: boolean;
+  source: 'env' | 'claimed' | 'unclaimed' | 'unknown';
+  emailHint: string;
+}
+
 interface AppContextType {
   lang: Language;
   setLang: (lang: Language) => void;
@@ -131,12 +137,19 @@ interface AppContextType {
   isAdminAccount: boolean;
   adminEmail: string;
   adminSession: AdminEmailSession | null;
+  adminAuthStatus: AdminAuthStatus | null;
+  refreshAdminAuthStatus: () => Promise<void>;
   claimAdminEmailAccount: (params: {
     email: string;
     password: string;
     displayName?: string;
   }) => Promise<boolean>;
   loginAdminEmailAccount: (email: string, password: string) => Promise<boolean>;
+  updateAdminEmailCredentials: (params: {
+    email: string;
+    password: string;
+    displayName?: string;
+  }) => Promise<{ ok: boolean; message: string }>;
   activeTab: ActiveScreenTab;
   setActiveTab: (tab: ActiveScreenTab) => void;
   currentUser: User;
@@ -362,17 +375,14 @@ function sanitizeBagGiftsRecord(raw: Record<string, number>): Record<string, num
 }
 
 const ADMIN_EMAIL = (
-  import.meta.env.VITE_ADMIN_EMAIL || 'aegy238@gmail.com'
+  import.meta.env.VITE_ADMIN_EMAIL || 'hhsiggidfhkgogfc@gmail.com'
 )
   .trim()
   .toLowerCase();
 
 const ADMIN_EMAILS = new Set([
   ADMIN_EMAIL,
-  'aegy238@gmail.com',
-  'iejehdgdig@gmail.com',
   'hhsiggidfhkgogfc@gmail.com',
-  'uhbijnokmpl098900@gmail.com',
 ]);
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -596,17 +606,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [adminSession, setAdminSession] = useState<AdminEmailSession | null>(null);
   const adminSessionRef = React.useRef<AdminEmailSession | null>(null);
   adminSessionRef.current = adminSession;
+  const [adminAuthStatus, setAdminAuthStatus] = useState<AdminAuthStatus | null>(null);
   const activeRoomIdRef = React.useRef<string | null>(activeRoomId);
   activeRoomIdRef.current = activeRoomId;
   const processedCommandIdsRef = React.useRef<Set<string>>(new Set());
 
-  // Exclusive Admin Account Check (Authenticated Firebase Admin Email OR Server-Verified Admin Session)
+  const refreshAdminAuthStatus = React.useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/auth/status', { cache: 'no-store' });
+      if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) return;
+      const data = (await res.json()) as Partial<AdminAuthStatus>;
+      setAdminAuthStatus({
+        configured: Boolean(data.configured),
+        source:
+          data.source === 'env' || data.source === 'claimed' || data.source === 'unclaimed'
+            ? data.source
+            : 'unknown',
+        emailHint: typeof data.emailHint === 'string' ? data.emailHint : '',
+      });
+    } catch {
+      // ignore on offline/serverless
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAdminAuthStatus();
+  }, [refreshAdminAuthStatus]);
+
+  // Exclusive Admin Account Check (Server-Verified Admin Session OR Verified Firebase Admin Email)
   const isAdminAccount = Boolean(
     adminSession ||
       (firebaseUser &&
         !guestAccessBypass &&
         firebaseUser.email &&
-        ADMIN_EMAILS.has(firebaseUser.email.trim().toLowerCase()))
+        (ADMIN_EMAILS.has(firebaseUser.email.trim().toLowerCase()) ||
+          (adminAuthStatus?.emailHint &&
+            firebaseUser.email.trim().toLowerCase() === adminAuthStatus.emailHint.trim().toLowerCase())))
   );
 
   const setCurrentView = (view: 'user_app' | 'agent_portal' | 'admin_dashboard') => {
@@ -878,8 +913,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
+  const lastServerVersionsRef = React.useRef<{ catalog: number; dashboard: number }>({
+    catalog: 0,
+    dashboard: 0,
+  });
+
   const handleServerCatalogPayload = React.useCallback(
     (payload: {
+      version?: number;
       gifts?: GiftItem[];
       storeItems?: StoreItem[];
       roomBackgrounds?: RoomBackground[];
@@ -888,6 +929,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       deletedBackgroundIds?: string[];
     }) => {
       if (!payload || typeof payload !== 'object') return;
+      if (typeof payload.version === 'number') {
+        lastServerVersionsRef.current.catalog = payload.version;
+      }
       serverCatalogRef.current = {
         loaded: true,
         gifts: Array.isArray(payload.gifts) ? sanitizeRealGifts(payload.gifts) : [],
@@ -1180,7 +1224,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
-  // Real-Time Multi-User Server Catalog & Command Sync (Initial Fetch + SSE + WebSocket + Reconnect)
+  // Real-Time Multi-User Server Catalog & Command Sync (Initial Fetch + SSE + WebSocket + 5s Version Heartbeat)
   useEffect(() => {
     let closed = false;
     let eventSource: EventSource | null = null;
@@ -1198,7 +1242,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
         if (!closed) {
           if (data.catalog) handleServerCatalogPayload(data.catalog);
-          if (data.dashboardState) applyServerDashboardState(data.dashboardState);
+          if (data.dashboardState) {
+            if (typeof data.dashboardState.version === 'number') {
+              lastServerVersionsRef.current.dashboard = data.dashboardState.version;
+            }
+            applyServerDashboardState(data.dashboardState);
+          }
         }
       } catch {
         // ignore transient offline error
@@ -1213,6 +1262,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         const data = (await res.json()) as {
           mode?: string;
+          version?: number;
           gifts?: GiftItem[];
           storeItems?: StoreItem[];
           roomBackgrounds?: RoomBackground[];
@@ -1251,7 +1301,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const onServerStateEvent = (evt: MessageEvent) => {
           try {
             const parsed = JSON.parse(evt.data);
-            if (!closed) applyServerDashboardState(parsed);
+            if (!closed) {
+              if (typeof parsed?.version === 'number') {
+                lastServerVersionsRef.current.dashboard = parsed.version;
+              }
+              applyServerDashboardState(parsed);
+            }
           } catch {
             // ignore
           }
@@ -1283,11 +1338,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   connectCatalogStream();
                 }
               });
-            }, 6000);
+            }, 5000);
           }
         };
       } catch {
-        // Fallback already handled by fetchServerCatalogNow
+        // Fallback already handled by fetchServerCatalogNow & heartbeat
       }
     };
 
@@ -1304,9 +1359,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         handleServerCatalogPayload(ev.catalog as Parameters<typeof handleServerCatalogPayload>[0]);
       } else if (ev.type === 'server:dashboard_command') {
         if (ev.command) applyDashboardCommand(ev.command);
-        if (ev.state) applyServerDashboardState(ev.state);
+        if (ev.state) {
+          if (typeof ev.state.version === 'number') {
+            lastServerVersionsRef.current.dashboard = ev.state.version;
+          }
+          applyServerDashboardState(ev.state);
+        }
       }
     });
+
+    // Guarantee instant cross-user gift & command propagation even if SSE/WS is buffered by proxy
+    const heartbeatPoll = window.setInterval(() => {
+      if (closed || document.visibilityState !== 'visible') return;
+      if (isServerlessModeRef.active) {
+        void fetchServerCatalogNow();
+        return;
+      }
+      void (async () => {
+        try {
+          const res = await fetch('/api/health', { cache: 'no-store' });
+          if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) return;
+          const health = (await res.json()) as {
+            mode?: string;
+            catalogVersion?: number;
+            dashboardVersion?: number;
+          };
+          if (health?.mode === 'serverless_cloud') {
+            isServerlessModeRef.active = true;
+            return;
+          }
+          const catChanged =
+            typeof health.catalogVersion === 'number' &&
+            health.catalogVersion !== lastServerVersionsRef.current.catalog;
+          const dashChanged =
+            typeof health.dashboardVersion === 'number' &&
+            health.dashboardVersion !== lastServerVersionsRef.current.dashboard;
+          if (catChanged || dashChanged) {
+            await fetchServerStateNow();
+          }
+        } catch {
+          // ignore transient network check
+        }
+      })();
+    }, 5000);
 
     const handleResumeSync = () => {
       if (document.visibilityState === 'visible') {
@@ -1330,6 +1425,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => {
       closed = true;
+      window.clearInterval(heartbeatPoll);
       unsubWsSync();
       document.removeEventListener('visibilitychange', handleResumeSync);
       window.removeEventListener('online', handleOnline);
@@ -1774,12 +1870,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setAuthError(data.error || 'تعذر إنشاء حساب المدير.');
         return false;
       }
-      activateAdminEmailSession({
+      const sessionObj: AdminEmailSession = {
         token: data.token,
         email: data.email,
         displayName: data.displayName || 'مدير التطبيق',
         expiresAt: data.expiresAt || Date.now() + 86400000,
+      };
+      adminSessionRef.current = sessionObj;
+      setAdminAuthStatus({
+        configured: true,
+        source: 'claimed',
+        emailHint: data.email,
       });
+      activateAdminEmailSession(sessionObj);
       return true;
     } catch (err: unknown) {
       setAuthError(translateFirebaseAuthError(err));
@@ -1825,6 +1928,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         expiresAt: data.expiresAt || Date.now() + 86400000,
       };
       adminSessionRef.current = sessionObj;
+      setAdminAuthStatus({
+        configured: true,
+        source: 'claimed',
+        emailHint: data.email,
+      });
       activateAdminEmailSession(sessionObj);
       void loginWithEmailPassword(email.trim(), password).catch(() => null);
       return true;
@@ -1833,6 +1941,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return false;
     } finally {
       setAuthLoading(false);
+    }
+  };
+
+  const updateAdminEmailCredentials = async (params: {
+    email: string;
+    password: string;
+    displayName?: string;
+  }): Promise<{ ok: boolean; message: string }> => {
+    const headers = await getAdminAuthHeaders();
+    if (!headers) {
+      return { ok: false, message: 'يرجى تسجيل الدخول بحساب المدير أولاً.' };
+    }
+    try {
+      const res = await fetch('/api/admin/auth/update', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          email: params.email.trim(),
+          password: params.password,
+          displayName: params.displayName?.trim() || 'مدير التطبيق',
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        token?: string;
+        email?: string;
+        displayName?: string;
+        expiresAt?: number;
+        error?: string;
+      };
+      if (!res.ok || !data.ok || !data.token || !data.email) {
+        return { ok: false, message: data.error || 'تعذر تحديث بيانات حساب المدير.' };
+      }
+      const nextSession: AdminEmailSession = {
+        token: data.token,
+        email: data.email,
+        displayName: data.displayName || 'مدير التطبيق',
+        expiresAt: data.expiresAt || Date.now() + 86400000,
+      };
+      adminSessionRef.current = nextSession;
+      setAdminSession(nextSession);
+      setAdminAuthStatus({
+        configured: true,
+        source: 'claimed',
+        emailHint: data.email,
+      });
+      setCloudMessage(`تم تحديث حساب المدير إلى ${data.email} بنجاح.`);
+      return { ok: true, message: `تم تحديث حساب المدير إلى ${data.email} بنجاح.` };
+    } catch {
+      return { ok: false, message: 'تعذر الاتصال بالخادم لتحديث بيانات المدير.' };
     }
   };
 
@@ -3768,11 +3926,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const sendAdminCatalogMutation = React.useCallback(
-    async (url: string, method: 'POST' | 'PUT' | 'DELETE', body?: unknown) => {
+    async (
+      url: string,
+      method: 'POST' | 'PUT' | 'DELETE',
+      body?: unknown
+    ): Promise<{ ok: boolean; data?: Record<string, unknown> }> => {
       const headers = await getAdminAuthHeaders();
       if (!headers) {
         setCloudMessage('يرجى تسجيل الدخول بحساب المدير لمزامنة التعديلات لجميع المستخدمين.');
-        return;
+        return { ok: false };
       }
       try {
         const res = await fetch(url, {
@@ -3783,19 +3945,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const contentType = res.headers.get('content-type') || '';
         // On serverless/static hosting (e.g. Vercel), /api/admin/catalog/* is not mounted; Firestore handles sync directly
         if (res.status === 404 || !contentType.includes('application/json')) {
-          return;
+          return { ok: false };
         }
+        const jsonData = (await res.json().catch(() => ({}))) as Record<string, unknown>;
         if (!res.ok) {
-          const errData = (await res.json().catch(() => ({}))) as { error?: string };
-          if (!firebaseUser) {
-            setCloudMessage(errData.error || 'تعذر مزامنة التعديل مع الخادم لجميع المستخدمين.');
-          }
+          setCloudMessage(
+            (typeof jsonData.error === 'string' && jsonData.error) ||
+              'تعذر مزامنة التعديل مع الخادم لجميع المستخدمين.'
+          );
+          return { ok: false, data: jsonData };
         }
+        if (typeof jsonData.version === 'number') {
+          lastServerVersionsRef.current.catalog = jsonData.version;
+        }
+        return { ok: true, data: jsonData };
       } catch {
-        // Only warn if direct Firestore auth isn't active to handle sync
         if (!firebaseUser) {
           setCloudMessage('تعذر الاتصال بالخادم لمزامنة التعديل، يرجى المحاولة مرة أخرى.');
         }
+        return { ok: false };
       }
     },
     [getAdminAuthHeaders, firebaseUser]
@@ -3816,8 +3984,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       gifts: realLocalGifts,
       storeItems: realLocalStore,
       roomBackgrounds: realLocalBgs,
+    }).then((result) => {
+      if (result.ok && result.data) {
+        handleServerCatalogPayload(result.data as Parameters<typeof handleServerCatalogPayload>[0]);
+      }
     });
-  }, [isAdminAccount, gifts, storeItems, roomBackgrounds, sendAdminCatalogMutation]);
+  }, [isAdminAccount, gifts, storeItems, roomBackgrounds, sendAdminCatalogMutation, handleServerCatalogPayload]);
 
   const adminCreateRoomBackground = (bg: { nameAr: string; imageUrl: string }): RoomBackground => {
     const nowIso = new Date().toISOString();
@@ -3828,6 +4000,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: nowIso.slice(0, 10),
       updatedAt: nowIso,
     };
+    serverCatalogRef.current = {
+      ...serverCatalogRef.current,
+      deletedBackgroundIds: serverCatalogRef.current.deletedBackgroundIds.filter((id) => id !== newBg.id),
+      roomBackgrounds: [newBg, ...serverCatalogRef.current.roomBackgrounds.filter((b) => b.id !== newBg.id)],
+    };
     setRoomBackgrounds((prev) => [newBg, ...prev]);
     void sendAdminCatalogMutation('/api/admin/catalog/backgrounds', 'POST', newBg);
     void persistAuraRoomBackground(newBg).catch(() => {});
@@ -3835,6 +4012,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adminDeleteRoomBackground = (bgId: string) => {
+    serverCatalogRef.current = {
+      ...serverCatalogRef.current,
+      deletedBackgroundIds: Array.from(new Set([bgId, ...serverCatalogRef.current.deletedBackgroundIds])),
+      roomBackgrounds: serverCatalogRef.current.roomBackgrounds.filter((b) => b.id !== bgId),
+    };
     setRoomBackgrounds((prev) => prev.filter((b) => b.id !== bgId));
     void sendAdminCatalogMutation(
       `/api/admin/catalog/backgrounds/${encodeURIComponent(bgId)}`,
@@ -3845,11 +4027,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const adminCreateGift = (gift: GiftItem) => {
     const stampedGift: GiftItem = { ...gift, updatedAt: new Date().toISOString() };
+    serverCatalogRef.current = {
+      ...serverCatalogRef.current,
+      deletedGiftIds: serverCatalogRef.current.deletedGiftIds.filter((id) => id !== stampedGift.id),
+      gifts: [
+        stampedGift,
+        ...serverCatalogRef.current.gifts.filter(
+          (g) => g.id !== stampedGift.id && !g.isStarterDefault && g.id !== STARTER_DEFAULT_GIFT_ID
+        ),
+      ],
+    };
     setGifts((prev) => [
       stampedGift,
       ...prev.filter((g) => g.id !== stampedGift.id && !g.isStarterDefault && g.id !== STARTER_DEFAULT_GIFT_ID),
     ]);
-    void sendAdminCatalogMutation('/api/admin/catalog/gifts', 'POST', stampedGift);
+    void sendAdminCatalogMutation('/api/admin/catalog/gifts', 'POST', stampedGift).then((res) => {
+      if (res.ok) {
+        setCloudMessage('تم حفظ الهدية على السيرفر ونشرها لجميع المستخدمين المتصلين فوراً.');
+      }
+    });
     void persistAuraGift(stampedGift).catch(() => {});
   };
 
@@ -3858,6 +4054,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const stampedUpdates: Partial<GiftItem> = { ...updates, updatedAt: nowIso };
     const currentGift = gifts.find((g) => g.id === giftId);
     const mergedGift = currentGift ? { ...currentGift, ...stampedUpdates } : stampedUpdates;
+    if (giftId !== STARTER_DEFAULT_GIFT_ID && currentGift) {
+      serverCatalogRef.current = {
+        ...serverCatalogRef.current,
+        gifts: serverCatalogRef.current.gifts.map((g) =>
+          g.id === giftId ? { ...g, ...stampedUpdates } : g
+        ),
+      };
+    }
     setGifts((prev) =>
       prev.map((g) => {
         if (g.id === giftId) {
@@ -3881,6 +4085,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const adminDeleteGift = (giftId: string) => {
     if (giftId === STARTER_DEFAULT_GIFT_ID) return;
+    serverCatalogRef.current = {
+      ...serverCatalogRef.current,
+      deletedGiftIds: Array.from(new Set([giftId, ...serverCatalogRef.current.deletedGiftIds])),
+      gifts: serverCatalogRef.current.gifts.filter(
+        (g) => g.id !== giftId && !g.isStarterDefault && g.id !== STARTER_DEFAULT_GIFT_ID
+      ),
+    };
     setGifts((prev) => {
       const remaining = prev.filter(
         (g) => g.id !== giftId && !g.isStarterDefault && g.id !== STARTER_DEFAULT_GIFT_ID
@@ -3893,6 +4104,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const adminCreateStoreItem = (item: StoreItem) => {
     const stampedItem: StoreItem = { ...item, updatedAt: new Date().toISOString() };
+    serverCatalogRef.current = {
+      ...serverCatalogRef.current,
+      deletedStoreIds: serverCatalogRef.current.deletedStoreIds.filter((id) => id !== stampedItem.id),
+      storeItems: [
+        stampedItem,
+        ...serverCatalogRef.current.storeItems.filter((i) => i.id !== stampedItem.id),
+      ],
+    };
     setStoreItems((prev) => [stampedItem, ...prev.filter((i) => i.id !== stampedItem.id)]);
     void sendAdminCatalogMutation('/api/admin/catalog/store-items', 'POST', stampedItem);
     void persistAuraStoreItem(stampedItem).catch(() => {});
@@ -3903,6 +4122,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const stampedUpdates: Partial<StoreItem> = { ...updates, updatedAt: nowIso };
     const currentItem = storeItems.find((item) => item.id === itemId);
     const mergedItem = currentItem ? { ...currentItem, ...stampedUpdates } : stampedUpdates;
+    serverCatalogRef.current = {
+      ...serverCatalogRef.current,
+      storeItems: serverCatalogRef.current.storeItems.map((item) =>
+        item.id === itemId ? { ...item, ...stampedUpdates } : item
+      ),
+    };
     setStoreItems((prev) =>
       prev.map((item) => {
         if (item.id === itemId) {
@@ -3921,6 +4146,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adminDeleteStoreItem = (itemId: string) => {
+    serverCatalogRef.current = {
+      ...serverCatalogRef.current,
+      deletedStoreIds: Array.from(new Set([itemId, ...serverCatalogRef.current.deletedStoreIds])),
+      storeItems: serverCatalogRef.current.storeItems.filter((item) => item.id !== itemId),
+    };
     setStoreItems((prev) => prev.filter((item) => item.id !== itemId));
     void sendAdminCatalogMutation(
       `/api/admin/catalog/store-items/${encodeURIComponent(itemId)}`,
@@ -4015,10 +4245,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentView,
         setCurrentView,
         isAdminAccount,
-        adminEmail: adminSession?.email || ADMIN_EMAIL,
+        adminEmail: adminSession?.email || adminAuthStatus?.emailHint || ADMIN_EMAIL,
         adminSession,
+        adminAuthStatus,
+        refreshAdminAuthStatus,
         claimAdminEmailAccount,
         loginAdminEmailAccount,
+        updateAdminEmailCredentials,
         activeTab,
         setActiveTab,
         currentUser,

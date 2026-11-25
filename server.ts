@@ -19,12 +19,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DEFAULT_AGORA_APP_ID = "d5c272d82b094c2f86ccc75df0819dfe";
-const ADMIN_ALLOWLIST_EMAILS = new Set([
-  "aegy238@gmail.com",
-  "iejehdgdig@gmail.com",
-  "hhsiggidfhkgogfc@gmail.com",
-  "uhbijnokmpl098900@gmail.com",
-]);
+const DEFAULT_OWNER_ADMIN_EMAIL = "hhsiggidfhkgogfc@gmail.com";
+const ADMIN_ALLOWLIST_EMAILS = new Set(
+  [
+    DEFAULT_OWNER_ADMIN_EMAIL,
+    (process.env.ADMIN_EMAIL || "").trim().toLowerCase(),
+    (process.env.VITE_ADMIN_EMAIL || "").trim().toLowerCase(),
+  ].filter(Boolean)
+);
 
 // =============================================================================
 // PERSISTENT SERVER DATA STORAGE (Bundled Version Snapshot + Writable Data Dir)
@@ -176,7 +178,7 @@ function getEnvAdminConfig(): { email: string; password: string } | null {
   const envEmail = (
     process.env.ADMIN_EMAIL ||
     process.env.VITE_ADMIN_EMAIL ||
-    "aegy238@gmail.com"
+    DEFAULT_OWNER_ADMIN_EMAIL
   )
     .trim()
     .toLowerCase();
@@ -975,7 +977,10 @@ async function verifyAdminFirebaseToken(
     };
     const user = data.users?.[0];
     const email = (user?.email || "").toLowerCase().trim();
-    if (!email || !user?.emailVerified || !ADMIN_ALLOWLIST_EMAILS.has(email)) {
+    const isClaimedMatch = Boolean(
+      claimedAdminCredential && email === claimedAdminCredential.email.toLowerCase()
+    );
+    if (!email || !user?.emailVerified || (!ADMIN_ALLOWLIST_EMAILS.has(email) && !isClaimedMatch)) {
       return { ok: false, error: "هذا الحساب لا يملك صلاحية المسؤول العليا." };
     }
     return { ok: true, email };
@@ -1608,8 +1613,9 @@ async function startServer() {
     });
   });
 
-  // Admin Email + Password Auth Routes (First-run claim + scrypt verification + Bearer token)
+  // Admin Email + Password Auth Routes (Clean single-admin claim + scrypt verification + Bearer token)
   app.get("/api/admin/auth/status", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
     const envCfg = getEnvAdminConfig();
     if (envCfg) {
       res.json({
@@ -1630,7 +1636,7 @@ async function startServer() {
     res.json({
       configured: false,
       source: "unclaimed",
-      emailHint: (process.env.VITE_ADMIN_EMAIL || "aegy238@gmail.com").trim().toLowerCase(),
+      emailHint: (process.env.ADMIN_EMAIL || process.env.VITE_ADMIN_EMAIL || "").trim().toLowerCase(),
     });
   });
 
@@ -1662,9 +1668,9 @@ async function startServer() {
         ? body.displayName.trim().slice(0, 60)
         : "مدير التطبيق";
 
-    if (!isValidEmailFormat(email) || !ADMIN_ALLOWLIST_EMAILS.has(email)) {
+    if (!isValidEmailFormat(email)) {
       recordAdminAuthFailure(`claim:${ipKey}`);
-      res.status(403).json({ error: "هذا البريد الإلكتروني غير مصرح له كحساب مدير." });
+      res.status(400).json({ error: "يرجى إدخال صيغة بريد إلكتروني صحيحة لحساب المدير." });
       return;
     }
     if (password.length < 6 || password.length > 128) {
@@ -1802,6 +1808,56 @@ async function startServer() {
     });
   });
 
+  app.post("/api/admin/auth/update", async (req, res) => {
+    const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
+    if (!authCheck.ok) {
+      res.status(403).json({ error: authCheck.error || "غير مصرح" });
+      return;
+    }
+    if (getEnvAdminConfig()) {
+      res.status(400).json({
+        error: "حساب المدير مضبوط عبر متغيرات البيئة (ADMIN_EMAIL/ADMIN_PASSWORD).",
+      });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      email?: unknown;
+      password?: unknown;
+      displayName?: unknown;
+    };
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    const displayName =
+      typeof body.displayName === "string" && body.displayName.trim()
+        ? body.displayName.trim().slice(0, 60)
+        : claimedAdminCredential?.displayName || "مدير التطبيق";
+
+    if (!isValidEmailFormat(email)) {
+      res.status(400).json({ error: "يرجى إدخال بريد إلكتروني صحيح." });
+      return;
+    }
+    if (password.length < 6 || password.length > 128) {
+      res.status(400).json({ error: "كلمة المرور يجب أن تكون بين 6 و 128 حرفاً." });
+      return;
+    }
+
+    const saltHex = crypto.randomBytes(16).toString("hex");
+    const hashHex = hashPasswordScrypt(password, saltHex);
+    claimedAdminCredential = {
+      email,
+      displayName,
+      saltHex,
+      hashHex,
+      claimedAt: Date.now(),
+    };
+    savePersistedAdminAuth();
+
+    const exp = Date.now() + ADMIN_SESSION_TTL_MS;
+    const token = signAdminSessionToken({ email, displayName, exp });
+    res.json({ ok: true, token, email, displayName, expiresAt: exp });
+  });
+
   app.get("/api/admin/auth/me", (req, res) => {
     const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
     const check = verifyAdminSessionToken(token);
@@ -1821,12 +1877,14 @@ async function startServer() {
   // PUBLIC + REAL-TIME SSE CATALOG & COMMAND SYNC ROUTES (All Users Receive Instantly)
   // ===========================================================================
   app.get("/api/catalog", (_req, res) => {
-    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
     res.json({ ok: true, mode: "express_ws", ...serverCatalog });
   });
 
   app.get("/api/server/state", (_req, res) => {
-    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
     res.json({
       ok: true,
       mode: "express_ws",
