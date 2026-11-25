@@ -2,13 +2,51 @@ import {
   Agency,
   GiftItem,
   RechargeAgent,
+  RoomBackground,
   RoomSeat,
   StaffMember,
+  StoreItem,
   Transaction,
   User,
   VipTier,
   VoiceRoom,
 } from '../types';
+import serverCatalogSnapshot from './serverCatalogSnapshot.json';
+
+export const SNAPSHOT_GIFTS: GiftItem[] = Array.isArray(serverCatalogSnapshot.gifts)
+  ? (serverCatalogSnapshot.gifts as unknown as GiftItem[])
+  : [];
+
+export const SNAPSHOT_STORE_ITEMS: StoreItem[] = Array.isArray(serverCatalogSnapshot.storeItems)
+  ? serverCatalogSnapshot.storeItems.map((raw) => {
+      const item = raw as Record<string, unknown>;
+      const nameAr = String(item.nameAr || item.name || '');
+      const nameEn = String(item.nameEn || item.name || nameAr);
+      return {
+        id: String(item.id || ''),
+        type: (item.type as StoreItem['type']) || 'frame',
+        nameAr,
+        nameEn,
+        priceCoins: Number(item.priceCoins) || 0,
+        durationDays: Number(item.durationDays) || 30,
+        previewUrl: typeof item.previewUrl === 'string' ? item.previewUrl : '',
+        videoUrl: typeof item.videoUrl === 'string' ? item.videoUrl : undefined,
+        effectDurationSec:
+          typeof item.effectDurationSec === 'number' ? item.effectDurationSec : undefined,
+        previewGradient:
+          typeof item.previewGradient === 'string' ? item.previewGradient : 'from-amber-500 to-yellow-600',
+        icon: typeof item.icon === 'string' ? item.icon : '✨',
+        descriptionAr: typeof item.descriptionAr === 'string' ? item.descriptionAr : '',
+        updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : undefined,
+      };
+    })
+  : [];
+
+export const SNAPSHOT_ROOM_BACKGROUNDS: RoomBackground[] = Array.isArray(
+  serverCatalogSnapshot.roomBackgrounds
+)
+  ? (serverCatalogSnapshot.roomBackgrounds as RoomBackground[])
+  : [];
 
 export interface RechargePackage {
   coins: number;

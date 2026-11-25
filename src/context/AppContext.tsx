@@ -33,6 +33,9 @@ import {
   STARTER_DEFAULT_GIFT_ID,
   LEGACY_MOCK_GIFT_IDS,
   LEGACY_MOCK_STORE_IDS,
+  SNAPSHOT_GIFTS,
+  SNAPSHOT_STORE_ITEMS,
+  SNAPSHOT_ROOM_BACKGROUNDS,
 } from '../data/appDefaults';
 import { sound } from '../utils/audio';
 import type { User as FirebaseUser } from 'firebase/auth';
@@ -50,6 +53,7 @@ import {
 } from '../utils/firebase';
 import {
   bootstrapAuraVoiceFirestoreIfEmpty,
+  type DashboardSyncPulse,
   fetchAuraUserById,
   persistAuraAgency,
   persistAuraAgent,
@@ -60,6 +64,7 @@ import {
   persistAuraTransaction,
   persistAuraUser,
   persistBagGifts,
+  persistDashboardSyncPulse,
   persistJackpotBanner,
   persistLuckyConfig,
   persistAgoraConfig,
@@ -424,12 +429,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const saved = localStorage.getItem('auravoice_room_backgrounds_v1');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch {
       // ignore
     }
-    return [];
+    return SNAPSHOT_ROOM_BACKGROUNDS;
   });
   const hasRemoteRoomBackgroundsRef = React.useRef<boolean>(false);
 
@@ -446,7 +451,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // ignore
       }
     }
-    return [STARTER_DEFAULT_GIFT];
+    const snapshotClean = sanitizeRealGifts(SNAPSHOT_GIFTS);
+    return snapshotClean.length > 0 ? snapshotClean : [STARTER_DEFAULT_GIFT];
   });
 
   const [vipTiers] = useState<VipTier[]>(VIP_TIERS);
@@ -455,12 +461,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const saved = localStorage.getItem('auravoice_store_items_v1');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return sanitizeRealStoreItems(parsed);
+        if (Array.isArray(parsed)) {
+          const clean = sanitizeRealStoreItems(parsed);
+          if (clean.length > 0) return clean;
+        }
       }
     } catch {
       // ignore
     }
-    return [];
+    return sanitizeRealStoreItems(SNAPSHOT_STORE_ITEMS);
   });
 
   const [agencies, setAgencies] = useState<Agency[]>(() => {
@@ -585,6 +594,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Server-verified Admin Email+Password session held strictly in React memory (never persisted to storage)
   const [adminSession, setAdminSession] = useState<AdminEmailSession | null>(null);
+  const adminSessionRef = React.useRef<AdminEmailSession | null>(null);
+  adminSessionRef.current = adminSession;
+  const activeRoomIdRef = React.useRef<string | null>(activeRoomId);
+  activeRoomIdRef.current = activeRoomId;
+  const processedCommandIdsRef = React.useRef<Set<string>>(new Set());
 
   // Exclusive Admin Account Check (Authenticated Firebase Admin Email OR Server-Verified Admin Session)
   const isAdminAccount = Boolean(
@@ -743,7 +757,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setNeedsProfileCompletion(false);
         return;
       }
-      if (pendingEmailRegistrationRef.current) {
+      if (pendingEmailRegistrationRef.current || adminSessionRef.current) {
         return;
       }
       void (async () => {
@@ -781,11 +795,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     gifts: GiftItem[];
     storeItems: StoreItem[];
     roomBackgrounds: RoomBackground[];
+    deletedGiftIds: string[];
+    deletedStoreIds: string[];
+    deletedBackgroundIds: string[];
   }>({
     loaded: false,
     gifts: [],
     storeItems: [],
     roomBackgrounds: [],
+    deletedGiftIds: [],
+    deletedStoreIds: [],
+    deletedBackgroundIds: [],
   });
   const firestoreCatalogRef = React.useRef<{
     gifts: GiftItem[];
@@ -798,57 +818,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const applyMergedCatalog = React.useCallback(() => {
-    const mergeById = <T extends { id: string }>(primary: T[], secondary: T[]): T[] => {
-      const seen = new Set<string>();
-      const out: T[] = [];
+    const mergeByTimestamp = <T extends { id: string; updatedAt?: string }>(
+      primary: T[],
+      secondary: T[],
+      deletedIds: string[]
+    ): T[] => {
+      const deletedSet = new Set(deletedIds);
+      const byId = new Map<string, T>();
       for (const item of primary) {
-        if (!seen.has(item.id)) {
-          seen.add(item.id);
-          out.push(item);
+        if (item?.id && !deletedSet.has(item.id)) {
+          byId.set(item.id, item);
         }
       }
       for (const item of secondary) {
-        if (!seen.has(item.id)) {
-          seen.add(item.id);
-          out.push(item);
+        if (!item?.id || deletedSet.has(item.id)) continue;
+        const existing = byId.get(item.id);
+        if (!existing) {
+          byId.set(item.id, item);
+          continue;
+        }
+        const existingTs = existing.updatedAt ? Date.parse(existing.updatedAt) || 0 : 0;
+        const secondaryTs = item.updatedAt ? Date.parse(item.updatedAt) || 0 : 0;
+        if (secondaryTs > existingTs) {
+          byId.set(item.id, item);
         }
       }
-      return out;
+      return Array.from(byId.values());
     };
 
     const mergedGifts = sanitizeRealGifts(
-      mergeById(serverCatalogRef.current.gifts, firestoreCatalogRef.current.gifts)
+      mergeByTimestamp(
+        serverCatalogRef.current.gifts,
+        firestoreCatalogRef.current.gifts,
+        serverCatalogRef.current.deletedGiftIds
+      )
     );
     if (serverCatalogRef.current.loaded || firestoreCatalogRef.current.gifts.length > 0) {
       setGifts(mergedGifts.length > 0 ? mergedGifts : [STARTER_DEFAULT_GIFT]);
     }
 
     const mergedStore = sanitizeRealStoreItems(
-      mergeById(serverCatalogRef.current.storeItems, firestoreCatalogRef.current.storeItems)
+      mergeByTimestamp(
+        serverCatalogRef.current.storeItems,
+        firestoreCatalogRef.current.storeItems,
+        serverCatalogRef.current.deletedStoreIds
+      )
     );
     if (serverCatalogRef.current.loaded || firestoreCatalogRef.current.storeItems.length > 0) {
       setStoreItems(mergedStore);
     }
 
-    const mergedBgs = mergeById(
+    const mergedBgs = mergeByTimestamp(
       serverCatalogRef.current.roomBackgrounds,
-      firestoreCatalogRef.current.roomBackgrounds
+      firestoreCatalogRef.current.roomBackgrounds,
+      serverCatalogRef.current.deletedBackgroundIds
     );
     if (serverCatalogRef.current.loaded || hasRemoteRoomBackgroundsRef.current) {
       setRoomBackgrounds(mergedBgs);
     }
   }, []);
 
-  // Real-Time Multi-User Server Catalog Sync (Initial Fetch + Live SSE Stream + Reconnect)
-  useEffect(() => {
-    let closed = false;
-    let eventSource: EventSource | null = null;
-    let reconnectTimer: number | null = null;
-
-    const handleServerCatalogPayload = (payload: {
+  const handleServerCatalogPayload = React.useCallback(
+    (payload: {
       gifts?: GiftItem[];
       storeItems?: StoreItem[];
       roomBackgrounds?: RoomBackground[];
+      deletedGiftIds?: string[];
+      deletedStoreIds?: string[];
+      deletedBackgroundIds?: string[];
     }) => {
       if (!payload || typeof payload !== 'object') return;
       serverCatalogRef.current = {
@@ -858,11 +895,315 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? sanitizeRealStoreItems(payload.storeItems)
           : [],
         roomBackgrounds: Array.isArray(payload.roomBackgrounds) ? payload.roomBackgrounds : [],
+        deletedGiftIds: Array.isArray(payload.deletedGiftIds)
+          ? payload.deletedGiftIds.map(String)
+          : serverCatalogRef.current.deletedGiftIds,
+        deletedStoreIds: Array.isArray(payload.deletedStoreIds)
+          ? payload.deletedStoreIds.map(String)
+          : serverCatalogRef.current.deletedStoreIds,
+        deletedBackgroundIds: Array.isArray(payload.deletedBackgroundIds)
+          ? payload.deletedBackgroundIds.map(String)
+          : serverCatalogRef.current.deletedBackgroundIds,
       };
       applyMergedCatalog();
-    };
+    },
+    [applyMergedCatalog]
+  );
 
+  const applyServerDashboardState = React.useCallback((state: Record<string, unknown>) => {
+    if (!state || typeof state !== 'object') return;
+
+    if (state.luckyConfig && typeof state.luckyConfig === 'object' && !Array.isArray(state.luckyConfig)) {
+      setLuckyConfig((prev) => ({
+        ...prev,
+        ...(state.luckyConfig as Partial<LuckyGiftConfig>),
+      }));
+    }
+
+    if (state.agoraConfig && typeof state.agoraConfig === 'object' && !Array.isArray(state.agoraConfig)) {
+      const applied = agoraVoice.setConfig(state.agoraConfig as Partial<AgoraVoiceConfig>, true);
+      setAgoraConfig(applied);
+    }
+
+    if (state.userOverrides && typeof state.userOverrides === 'object' && !Array.isArray(state.userOverrides)) {
+      const overrides = state.userOverrides as Record<string, Record<string, unknown>>;
+      const entries = Object.entries(overrides);
+      if (entries.length > 0) {
+        setUsers((prev) =>
+          prev.map((u) => {
+            const patch = overrides[u.id];
+            if (!patch || typeof patch !== 'object') return u;
+            return {
+              ...u,
+              ...(typeof patch.coins === 'number' ? { coins: Math.max(0, patch.coins) } : {}),
+              ...(typeof patch.diamonds === 'number'
+                ? { diamonds: Math.max(0, patch.diamonds) }
+                : {}),
+              ...(typeof patch.isBanned === 'boolean' ? { isBanned: patch.isBanned } : {}),
+              ...(typeof patch.isMuted === 'boolean' ? { isMuted: patch.isMuted } : {}),
+              ...(typeof patch.vipLevel === 'number' ? { vipLevel: patch.vipLevel } : {}),
+            };
+          })
+        );
+      }
+    }
+
+    const closedRoomIds = Array.isArray(state.closedRoomIds)
+      ? state.closedRoomIds.map(String)
+      : [];
+    const closedSet = new Set(closedRoomIds);
+    if (activeRoomIdRef.current && closedSet.has(activeRoomIdRef.current)) {
+      setActiveRoomId(null);
+      setActiveRoomMessages([]);
+      setFlyingGift(null);
+      setEntranceBanner(null);
+    }
+
+    const customRooms = Array.isArray(state.customRooms)
+      ? (state.customRooms as VoiceRoom[])
+      : [];
+    const roomModOverrides =
+      state.roomModOverrides && typeof state.roomModOverrides === 'object'
+        ? (state.roomModOverrides as Record<
+            string,
+            { moderators?: string[]; bannedUserIds?: string[] }
+          >)
+        : {};
+
+    if (closedSet.size > 0 || customRooms.length > 0 || Object.keys(roomModOverrides).length > 0) {
+      setRooms((prev) => {
+        const byId = new Map<string, VoiceRoom>();
+        for (const r of prev) {
+          if (!closedSet.has(r.id)) {
+            byId.set(r.id, r);
+          }
+        }
+        for (const cr of customRooms) {
+          if (cr?.id && !closedSet.has(cr.id) && !byId.has(cr.id)) {
+            byId.set(cr.id, cr);
+          }
+        }
+        return Array.from(byId.values()).map((r) => {
+          const modPatch = roomModOverrides[r.id];
+          if (!modPatch) return r;
+          return {
+            ...r,
+            ...(Array.isArray(modPatch.moderators) ? { moderators: modPatch.moderators } : {}),
+            ...(Array.isArray(modPatch.bannedUserIds)
+              ? { bannedUserIds: modPatch.bannedUserIds }
+              : {}),
+          };
+        });
+      });
+    }
+
+    if (Array.isArray(state.agents) && state.agents.length > 0) {
+      const serverAgents = state.agents as RechargeAgent[];
+      setAgents((prev) => {
+        const byId = new Map<string, RechargeAgent>();
+        prev.forEach((a) => byId.set(a.id, a));
+        serverAgents.forEach((a) => {
+          if (a?.id) byId.set(a.id, a);
+        });
+        return Array.from(byId.values());
+      });
+    }
+
+    if (
+      state.agencyStatusOverrides &&
+      typeof state.agencyStatusOverrides === 'object' &&
+      !Array.isArray(state.agencyStatusOverrides)
+    ) {
+      const agencyOv = state.agencyStatusOverrides as Record<string, { status?: string }>;
+      setAgencies((prev) =>
+        prev.map((ag) => {
+          const patch = agencyOv[ag.id];
+          if (
+            patch?.status === 'active' ||
+            patch?.status === 'pending' ||
+            patch?.status === 'suspended'
+          ) {
+            return { ...ag, status: patch.status };
+          }
+          return ag;
+        })
+      );
+    }
+
+    if (Array.isArray(state.adminTransactions) && state.adminTransactions.length > 0) {
+      const serverTxs = state.adminTransactions as Transaction[];
+      setTransactions((prev) => {
+        const seen = new Set(prev.map((t) => t.id));
+        const incoming = serverTxs.filter((tx) => tx?.id && !seen.has(tx.id));
+        return incoming.length > 0 ? [...incoming, ...prev] : prev;
+      });
+    }
+
+    if (Array.isArray(state.recentCommands)) {
+      for (const c of state.recentCommands as Array<{ id?: string }>) {
+        if (c?.id) {
+          processedCommandIdsRef.current.add(String(c.id));
+        }
+      }
+    }
+  }, []);
+
+  const applyDashboardCommand = React.useCallback((cmd: Record<string, unknown>) => {
+    if (!cmd || typeof cmd !== 'object') return;
+    const cmdId = typeof cmd.id === 'string' ? cmd.id : '';
+    const cmdType = typeof cmd.type === 'string' ? cmd.type : '';
+    const payload =
+      cmd.payload && typeof cmd.payload === 'object' && !Array.isArray(cmd.payload)
+        ? (cmd.payload as Record<string, unknown>)
+        : {};
+    if (!cmdId || !cmdType || processedCommandIdsRef.current.has(cmdId)) return;
+    processedCommandIdsRef.current.add(cmdId);
+
+    if (cmdType === 'ADD_BALANCE') {
+      const userId = typeof payload.userId === 'string' ? payload.userId : '';
+      const absCoins = typeof payload.coins === 'number' ? payload.coins : undefined;
+      const absDiamonds = typeof payload.diamonds === 'number' ? payload.diamonds : undefined;
+      const coinsDelta = typeof payload.coinsDelta === 'number' ? payload.coinsDelta : 0;
+      const diamondsDelta = typeof payload.diamondsDelta === 'number' ? payload.diamondsDelta : 0;
+
+      if (userId) {
+        setUsers((prev) =>
+          prev.map((u) => {
+            if (u.id !== userId) return u;
+            return {
+              ...u,
+              coins: absCoins !== undefined ? Math.max(0, absCoins) : Math.max(0, u.coins + coinsDelta),
+              diamonds:
+                absDiamonds !== undefined
+                  ? Math.max(0, absDiamonds)
+                  : Math.max(0, u.diamonds + diamondsDelta),
+            };
+          })
+        );
+      }
+      if (payload.tx && typeof payload.tx === 'object' && !Array.isArray(payload.tx)) {
+        const txObj = payload.tx as Transaction;
+        if (txObj.id) {
+          setTransactions((prev) => (prev.some((t) => t.id === txObj.id) ? prev : [txObj, ...prev]));
+        }
+      }
+    } else if (cmdType === 'TOGGLE_BAN') {
+      const userId = typeof payload.userId === 'string' ? payload.userId : '';
+      if (userId && typeof payload.isBanned === 'boolean') {
+        const nextBanned = payload.isBanned;
+        setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, isBanned: nextBanned } : u)));
+      }
+    } else if (cmdType === 'TOGGLE_MUTE') {
+      const userId = typeof payload.userId === 'string' ? payload.userId : '';
+      if (userId && typeof payload.isMuted === 'boolean') {
+        const nextMuted = payload.isMuted;
+        setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, isMuted: nextMuted } : u)));
+      }
+    } else if (cmdType === 'SET_VIP_LEVEL') {
+      const userId = typeof payload.userId === 'string' ? payload.userId : '';
+      if (userId && typeof payload.vipLevel === 'number') {
+        const lvl = payload.vipLevel;
+        setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, vipLevel: lvl } : u)));
+      }
+    } else if (cmdType === 'CLOSE_ROOM') {
+      const roomId = typeof payload.roomId === 'string' ? payload.roomId : '';
+      if (roomId) {
+        if (activeRoomIdRef.current === roomId) {
+          setActiveRoomId(null);
+          setActiveRoomMessages([]);
+          setFlyingGift(null);
+          setEntranceBanner(null);
+        }
+        setRooms((prev) => prev.filter((r) => r.id !== roomId));
+      }
+    } else if (cmdType === 'CREATE_ROOM') {
+      const room =
+        payload.room && typeof payload.room === 'object' && !Array.isArray(payload.room)
+          ? (payload.room as VoiceRoom)
+          : null;
+      if (room?.id) {
+        setRooms((prev) => [room, ...prev.filter((r) => r.id !== room.id)]);
+      }
+    } else if (cmdType === 'TOGGLE_ROOM_MODERATOR') {
+      const roomId = typeof payload.roomId === 'string' ? payload.roomId : '';
+      if (roomId) {
+        const moderators = Array.isArray(payload.moderators) ? payload.moderators.map(String) : null;
+        const bannedUserIds = Array.isArray(payload.bannedUserIds)
+          ? payload.bannedUserIds.map(String)
+          : null;
+        setRooms((prev) =>
+          prev.map((r) =>
+            r.id === roomId
+              ? {
+                  ...r,
+                  ...(moderators ? { moderators } : {}),
+                  ...(bannedUserIds ? { bannedUserIds } : {}),
+                }
+              : r
+          )
+        );
+      }
+    } else if (cmdType === 'UPDATE_LUCKY_CONFIG') {
+      if (payload.luckyConfig && typeof payload.luckyConfig === 'object') {
+        setLuckyConfig((prev) => ({
+          ...prev,
+          ...(payload.luckyConfig as Partial<LuckyGiftConfig>),
+        }));
+      }
+    } else if (cmdType === 'UPDATE_AGORA_CONFIG') {
+      if (payload.agoraConfig && typeof payload.agoraConfig === 'object') {
+        const applied = agoraVoice.setConfig(payload.agoraConfig as Partial<AgoraVoiceConfig>, true);
+        setAgoraConfig(applied);
+      }
+    } else if (cmdType === 'CREATE_AGENT' || cmdType === 'TOPUP_AGENT') {
+      const agent =
+        payload.agent && typeof payload.agent === 'object' && !Array.isArray(payload.agent)
+          ? (payload.agent as RechargeAgent)
+          : null;
+      if (agent?.id) {
+        setAgents((prev) => [agent, ...prev.filter((a) => a.id !== agent.id)]);
+      }
+    } else if (cmdType === 'UPDATE_AGENCY_STATUS') {
+      const agencyId = typeof payload.agencyId === 'string' ? payload.agencyId : '';
+      const status = payload.status;
+      if (agencyId && (status === 'active' || status === 'pending' || status === 'suspended')) {
+        setAgencies((prev) => prev.map((a) => (a.id === agencyId ? { ...a, status } : a)));
+      }
+    } else if (cmdType === 'PURGE_MOCK_CATALOGS') {
+      setGifts((prev) => {
+        const clean = sanitizeRealGifts(prev);
+        return clean.length > 0 ? clean : [STARTER_DEFAULT_GIFT];
+      });
+      setStoreItems((prev) => sanitizeRealStoreItems(prev));
+      setBagGifts((prev) => sanitizeBagGiftsRecord(prev));
+      setUsers((prev) => prev.map((u) => stripLegacyMockCosmetics(u)));
+    }
+  }, []);
+
+  // Real-Time Multi-User Server Catalog & Command Sync (Initial Fetch + SSE + WebSocket + Reconnect)
+  useEffect(() => {
+    let closed = false;
+    let eventSource: EventSource | null = null;
+    let reconnectTimer: number | null = null;
     const isServerlessModeRef = { active: false };
+
+    const fetchServerStateNow = async () => {
+      if (isServerlessModeRef.active) return;
+      try {
+        const res = await fetch('/api/server/state', { cache: 'no-store' });
+        if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) return;
+        const data = (await res.json()) as {
+          catalog?: Parameters<typeof handleServerCatalogPayload>[0];
+          dashboardState?: Record<string, unknown>;
+        };
+        if (!closed) {
+          if (data.catalog) handleServerCatalogPayload(data.catalog);
+          if (data.dashboardState) applyServerDashboardState(data.dashboardState);
+        }
+      } catch {
+        // ignore transient offline error
+      }
+    };
 
     const fetchServerCatalogNow = async (): Promise<boolean> => {
       try {
@@ -875,6 +1216,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           gifts?: GiftItem[];
           storeItems?: StoreItem[];
           roomBackgrounds?: RoomBackground[];
+          deletedGiftIds?: string[];
+          deletedStoreIds?: string[];
+          deletedBackgroundIds?: string[];
         };
         if (data?.mode === 'serverless_cloud') {
           isServerlessModeRef.active = true;
@@ -884,7 +1228,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         return true;
       } catch {
-        // Ignore transient offline fetch errors
         return false;
       }
     };
@@ -905,8 +1248,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         };
 
+        const onServerStateEvent = (evt: MessageEvent) => {
+          try {
+            const parsed = JSON.parse(evt.data);
+            if (!closed) applyServerDashboardState(parsed);
+          } catch {
+            // ignore
+          }
+        };
+
+        const onDashboardCommandEvent = (evt: MessageEvent) => {
+          try {
+            const parsed = JSON.parse(evt.data);
+            if (!closed) applyDashboardCommand(parsed);
+          } catch {
+            // ignore
+          }
+        };
+
         es.addEventListener('catalog:init', onCatalogEvent as EventListener);
         es.addEventListener('catalog:update', onCatalogEvent as EventListener);
+        es.addEventListener('server:state', onServerStateEvent as EventListener);
+        es.addEventListener('dashboard:command', onDashboardCommandEvent as EventListener);
 
         es.onerror = () => {
           es.close();
@@ -916,6 +1279,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               reconnectTimer = null;
               void fetchServerCatalogNow().then((ok) => {
                 if (ok && !isServerlessModeRef.active) {
+                  void fetchServerStateNow();
                   connectCatalogStream();
                 }
               });
@@ -929,13 +1293,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     void fetchServerCatalogNow().then((ok) => {
       if (ok && !isServerlessModeRef.active) {
+        void fetchServerStateNow();
         connectCatalogStream();
+      }
+    });
+
+    const unsubWsSync = selfHostedVoice.subscribeServerSync((ev) => {
+      if (closed) return;
+      if (ev.type === 'server:catalog_update' && ev.catalog) {
+        handleServerCatalogPayload(ev.catalog as Parameters<typeof handleServerCatalogPayload>[0]);
+      } else if (ev.type === 'server:dashboard_command') {
+        if (ev.command) applyDashboardCommand(ev.command);
+        if (ev.state) applyServerDashboardState(ev.state);
       }
     });
 
     const handleResumeSync = () => {
       if (document.visibilityState === 'visible') {
         void fetchServerCatalogNow();
+        void fetchServerStateNow();
         if (!isServerlessModeRef.active && (!eventSource || eventSource.readyState === EventSource.CLOSED)) {
           connectCatalogStream();
         }
@@ -943,6 +1319,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     const handleOnline = () => {
       void fetchServerCatalogNow();
+      void fetchServerStateNow();
       if (!isServerlessModeRef.active && (!eventSource || eventSource.readyState === EventSource.CLOSED)) {
         connectCatalogStream();
       }
@@ -953,14 +1330,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => {
       closed = true;
+      unsubWsSync();
       document.removeEventListener('visibilitychange', handleResumeSync);
       window.removeEventListener('online', handleOnline);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       eventSource?.close();
     };
-  }, [applyMergedCatalog]);
+  }, [handleServerCatalogPayload, applyServerDashboardState, applyDashboardCommand]);
 
-  // Public Firestore real-time listeners (rooms, room backgrounds, gifts, store items, agencies, lucky config)
+  // Public Firestore real-time listeners (rooms, room backgrounds, gifts, store items, agencies, lucky config, dashboard_sync)
   useEffect(() => {
     const unsubPublic = subscribeToPublicAuraCollections({
       onRooms: (remoteRooms) => setRooms(remoteRooms),
@@ -1001,11 +1379,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           jackpotTimerRef.current = null;
         }, 3000);
       },
+      onDashboardSync: (pulse: DashboardSyncPulse) => {
+        applyDashboardCommand({
+          id: pulse.commandId,
+          type: pulse.type,
+          payload: pulse.payload,
+          issuedBy: pulse.issuedBy,
+          createdAt: pulse.createdAt,
+        });
+      },
     });
     return () => {
       unsubPublic();
     };
-  }, [applyMergedCatalog]);
+  }, [applyMergedCatalog, applyDashboardCommand]);
 
   // Authenticated Firestore bootstrap + real-time listeners (users, agents, staff, transactions, bag gifts)
   useEffect(() => {
@@ -1205,12 +1592,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           error?: string;
         };
         if (adminRes.ok && adminData.ok && adminData.token && adminData.email) {
-          activateAdminEmailSession({
+          const sessionObj = {
             token: adminData.token,
             email: adminData.email,
             displayName: adminData.displayName || 'مدير التطبيق',
             expiresAt: adminData.expiresAt || Date.now() + 86400000,
-          });
+          };
+          adminSessionRef.current = sessionObj;
+          activateAdminEmailSession(sessionObj);
+          // Silently attach matching Firebase Auth session if available so Firestore mirror writes also work
+          void loginWithEmailPassword(cleanEmail, password).catch(() => null);
           return true;
         }
         if (adminData.error) {
@@ -1427,12 +1818,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setAuthError(data.error || 'البريد الإلكتروني أو كلمة المرور غير صحيحة.');
         return false;
       }
-      activateAdminEmailSession({
+      const sessionObj = {
         token: data.token,
         email: data.email,
         displayName: data.displayName || 'مدير التطبيق',
         expiresAt: data.expiresAt || Date.now() + 86400000,
-      });
+      };
+      adminSessionRef.current = sessionObj;
+      activateAdminEmailSession(sessionObj);
+      void loginWithEmailPassword(email.trim(), password).catch(() => null);
       return true;
     } catch (err: unknown) {
       setAuthError(translateFirebaseAuthError(err));
@@ -1486,6 +1880,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const getAdminAuthHeaders = React.useCallback(async (): Promise<Record<string, string> | null> => {
+    const activeAdminSession = adminSessionRef.current || adminSession;
+    if (activeAdminSession?.token) {
+      return {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${activeAdminSession.token}`,
+      };
+    }
+    if (firebaseUser) {
+      try {
+        const idToken = await firebaseUser.getIdToken();
+        if (idToken) {
+          return {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+          };
+        }
+      } catch {
+        // ignore token retrieval error
+      }
+    }
+    return null;
+  }, [adminSession, firebaseUser]);
+
+  const sendAdminCommand = React.useCallback(
+    async (type: string, payload: Record<string, unknown>) => {
+      const cmdId = `cmd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      processedCommandIdsRef.current.add(cmdId);
+
+      // Push live command pulse to Firestore config for cloud/serverless listeners
+      void persistDashboardSyncPulse({
+        commandId: cmdId,
+        type,
+        payload,
+        issuedBy: adminSessionRef.current?.email || firebaseUser?.email || 'admin',
+        createdAt: Date.now(),
+      }).catch(() => {});
+
+      const headers = await getAdminAuthHeaders();
+      if (!headers) return;
+      try {
+        await fetch('/api/admin/commands', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ id: cmdId, type, payload }),
+        });
+      } catch {
+        // Best-effort live server dispatch
+      }
+    },
+    [getAdminAuthHeaders, firebaseUser]
+  );
+
   const purgeMockCatalogs = async (): Promise<string> => {
     setGifts((prev) => {
       const clean = sanitizeRealGifts(prev);
@@ -1495,8 +1942,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setBagGifts((prev) => sanitizeBagGiftsRecord(prev));
     setUsers((prev) => prev.map((u) => stripLegacyMockCosmetics(u)));
 
+    await sendAdminCommand('PURGE_MOCK_CATALOGS', {
+      legacyGiftIds: LEGACY_MOCK_GIFT_IDS,
+      legacyStoreIds: LEGACY_MOCK_STORE_IDS,
+    });
+
     if (!firebaseUser) {
-      return 'تم تنظيف الهدايا والمتجر والحقيبة الوهمية محلياً (سجّل الدخول بالمسؤول لتنظيف Firestore أيضاً).';
+      const msg = 'تم تنظيف الهدايا والمتجر والحقيبة الوهمية على السيرفر وتحديث جميع المستخدمين.';
+      setCloudMessage(msg);
+      return msg;
     }
 
     const res = await purgeLegacyMockCatalogFromFirestore(
@@ -1509,11 +1963,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateLuckyConfig = (updates: Partial<LuckyGiftConfig>) => {
-    setLuckyConfig((prev) => {
-      const next = { ...prev, ...updates };
-      void persistLuckyConfig(next).catch(() => {});
-      return next;
-    });
+    const next = { ...luckyConfig, ...updates };
+    setLuckyConfig(next);
+    void persistLuckyConfig(next).catch(() => {});
+    void sendAdminCommand('UPDATE_LUCKY_CONFIG', { luckyConfig: next });
   };
 
   const updateAgoraConfig = (
@@ -1527,6 +1980,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void persistAgoraConfig(applied).catch((err) => {
       console.warn('Agora config cloud sync notice:', err);
     });
+    void sendAdminCommand('UPDATE_AGORA_CONFIG', { agoraConfig: applied });
     return applied;
   };
 
@@ -2260,6 +2714,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return r;
       })
     );
+
+    if (!requireOwner || isAdminAccount) {
+      void sendAdminCommand('TOGGLE_ROOM_MODERATOR', {
+        roomId,
+        moderators: nextMods,
+        bannedUserIds: nextBanned,
+      });
+    }
 
     const noticeText = isAlreadyMod
       ? `تم سحب صلاحيات إشراف الغرفة من ${targetName}`
@@ -3171,6 +3633,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setRooms((prev) => [newRoom, ...prev]);
     void persistAuraRoom(newRoom).catch(() => {});
+    if (isAdminAccount) {
+      void sendAdminCommand('CREATE_ROOM', { room: newRoom });
+    }
     setActiveRoomId(newRoom.id);
     setActiveRoomMessages([
       {
@@ -3204,6 +3669,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Admin Actions
   const adminAddBalance = (userId: string, coins: number, diamonds: number, note: string) => {
+    const targetUser = users.find((u) => u.id === userId);
+    const nextCoins = targetUser ? Math.max(0, targetUser.coins + coins) : undefined;
+    const nextDiamonds = targetUser ? Math.max(0, targetUser.diamonds + diamonds) : undefined;
+
     setUsers((prev) =>
       prev.map((u) => {
         if (u.id === userId) {
@@ -3219,7 +3688,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    const targetUser = users.find((u) => u.id === userId);
     const tx: Transaction = {
       id: `tx_${Date.now()}`,
       userId,
@@ -3233,9 +3701,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setTransactions((prev) => [tx, ...prev]);
     void persistAuraTransaction(tx).catch(() => {});
+    void sendAdminCommand('ADD_BALANCE', {
+      userId,
+      ...(nextCoins !== undefined ? { coins: nextCoins } : {}),
+      ...(nextDiamonds !== undefined ? { diamonds: nextDiamonds } : {}),
+      coinsDelta: coins,
+      diamondsDelta: diamonds,
+      note,
+      tx,
+    });
   };
 
   const adminToggleBan = (userId: string) => {
+    const target = users.find((u) => u.id === userId);
+    const nextBanned = target ? !target.isBanned : true;
     setUsers((prev) =>
       prev.map((u) => {
         if (u.id === userId) {
@@ -3246,9 +3725,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return u;
       })
     );
+    void sendAdminCommand('TOGGLE_BAN', { userId, isBanned: nextBanned });
   };
 
   const adminToggleMute = (userId: string) => {
+    const target = users.find((u) => u.id === userId);
+    const nextMuted = target ? !target.isMuted : true;
     setUsers((prev) =>
       prev.map((u) => {
         if (u.id === userId) {
@@ -3259,6 +3741,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return u;
       })
     );
+    void sendAdminCommand('TOGGLE_MUTE', { userId, isMuted: nextMuted });
   };
 
   const adminSetVipLevel = (userId: string, level: number) => {
@@ -3272,6 +3755,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return u;
       })
     );
+    void sendAdminCommand('SET_VIP_LEVEL', { userId, vipLevel: level });
   };
 
   const adminCloseRoom = (roomId: string) => {
@@ -3280,31 +3764,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     setRooms((prev) => prev.filter((r) => r.id !== roomId));
     void removeAuraRoom(roomId).catch(() => {});
+    void sendAdminCommand('CLOSE_ROOM', { roomId });
   };
-
-  // Build Authorization header for Server-Authoritative Admin Catalog API
-  const getAdminAuthHeaders = React.useCallback(async (): Promise<Record<string, string> | null> => {
-    if (adminSession?.token) {
-      return {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${adminSession.token}`,
-      };
-    }
-    if (firebaseUser) {
-      try {
-        const idToken = await firebaseUser.getIdToken();
-        if (idToken) {
-          return {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${idToken}`,
-          };
-        }
-      } catch {
-        // ignore token retrieval error
-      }
-    }
-    return null;
-  }, [adminSession, firebaseUser]);
 
   const sendAdminCatalogMutation = React.useCallback(
     async (url: string, method: 'POST' | 'PUT' | 'DELETE', body?: unknown) => {
@@ -3359,11 +3820,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [isAdminAccount, gifts, storeItems, roomBackgrounds, sendAdminCatalogMutation]);
 
   const adminCreateRoomBackground = (bg: { nameAr: string; imageUrl: string }): RoomBackground => {
+    const nowIso = new Date().toISOString();
     const newBg: RoomBackground = {
       id: `roombg_${Date.now()}`,
       nameAr: bg.nameAr.trim() || 'خلفية غرفة مخصصة',
       imageUrl: bg.imageUrl.trim(),
-      createdAt: new Date().toISOString().slice(0, 10),
+      createdAt: nowIso.slice(0, 10),
+      updatedAt: nowIso,
     };
     setRoomBackgrounds((prev) => [newBg, ...prev]);
     void sendAdminCatalogMutation('/api/admin/catalog/backgrounds', 'POST', newBg);
@@ -3381,21 +3844,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adminCreateGift = (gift: GiftItem) => {
+    const stampedGift: GiftItem = { ...gift, updatedAt: new Date().toISOString() };
     setGifts((prev) => [
-      gift,
-      ...prev.filter((g) => g.id !== gift.id && !g.isStarterDefault && g.id !== STARTER_DEFAULT_GIFT_ID),
+      stampedGift,
+      ...prev.filter((g) => g.id !== stampedGift.id && !g.isStarterDefault && g.id !== STARTER_DEFAULT_GIFT_ID),
     ]);
-    void sendAdminCatalogMutation('/api/admin/catalog/gifts', 'POST', gift);
-    void persistAuraGift(gift).catch(() => {});
+    void sendAdminCatalogMutation('/api/admin/catalog/gifts', 'POST', stampedGift);
+    void persistAuraGift(stampedGift).catch(() => {});
   };
 
   const adminUpdateGift = (giftId: string, updates: Partial<GiftItem>) => {
+    const nowIso = new Date().toISOString();
+    const stampedUpdates: Partial<GiftItem> = { ...updates, updatedAt: nowIso };
     const currentGift = gifts.find((g) => g.id === giftId);
-    const mergedGift = currentGift ? { ...currentGift, ...updates } : updates;
+    const mergedGift = currentGift ? { ...currentGift, ...stampedUpdates } : stampedUpdates;
     setGifts((prev) =>
       prev.map((g) => {
         if (g.id === giftId) {
-          const updated = { ...g, ...updates };
+          const updated = { ...g, ...stampedUpdates };
           if (!updated.isStarterDefault && updated.id !== STARTER_DEFAULT_GIFT_ID) {
             void persistAuraGift(updated).catch(() => {});
           }
@@ -3426,18 +3892,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adminCreateStoreItem = (item: StoreItem) => {
-    setStoreItems((prev) => [item, ...prev.filter((i) => i.id !== item.id)]);
-    void sendAdminCatalogMutation('/api/admin/catalog/store-items', 'POST', item);
-    void persistAuraStoreItem(item).catch(() => {});
+    const stampedItem: StoreItem = { ...item, updatedAt: new Date().toISOString() };
+    setStoreItems((prev) => [stampedItem, ...prev.filter((i) => i.id !== stampedItem.id)]);
+    void sendAdminCatalogMutation('/api/admin/catalog/store-items', 'POST', stampedItem);
+    void persistAuraStoreItem(stampedItem).catch(() => {});
   };
 
   const adminUpdateStoreItem = (itemId: string, updates: Partial<StoreItem>) => {
+    const nowIso = new Date().toISOString();
+    const stampedUpdates: Partial<StoreItem> = { ...updates, updatedAt: nowIso };
     const currentItem = storeItems.find((item) => item.id === itemId);
-    const mergedItem = currentItem ? { ...currentItem, ...updates } : updates;
+    const mergedItem = currentItem ? { ...currentItem, ...stampedUpdates } : stampedUpdates;
     setStoreItems((prev) =>
       prev.map((item) => {
         if (item.id === itemId) {
-          const updated = { ...item, ...updates };
+          const updated = { ...item, ...stampedUpdates };
           void persistAuraStoreItem(updated).catch(() => {});
           return updated;
         }
@@ -3476,9 +3945,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setAgents((prev) => [newAgent, ...prev]);
     void persistAuraAgent(newAgent).catch(() => {});
+    void sendAdminCommand('CREATE_AGENT', { agent: newAgent });
   };
 
   const adminTopupAgent = (agentId: string, coins: number) => {
+    const targetAgent = agents.find((a) => a.id === agentId);
+    const updatedAgent = targetAgent
+      ? { ...targetAgent, balanceCoins: targetAgent.balanceCoins + coins }
+      : null;
+
     setAgents((prev) =>
       prev.map((a) => {
         if (a.id === agentId) {
@@ -3489,6 +3964,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return a;
       })
     );
+    if (updatedAgent) {
+      void sendAdminCommand('TOPUP_AGENT', { agent: updatedAgent });
+    }
   };
 
   const adminUpdateAgencyStatus = (agencyId: string, status: 'active' | 'pending' | 'suspended') => {
@@ -3502,6 +3980,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return a;
       })
     );
+    void sendAdminCommand('UPDATE_AGENCY_STATUS', { agencyId, status });
   };
 
   // Soundboard Trigger

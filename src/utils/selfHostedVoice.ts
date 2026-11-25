@@ -65,6 +65,14 @@ type MicStatusListener = (isLiveMicActive: boolean) => void;
 type ConnectionStatusListener = (status: SelfHostedVoiceStatus) => void;
 type RoomEventListener = (event: RoomLiveEvent) => void;
 
+export interface ServerSyncEvent {
+  type: 'server:catalog_update' | 'server:dashboard_command';
+  catalog?: Record<string, unknown>;
+  command?: Record<string, unknown> | null;
+  state?: Record<string, unknown>;
+}
+type ServerSyncListener = (event: ServerSyncEvent) => void;
+
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
@@ -195,6 +203,7 @@ class SelfHostedVoiceEngine {
   private micStatusListeners = new Set<MicStatusListener>();
   private statusListeners = new Set<ConnectionStatusListener>();
   private roomEventListeners = new Set<RoomEventListener>();
+  private serverSyncListeners = new Set<ServerSyncListener>();
 
   private isLiveMicActive = false;
   private autoplayBlocked = false;
@@ -263,6 +272,11 @@ class SelfHostedVoiceEngine {
   public subscribeRoomEvents(cb: RoomEventListener): () => void {
     this.roomEventListeners.add(cb);
     return () => this.roomEventListeners.delete(cb);
+  }
+
+  public subscribeServerSync(cb: ServerSyncListener): () => void {
+    this.serverSyncListeners.add(cb);
+    return () => this.serverSyncListeners.delete(cb);
   }
 
   public broadcastRoomEvent(event: RoomLiveEvent): boolean {
@@ -1424,6 +1438,34 @@ class SelfHostedVoiceEngine {
           if (ev && ev.id && ev.kind) {
             this.roomEventListeners.forEach((cb) => cb(ev));
           }
+          return;
+        }
+
+        if (type === 'server:catalog_update') {
+          const catalog =
+            msg.catalog && typeof msg.catalog === 'object'
+              ? (msg.catalog as Record<string, unknown>)
+              : undefined;
+          if (catalog) {
+            this.serverSyncListeners.forEach((cb) =>
+              cb({ type: 'server:catalog_update', catalog })
+            );
+          }
+          return;
+        }
+
+        if (type === 'server:dashboard_command') {
+          const command =
+            msg.command && typeof msg.command === 'object'
+              ? (msg.command as Record<string, unknown>)
+              : null;
+          const state =
+            msg.state && typeof msg.state === 'object'
+              ? (msg.state as Record<string, unknown>)
+              : undefined;
+          this.serverSyncListeners.forEach((cb) =>
+            cb({ type: 'server:dashboard_command', command, state })
+          );
           return;
         }
 

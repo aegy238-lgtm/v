@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import serverCatalogSnapshot from '../src/data/serverCatalogSnapshot.json';
 
 const PERMANENT_FIREBASE_PROJECT_ID = 'shosho-chat-3e571';
 
@@ -55,6 +56,38 @@ async function fetchPublicCollection(collectionName: string): Promise<Record<str
   }
 }
 
+function mergeCatalogByTimestamp(
+  snapshotItems: Record<string, unknown>[],
+  remoteItems: Record<string, unknown>[],
+  deletedIds: string[]
+): Record<string, unknown>[] {
+  const deletedSet = new Set(deletedIds);
+  const byId = new Map<string, Record<string, unknown>>();
+
+  for (const item of snapshotItems) {
+    const id = typeof item?.id === 'string' ? item.id : '';
+    if (!id || deletedSet.has(id)) continue;
+    byId.set(id, item);
+  }
+
+  for (const item of remoteItems) {
+    const id = typeof item?.id === 'string' ? item.id : '';
+    if (!id || deletedSet.has(id)) continue;
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, item);
+      continue;
+    }
+    const existingTs = Date.parse(String(existing.updatedAt || '')) || 0;
+    const remoteTs = Date.parse(String(item.updatedAt || '')) || 0;
+    if (remoteTs >= existingTs) {
+      byId.set(id, item);
+    }
+  }
+
+  return Array.from(byId.values());
+}
+
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
@@ -67,11 +100,37 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     return;
   }
 
-  const [gifts, storeItems, roomBackgrounds] = await Promise.all([
+  const [fsGifts, fsStoreItems, fsRoomBackgrounds] = await Promise.all([
     fetchPublicCollection('auravoice_gifts'),
     fetchPublicCollection('auravoice_store_items'),
     fetchPublicCollection('auravoice_room_backgrounds'),
   ]);
+
+  const deletedGiftIds = Array.isArray(serverCatalogSnapshot.deletedGiftIds)
+    ? serverCatalogSnapshot.deletedGiftIds.map(String)
+    : [];
+  const deletedStoreIds = Array.isArray(serverCatalogSnapshot.deletedStoreIds)
+    ? serverCatalogSnapshot.deletedStoreIds.map(String)
+    : [];
+  const deletedBackgroundIds = Array.isArray(serverCatalogSnapshot.deletedBackgroundIds)
+    ? serverCatalogSnapshot.deletedBackgroundIds.map(String)
+    : [];
+
+  const gifts = mergeCatalogByTimestamp(
+    (serverCatalogSnapshot.gifts || []) as Record<string, unknown>[],
+    fsGifts,
+    deletedGiftIds
+  );
+  const storeItems = mergeCatalogByTimestamp(
+    (serverCatalogSnapshot.storeItems || []) as Record<string, unknown>[],
+    fsStoreItems,
+    deletedStoreIds
+  );
+  const roomBackgrounds = mergeCatalogByTimestamp(
+    (serverCatalogSnapshot.roomBackgrounds || []) as Record<string, unknown>[],
+    fsRoomBackgrounds,
+    deletedBackgroundIds
+  );
 
   res.statusCode = 200;
   res.end(
@@ -81,7 +140,10 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       gifts,
       storeItems,
       roomBackgrounds,
-      updatedAt: Date.now(),
+      deletedGiftIds,
+      deletedStoreIds,
+      deletedBackgroundIds,
+      updatedAt: serverCatalogSnapshot.updatedAt || Date.now(),
     })
   );
 }

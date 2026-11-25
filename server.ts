@@ -27,13 +27,30 @@ const ADMIN_ALLOWLIST_EMAILS = new Set([
 ]);
 
 // =============================================================================
-// PERSISTENT SERVER DATA STORAGE (Outside Git Workspace for Clean GitHub Push)
+// PERSISTENT SERVER DATA STORAGE (Bundled Version Snapshot + Writable Data Dir)
 // =============================================================================
-const SERVER_DATA_DIR =
-  (process.env.FOKASHAT_DATA_DIR || "").trim() ||
-  path.join(os.tmpdir(), "fokashat-runtime-data");
+const BUNDLED_CATALOG_FILE = path.join(__dirname, "src", "data", "serverCatalogSnapshot.json");
+const TMP_RUNTIME_DATA_DIR = path.join(os.tmpdir(), "fokashat-runtime-data");
+const WORKSPACE_DATA_DIR = path.join(__dirname, "data");
+
+function resolveWritableDataDir(): string {
+  const envDir = (process.env.FOKASHAT_DATA_DIR || "").trim();
+  if (envDir) return envDir;
+  try {
+    if (!fs.existsSync(WORKSPACE_DATA_DIR)) {
+      fs.mkdirSync(WORKSPACE_DATA_DIR, { recursive: true, mode: 0o700 });
+    }
+    fs.accessSync(WORKSPACE_DATA_DIR, fs.constants.W_OK);
+    return WORKSPACE_DATA_DIR;
+  } catch {
+    return TMP_RUNTIME_DATA_DIR;
+  }
+}
+
+const SERVER_DATA_DIR = resolveWritableDataDir();
 const ADMIN_AUTH_FILE = path.join(SERVER_DATA_DIR, "admin-auth.json");
 const CATALOG_FILE = path.join(SERVER_DATA_DIR, "catalog.json");
+const DASHBOARD_STATE_FILE = path.join(SERVER_DATA_DIR, "dashboard-state.json");
 
 function ensureServerDataDir(): void {
   try {
@@ -71,16 +88,19 @@ interface PersistedAdminAuthFile {
 }
 
 function loadPersistedAdminAuth(): PersistedAdminAuthFile {
-  try {
-    if (fs.existsSync(ADMIN_AUTH_FILE)) {
-      const raw = fs.readFileSync(ADMIN_AUTH_FILE, "utf8");
-      const parsed = JSON.parse(raw) as PersistedAdminAuthFile;
-      if (parsed && typeof parsed === "object") {
-        return parsed;
+  const candidates = [ADMIN_AUTH_FILE, path.join(TMP_RUNTIME_DATA_DIR, "admin-auth.json")];
+  for (const file of candidates) {
+    try {
+      if (fs.existsSync(file)) {
+        const raw = fs.readFileSync(file, "utf8");
+        const parsed = JSON.parse(raw) as PersistedAdminAuthFile;
+        if (parsed && typeof parsed === "object") {
+          return parsed;
+        }
       }
+    } catch (err) {
+      console.warn("Could not read persisted admin auth file:", err);
     }
-  } catch (err) {
-    console.warn("Could not read persisted admin auth file:", err);
   }
   return {};
 }
@@ -191,7 +211,7 @@ function signAdminSessionToken(payload: {
 }
 
 // =============================================================================
-// AUTHORITATIVE MULTI-USER CATALOG STORE (Gifts, Store Items, Room Backgrounds)
+// AUTHORITATIVE MULTI-USER CATALOG & DASHBOARD COMMAND ENGINE
 // =============================================================================
 interface ServerCatalogState {
   version: number;
@@ -199,6 +219,32 @@ interface ServerCatalogState {
   gifts: Record<string, unknown>[];
   storeItems: Record<string, unknown>[];
   roomBackgrounds: Record<string, unknown>[];
+  deletedGiftIds: string[];
+  deletedStoreIds: string[];
+  deletedBackgroundIds: string[];
+}
+
+interface ServerDashboardCommand {
+  id: string;
+  type: string;
+  payload: Record<string, unknown>;
+  issuedBy: string;
+  createdAt: number;
+}
+
+interface ServerDashboardState {
+  version: number;
+  updatedAt: string;
+  luckyConfig: Record<string, unknown> | null;
+  agoraConfig: Record<string, unknown> | null;
+  userOverrides: Record<string, Record<string, unknown>>;
+  closedRoomIds: string[];
+  customRooms: Record<string, unknown>[];
+  roomModOverrides: Record<string, { moderators: string[]; bannedUserIds?: string[]; updatedAt: string }>;
+  agents: Record<string, unknown>[];
+  agencyStatusOverrides: Record<string, { status: string; updatedAt: string }>;
+  adminTransactions: Record<string, unknown>[];
+  recentCommands: ServerDashboardCommand[];
 }
 
 const LEGACY_MOCK_GIFT_IDS = new Set([
@@ -210,6 +256,19 @@ const LEGACY_MOCK_GIFT_IDS = new Set([
   "g_private_jet",
   "g_royal_castle",
   "g_dragon_aura",
+  "g_coffee",
+  "g_heart",
+  "g_perfume",
+  "g_ring",
+  "g_sports_car",
+  "g_yacht",
+  "g_castle",
+  "g_dragon",
+  "g_falcon",
+  "g_jet",
+  "g_lucky_box",
+  "g_lucky_clover",
+  "g_lucky_star",
 ]);
 
 const LEGACY_MOCK_STORE_IDS = new Set([
@@ -217,9 +276,18 @@ const LEGACY_MOCK_STORE_IDS = new Set([
   "f_royal",
   "f_cyber",
   "f_dragon",
+  "f_diamond",
+  "f_neon",
+  "f_phoenix",
   "e_lambo",
   "e_pegasus",
   "e_throne",
+  "e_sports_car",
+  "e_dragon",
+  "e_falcon",
+  "e_yacht",
+  "e_royal_carriage",
+  "e_jet",
   "b_king",
   "b_legend",
   "b_vip_diamond",
@@ -254,12 +322,13 @@ function sanitizeCatalogGift(raw: unknown): Record<string, unknown> | null {
   }
   const nameAr = sanitizeShortString(g.nameAr || g.name, 100);
   if (!nameAr) return null;
-  const allowedCats = new Set(["classic", "luxury", "vip", "magic", "lucky"]);
+  const allowedCats = new Set(["classic", "luxury", "romantic", "magic", "vip", "lucky", "cp", "celebrity"]);
   const catRaw = sanitizeShortString(g.category, 24);
   const category = allowedCats.has(catRaw) ? catRaw : "classic";
   const allowedAnim = new Set([
     "float",
     "particle",
+    "svga",
     "explosion",
     "luxury_banner",
     "fullscreen_dragon",
@@ -267,7 +336,17 @@ function sanitizeCatalogGift(raw: unknown): Record<string, unknown> | null {
   ]);
   const animRaw = sanitizeShortString(g.animationType, 32);
   const animationType = allowedAnim.has(animRaw) ? animRaw : "luxury_banner";
-  const allowedSound = new Set(["chime", "fanfare", "roar", "sparkle", "magic"]);
+  const allowedSound = new Set([
+    "chime",
+    "fanfare",
+    "roar",
+    "sparkle",
+    "magic",
+    "laser",
+    "applause",
+    "slot",
+    "dice",
+  ]);
   const sndRaw = sanitizeShortString(g.soundEffect, 24);
   const soundEffect = allowedSound.has(sndRaw) ? sndRaw : "chime";
 
@@ -276,14 +355,15 @@ function sanitizeCatalogGift(raw: unknown): Record<string, unknown> | null {
     name: sanitizeShortString(g.name || nameAr, 100) || nameAr,
     nameAr,
     category,
-    coinPrice: Math.max(1, Math.min(100000000, Math.round(Number(g.coinPrice) || 100))),
-    diamondReward: Math.max(0, Math.min(100000000, Math.round(Number(g.diamondReward) || 0))),
+    coinPrice: Math.max(1, Math.min(1000000000, Math.round(Number(g.coinPrice) || 100))),
+    diamondReward: Math.max(0, Math.min(1000000000, Math.round(Number(g.diamondReward) || 0))),
     icon: sanitizeShortString(g.icon, 24) || "🎁",
     accentColor: sanitizeShortString(g.accentColor, 32) || "#f59e0b",
     animationType,
     soundEffect,
     descriptionAr: sanitizeShortString(g.descriptionAr, 240) || "هدية حصرية من الإدارة",
     isLucky: Boolean(g.isLucky || category === "lucky"),
+    updatedAt: typeof g.updatedAt === "string" && g.updatedAt ? g.updatedAt : new Date().toISOString(),
   };
 
   const imageUrl = sanitizeCatalogMediaUrl(g.imageUrl);
@@ -308,23 +388,32 @@ function sanitizeCatalogStoreItem(raw: unknown): Record<string, unknown> | null 
   const item = raw as Record<string, unknown>;
   const id = sanitizeShortString(item.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
   if (!id || LEGACY_MOCK_STORE_IDS.has(id)) return null;
-  const nameAr = sanitizeShortString(item.nameAr || item.name, 100);
+  const nameAr = sanitizeShortString(item.nameAr || item.nameEn || item.name, 100);
   if (!nameAr) return null;
   const allowedTypes = new Set(["frame", "entrance", "badge", "bubble"]);
   const typeRaw = sanitizeShortString(item.type, 24);
   if (!allowedTypes.has(typeRaw)) return null;
 
+  const resolvedEn = sanitizeShortString(item.nameEn || item.name || nameAr, 100) || nameAr;
   const out: Record<string, unknown> = {
     id,
     type: typeRaw,
-    name: sanitizeShortString(item.name || nameAr, 100) || nameAr,
+    name: resolvedEn,
+    nameEn: resolvedEn,
     nameAr,
-    priceCoins: Math.max(0, Math.min(100000000, Math.round(Number(item.priceCoins) || 0))),
+    priceCoins: Math.max(0, Math.min(1000000000, Math.round(Number(item.priceCoins) || 0))),
     durationDays: Math.max(1, Math.min(3650, Math.round(Number(item.durationDays) || 30))),
     icon: sanitizeShortString(item.icon, 24) || "✨",
     accentColor: sanitizeShortString(item.accentColor, 32) || "#f59e0b",
     descriptionAr: sanitizeShortString(item.descriptionAr, 240) || "عنصر حصري من المتجر",
+    updatedAt:
+      typeof item.updatedAt === "string" && item.updatedAt
+        ? item.updatedAt
+        : new Date().toISOString(),
   };
+  if (typeof item.previewGradient === "string" && item.previewGradient.trim()) {
+    out.previewGradient = sanitizeShortString(item.previewGradient, 120);
+  }
   const previewUrl = sanitizeCatalogMediaUrl(item.previewUrl);
   const videoUrl = sanitizeCatalogMediaUrl(item.videoUrl);
   if (previewUrl) out.previewUrl = previewUrl;
@@ -351,51 +440,191 @@ function sanitizeCatalogBackground(raw: unknown): Record<string, unknown> | null
     nameAr: sanitizeShortString(bg.nameAr, 100) || "خلفية غرفة مخصصة",
     imageUrl,
     createdAt: sanitizeShortString(bg.createdAt, 32) || new Date().toISOString().slice(0, 10),
+    updatedAt:
+      typeof bg.updatedAt === "string" && bg.updatedAt ? bg.updatedAt : new Date().toISOString(),
   };
 }
 
-function loadServerCatalog(): ServerCatalogState {
+function parseCatalogFileContent(rawContent: string): Partial<ServerCatalogState> | null {
   try {
-    if (fs.existsSync(CATALOG_FILE)) {
-      const raw = fs.readFileSync(CATALOG_FILE, "utf8");
-      const parsed = JSON.parse(raw) as Partial<ServerCatalogState>;
-      const gifts = Array.isArray(parsed.gifts)
-        ? parsed.gifts
-            .map(sanitizeCatalogGift)
-            .filter((x): x is Record<string, unknown> => Boolean(x))
-        : [];
-      const storeItems = Array.isArray(parsed.storeItems)
-        ? parsed.storeItems
-            .map(sanitizeCatalogStoreItem)
-            .filter((x): x is Record<string, unknown> => Boolean(x))
-        : [];
-      const roomBackgrounds = Array.isArray(parsed.roomBackgrounds)
-        ? parsed.roomBackgrounds
-            .map(sanitizeCatalogBackground)
-            .filter((x): x is Record<string, unknown> => Boolean(x))
-        : [];
-      return {
-        version: typeof parsed.version === "number" ? parsed.version : 1,
-        updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
-        gifts,
-        storeItems,
-        roomBackgrounds,
-      };
+    const parsed = JSON.parse(rawContent) as Partial<ServerCatalogState>;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadServerCatalog(): ServerCatalogState {
+  const candidates = [
+    CATALOG_FILE,
+    path.join(TMP_RUNTIME_DATA_DIR, "catalog.json"),
+    BUNDLED_CATALOG_FILE,
+  ];
+
+  let primaryParsed: Partial<ServerCatalogState> | null = null;
+  let snapshotParsed: Partial<ServerCatalogState> | null = null;
+
+  for (const filePath of candidates) {
+    if (!fs.existsSync(filePath)) continue;
+    const parsed = parseCatalogFileContent(fs.readFileSync(filePath, "utf8"));
+    if (!parsed) continue;
+    if (filePath === BUNDLED_CATALOG_FILE) {
+      snapshotParsed = parsed;
+    } else if (!primaryParsed) {
+      primaryParsed = parsed;
     }
-  } catch (err) {
-    console.warn("Could not read server catalog file:", err);
+  }
+
+  const base = primaryParsed || snapshotParsed || {};
+  const deletedGiftIds = Array.isArray(base.deletedGiftIds)
+    ? base.deletedGiftIds.map((id) => String(id)).slice(0, 500)
+    : [];
+  const deletedStoreIds = Array.isArray(base.deletedStoreIds)
+    ? base.deletedStoreIds.map((id) => String(id)).slice(0, 500)
+    : [];
+  const deletedBackgroundIds = Array.isArray(base.deletedBackgroundIds)
+    ? base.deletedBackgroundIds.map((id) => String(id)).slice(0, 500)
+    : [];
+
+  const deletedGiftSet = new Set(deletedGiftIds);
+  const deletedStoreSet = new Set(deletedStoreIds);
+  const deletedBgSet = new Set(deletedBackgroundIds);
+
+  const mergeLists = (
+    firstRaw: unknown[] | undefined,
+    secondRaw: unknown[] | undefined,
+    sanitizer: (x: unknown) => Record<string, unknown> | null,
+    deletedSet: Set<string>
+  ): Record<string, unknown>[] => {
+    const out: Record<string, unknown>[] = [];
+    const seen = new Set<string>();
+    for (const list of [firstRaw || [], secondRaw || []]) {
+      for (const item of list) {
+        const clean = sanitizer(item);
+        if (!clean) continue;
+        const id = String(clean.id);
+        if (deletedSet.has(id) || seen.has(id)) continue;
+        seen.add(id);
+        out.push(clean);
+      }
+    }
+    return out;
+  };
+
+  const gifts = mergeLists(
+    Array.isArray(primaryParsed?.gifts) ? primaryParsed.gifts : [],
+    Array.isArray(snapshotParsed?.gifts) ? snapshotParsed.gifts : [],
+    sanitizeCatalogGift,
+    deletedGiftSet
+  );
+  const storeItems = mergeLists(
+    Array.isArray(primaryParsed?.storeItems) ? primaryParsed.storeItems : [],
+    Array.isArray(snapshotParsed?.storeItems) ? snapshotParsed.storeItems : [],
+    sanitizeCatalogStoreItem,
+    deletedStoreSet
+  );
+  const roomBackgrounds = mergeLists(
+    Array.isArray(primaryParsed?.roomBackgrounds) ? primaryParsed.roomBackgrounds : [],
+    Array.isArray(snapshotParsed?.roomBackgrounds) ? snapshotParsed.roomBackgrounds : [],
+    sanitizeCatalogBackground,
+    deletedBgSet
+  );
+
+  return {
+    version: typeof base.version === "number" ? base.version : 1,
+    updatedAt: typeof base.updatedAt === "string" ? base.updatedAt : new Date().toISOString(),
+    gifts,
+    storeItems,
+    roomBackgrounds,
+    deletedGiftIds,
+    deletedStoreIds,
+    deletedBackgroundIds,
+  };
+}
+
+function loadServerDashboardState(): ServerDashboardState {
+  const candidates = [
+    DASHBOARD_STATE_FILE,
+    path.join(TMP_RUNTIME_DATA_DIR, "dashboard-state.json"),
+  ];
+  for (const filePath of candidates) {
+    try {
+      if (fs.existsSync(filePath)) {
+        const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<ServerDashboardState>;
+        if (parsed && typeof parsed === "object") {
+          return {
+            version: typeof parsed.version === "number" ? parsed.version : 1,
+            updatedAt:
+              typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
+            luckyConfig:
+              parsed.luckyConfig && typeof parsed.luckyConfig === "object"
+                ? parsed.luckyConfig
+                : null,
+            agoraConfig:
+              parsed.agoraConfig && typeof parsed.agoraConfig === "object"
+                ? parsed.agoraConfig
+                : null,
+            userOverrides:
+              parsed.userOverrides && typeof parsed.userOverrides === "object"
+                ? parsed.userOverrides
+                : {},
+            closedRoomIds: Array.isArray(parsed.closedRoomIds)
+              ? parsed.closedRoomIds.map(String).slice(-300)
+              : [],
+            customRooms: Array.isArray(parsed.customRooms) ? parsed.customRooms.slice(-200) : [],
+            roomModOverrides:
+              parsed.roomModOverrides && typeof parsed.roomModOverrides === "object"
+                ? parsed.roomModOverrides
+                : {},
+            agents: Array.isArray(parsed.agents) ? parsed.agents.slice(-200) : [],
+            agencyStatusOverrides:
+              parsed.agencyStatusOverrides && typeof parsed.agencyStatusOverrides === "object"
+                ? parsed.agencyStatusOverrides
+                : {},
+            adminTransactions: Array.isArray(parsed.adminTransactions)
+              ? parsed.adminTransactions.slice(0, 100)
+              : [],
+            recentCommands: Array.isArray(parsed.recentCommands)
+              ? parsed.recentCommands.slice(0, 100)
+              : [],
+          };
+        }
+      }
+    } catch (err) {
+      console.warn("Could not read server dashboard state file:", err);
+    }
   }
   return {
     version: 1,
     updatedAt: new Date().toISOString(),
-    gifts: [],
-    storeItems: [],
-    roomBackgrounds: [],
+    luckyConfig: null,
+    agoraConfig: null,
+    userOverrides: {},
+    closedRoomIds: [],
+    customRooms: [],
+    roomModOverrides: {},
+    agents: [],
+    agencyStatusOverrides: {},
+    adminTransactions: [],
+    recentCommands: [],
   };
 }
 
 let serverCatalog: ServerCatalogState = loadServerCatalog();
+let serverDashboardState: ServerDashboardState = loadServerDashboardState();
 const catalogSseClients = new Set<express.Response>();
+let broadcastWsEventToAll: ((payload: unknown) => void) | null = null;
+
+function broadcastSseEvent(eventName: string, payload: unknown): void {
+  const frame = `event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`;
+  catalogSseClients.forEach((clientRes) => {
+    try {
+      clientRes.write(frame);
+    } catch {
+      catalogSseClients.delete(clientRes);
+    }
+  });
+}
 
 function persistAndBroadcastCatalog(): void {
   serverCatalog = {
@@ -408,13 +637,35 @@ function persistAndBroadcastCatalog(): void {
   } catch (err) {
     console.warn("Could not persist server catalog:", err);
   }
-  const frame = `event: catalog:update\ndata: ${JSON.stringify(serverCatalog)}\n\n`;
-  catalogSseClients.forEach((clientRes) => {
-    try {
-      clientRes.write(frame);
-    } catch {
-      catalogSseClients.delete(clientRes);
-    }
+  broadcastSseEvent("catalog:update", serverCatalog);
+  broadcastWsEventToAll?.({
+    type: "server:catalog_update",
+    catalog: serverCatalog,
+  });
+}
+
+function persistDashboardState(command?: ServerDashboardCommand): void {
+  serverDashboardState = {
+    ...serverDashboardState,
+    version: serverDashboardState.version + 1,
+    updatedAt: new Date().toISOString(),
+    recentCommands: command
+      ? [command, ...serverDashboardState.recentCommands].slice(0, 100)
+      : serverDashboardState.recentCommands,
+  };
+  try {
+    writeJsonAtomic(DASHBOARD_STATE_FILE, serverDashboardState, 0o644);
+  } catch (err) {
+    console.warn("Could not persist server dashboard state:", err);
+  }
+  if (command) {
+    broadcastSseEvent("dashboard:command", command);
+  }
+  broadcastSseEvent("server:state", serverDashboardState);
+  broadcastWsEventToAll?.({
+    type: "server:dashboard_command",
+    command: command || null,
+    state: serverDashboardState,
   });
 }
 
@@ -526,51 +777,146 @@ async function fetchPublicFirestoreCollection(
   }
 }
 
-async function hydrateCatalogFromFirestoreIfEmpty(): Promise<void> {
-  if (
-    serverCatalog.gifts.length > 0 &&
-    serverCatalog.storeItems.length > 0 &&
-    serverCatalog.roomBackgrounds.length > 0
-  ) {
-    return;
+function encodeFirestoreValue(val: unknown): Record<string, unknown> | undefined {
+  if (val === undefined) return undefined;
+  if (val === null) return { nullValue: null };
+  if (typeof val === "boolean") return { booleanValue: val };
+  if (typeof val === "number") {
+    if (!Number.isFinite(val)) return undefined;
+    return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
   }
+  if (typeof val === "string") return { stringValue: val };
+  if (Array.isArray(val)) {
+    return {
+      arrayValue: {
+        values: val
+          .map((item) => encodeFirestoreValue(item))
+          .filter((v): v is Record<string, unknown> => Boolean(v)),
+      },
+    };
+  }
+  if (typeof val === "object") {
+    const fields: Record<string, Record<string, unknown>> = {};
+    for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+      const encoded = encodeFirestoreValue(v);
+      if (encoded) fields[k] = encoded;
+    }
+    return { mapValue: { fields } };
+  }
+  return undefined;
+}
+
+async function mirrorDocToFirestoreWithBearer(
+  authHeader: string | undefined,
+  collectionName: string,
+  docId: string,
+  docPayload: Record<string, unknown> | null
+): Promise<void> {
+  if (!FIREBASE_PROJECT_ID || !authHeader) return;
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  if (!token || token.startsWith("adm1.")) return;
+
+  const docUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+    FIREBASE_PROJECT_ID
+  )}/databases/(default)/documents/${encodeURIComponent(collectionName)}/${encodeURIComponent(
+    docId
+  )}`;
+
+  try {
+    if (docPayload === null) {
+      await fetch(docUrl, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return;
+    }
+
+    const fields: Record<string, Record<string, unknown>> = {};
+    for (const [k, v] of Object.entries(docPayload)) {
+      const encoded = encodeFirestoreValue(v);
+      if (encoded) fields[k] = encoded;
+    }
+
+    await fetch(docUrl, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ fields }),
+    });
+  } catch {
+    // Non-fatal mirror best effort
+  }
+}
+
+async function hydrateCatalogFromFirestoreIfEmpty(): Promise<void> {
   const [fsGifts, fsStore, fsBgs] = await Promise.all([
-    serverCatalog.gifts.length === 0 ? fetchPublicFirestoreCollection("auravoice_gifts") : [],
-    serverCatalog.storeItems.length === 0
-      ? fetchPublicFirestoreCollection("auravoice_store_items")
-      : [],
-    serverCatalog.roomBackgrounds.length === 0
-      ? fetchPublicFirestoreCollection("auravoice_room_backgrounds")
-      : [],
+    fetchPublicFirestoreCollection("auravoice_gifts"),
+    fetchPublicFirestoreCollection("auravoice_store_items"),
+    fetchPublicFirestoreCollection("auravoice_room_backgrounds"),
   ]);
 
+  const deletedGifts = new Set(serverCatalog.deletedGiftIds);
+  const deletedStore = new Set(serverCatalog.deletedStoreIds);
+  const deletedBgs = new Set(serverCatalog.deletedBackgroundIds);
+
   let changed = false;
-  if (serverCatalog.gifts.length === 0 && fsGifts.length > 0) {
-    const clean = fsGifts
-      .map(sanitizeCatalogGift)
-      .filter((x): x is Record<string, unknown> => Boolean(x));
-    if (clean.length > 0) {
-      serverCatalog.gifts = clean;
-      changed = true;
+
+  const mergeMissingOrNewer = (
+    currentList: Record<string, unknown>[],
+    remoteRaw: Record<string, unknown>[],
+    sanitizer: (x: unknown) => Record<string, unknown> | null,
+    deletedSet: Set<string>
+  ): Record<string, unknown>[] => {
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const item of currentList) {
+      byId.set(String(item.id), item);
     }
+    for (const raw of remoteRaw) {
+      const clean = sanitizer(raw);
+      if (!clean) continue;
+      const id = String(clean.id);
+      if (deletedSet.has(id)) continue;
+      const existing = byId.get(id);
+      if (!existing) {
+        byId.set(id, clean);
+        changed = true;
+      } else {
+        const existingTs = Date.parse(String(existing.updatedAt || "")) || 0;
+        const remoteTs = Date.parse(String(clean.updatedAt || "")) || 0;
+        if (remoteTs > existingTs) {
+          byId.set(id, clean);
+          changed = true;
+        }
+      }
+    }
+    return Array.from(byId.values());
+  };
+
+  if (fsGifts.length > 0) {
+    serverCatalog.gifts = mergeMissingOrNewer(
+      serverCatalog.gifts,
+      fsGifts,
+      sanitizeCatalogGift,
+      deletedGifts
+    );
   }
-  if (serverCatalog.storeItems.length === 0 && fsStore.length > 0) {
-    const clean = fsStore
-      .map(sanitizeCatalogStoreItem)
-      .filter((x): x is Record<string, unknown> => Boolean(x));
-    if (clean.length > 0) {
-      serverCatalog.storeItems = clean;
-      changed = true;
-    }
+  if (fsStore.length > 0) {
+    serverCatalog.storeItems = mergeMissingOrNewer(
+      serverCatalog.storeItems,
+      fsStore,
+      sanitizeCatalogStoreItem,
+      deletedStore
+    );
   }
-  if (serverCatalog.roomBackgrounds.length === 0 && fsBgs.length > 0) {
-    const clean = fsBgs
-      .map(sanitizeCatalogBackground)
-      .filter((x): x is Record<string, unknown> => Boolean(x));
-    if (clean.length > 0) {
-      serverCatalog.roomBackgrounds = clean;
-      changed = true;
-    }
+  if (fsBgs.length > 0) {
+    serverCatalog.roomBackgrounds = mergeMissingOrNewer(
+      serverCatalog.roomBackgrounds,
+      fsBgs,
+      sanitizeCatalogBackground,
+      deletedBgs
+    );
   }
 
   if (changed) {
@@ -893,6 +1239,12 @@ async function startServer() {
     room.forEach((peer) => {
       if (excludePeerId && peer.peerId === excludePeerId) return;
       safeWsSend(peer.ws, payload);
+    });
+  };
+
+  broadcastWsEventToAll = (payload: unknown) => {
+    socketToSession.forEach((_sess, ws) => {
+      safeWsSend(ws, payload);
     });
   };
 
@@ -1241,8 +1593,10 @@ async function startServer() {
   app.get("/api/health", (_req, res) => {
     res.json({
       status: "ok",
+      mode: "express_ws",
       firebaseProjectId: FIREBASE_PROJECT_ID || null,
       catalogVersion: serverCatalog.version,
+      dashboardVersion: serverDashboardState.version,
       catalogCounts: {
         gifts: serverCatalog.gifts.length,
         storeItems: serverCatalog.storeItems.length,
@@ -1464,14 +1818,24 @@ async function startServer() {
   });
 
   // ===========================================================================
-  // PUBLIC + REAL-TIME SSE CATALOG SYNC ROUTES (All Users Receive Instantly)
+  // PUBLIC + REAL-TIME SSE CATALOG & COMMAND SYNC ROUTES (All Users Receive Instantly)
   // ===========================================================================
   app.get("/api/catalog", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json({ ok: true, ...serverCatalog });
+    res.json({ ok: true, mode: "express_ws", ...serverCatalog });
   });
 
-  app.get("/api/catalog/stream", (req, res) => {
+  app.get("/api/server/state", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ok: true,
+      mode: "express_ws",
+      catalog: serverCatalog,
+      dashboardState: serverDashboardState,
+    });
+  });
+
+  const handleSyncStream = (req: express.Request, res: express.Response) => {
     res.status(200);
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -1481,6 +1845,7 @@ async function startServer() {
 
     catalogSseClients.add(res);
     res.write(`event: catalog:init\ndata: ${JSON.stringify(serverCatalog)}\n\n`);
+    res.write(`event: server:state\ndata: ${JSON.stringify(serverDashboardState)}\n\n`);
 
     const keepAlive = setInterval(() => {
       try {
@@ -1495,9 +1860,12 @@ async function startServer() {
       clearInterval(keepAlive);
       catalogSseClients.delete(res);
     });
-  });
+  };
 
-  // Admin-Protected Catalog Mutation Endpoints (Persist + Broadcast to All Users)
+  app.get("/api/catalog/stream", handleSyncStream);
+  app.get("/api/sync/stream", handleSyncStream);
+
+  // Admin-Protected Catalog Mutation Endpoints (Persist + Broadcast to All Users + Mirror to Firestore)
   app.post("/api/admin/catalog/gifts", async (req, res) => {
     const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
     if (!authCheck.ok) {
@@ -1510,8 +1878,10 @@ async function startServer() {
       return;
     }
     const giftId = String(clean.id);
+    serverCatalog.deletedGiftIds = serverCatalog.deletedGiftIds.filter((id) => id !== giftId);
     serverCatalog.gifts = [clean, ...serverCatalog.gifts.filter((g) => String(g.id) !== giftId)];
     persistAndBroadcastCatalog();
+    void mirrorDocToFirestoreWithBearer(req.headers.authorization, "auravoice_gifts", giftId, clean);
     res.status(201).json({ ok: true, gift: clean, version: serverCatalog.version });
   });
 
@@ -1523,16 +1893,23 @@ async function startServer() {
     }
     const giftId = sanitizeShortString(req.params.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
     const existing = serverCatalog.gifts.find((g) => String(g.id) === giftId) || { id: giftId };
-    const merged = sanitizeCatalogGift({ ...existing, ...(req.body || {}), id: giftId });
+    const merged = sanitizeCatalogGift({
+      ...existing,
+      ...(req.body || {}),
+      id: giftId,
+      updatedAt: new Date().toISOString(),
+    });
     if (!merged) {
       res.status(400).json({ error: "تحديث الهدية غير صالح." });
       return;
     }
+    serverCatalog.deletedGiftIds = serverCatalog.deletedGiftIds.filter((id) => id !== giftId);
     const exists = serverCatalog.gifts.some((g) => String(g.id) === giftId);
     serverCatalog.gifts = exists
       ? serverCatalog.gifts.map((g) => (String(g.id) === giftId ? merged : g))
       : [merged, ...serverCatalog.gifts];
     persistAndBroadcastCatalog();
+    void mirrorDocToFirestoreWithBearer(req.headers.authorization, "auravoice_gifts", giftId, merged);
     res.json({ ok: true, gift: merged, version: serverCatalog.version });
   });
 
@@ -1544,7 +1921,11 @@ async function startServer() {
     }
     const giftId = sanitizeShortString(req.params.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
     serverCatalog.gifts = serverCatalog.gifts.filter((g) => String(g.id) !== giftId);
+    if (giftId && !serverCatalog.deletedGiftIds.includes(giftId)) {
+      serverCatalog.deletedGiftIds = [giftId, ...serverCatalog.deletedGiftIds].slice(0, 500);
+    }
     persistAndBroadcastCatalog();
+    void mirrorDocToFirestoreWithBearer(req.headers.authorization, "auravoice_gifts", giftId, null);
     res.json({ ok: true, deletedId: giftId, version: serverCatalog.version });
   });
 
@@ -1560,11 +1941,18 @@ async function startServer() {
       return;
     }
     const itemId = String(clean.id);
+    serverCatalog.deletedStoreIds = serverCatalog.deletedStoreIds.filter((id) => id !== itemId);
     serverCatalog.storeItems = [
       clean,
       ...serverCatalog.storeItems.filter((i) => String(i.id) !== itemId),
     ];
     persistAndBroadcastCatalog();
+    void mirrorDocToFirestoreWithBearer(
+      req.headers.authorization,
+      "auravoice_store_items",
+      itemId,
+      clean
+    );
     res.status(201).json({ ok: true, item: clean, version: serverCatalog.version });
   });
 
@@ -1576,16 +1964,28 @@ async function startServer() {
     }
     const itemId = sanitizeShortString(req.params.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
     const existing = serverCatalog.storeItems.find((i) => String(i.id) === itemId) || { id: itemId };
-    const merged = sanitizeCatalogStoreItem({ ...existing, ...(req.body || {}), id: itemId });
+    const merged = sanitizeCatalogStoreItem({
+      ...existing,
+      ...(req.body || {}),
+      id: itemId,
+      updatedAt: new Date().toISOString(),
+    });
     if (!merged) {
       res.status(400).json({ error: "تحديث عنصر المتجر غير صالح." });
       return;
     }
+    serverCatalog.deletedStoreIds = serverCatalog.deletedStoreIds.filter((id) => id !== itemId);
     const exists = serverCatalog.storeItems.some((i) => String(i.id) === itemId);
     serverCatalog.storeItems = exists
       ? serverCatalog.storeItems.map((i) => (String(i.id) === itemId ? merged : i))
       : [merged, ...serverCatalog.storeItems];
     persistAndBroadcastCatalog();
+    void mirrorDocToFirestoreWithBearer(
+      req.headers.authorization,
+      "auravoice_store_items",
+      itemId,
+      merged
+    );
     res.json({ ok: true, item: merged, version: serverCatalog.version });
   });
 
@@ -1597,7 +1997,16 @@ async function startServer() {
     }
     const itemId = sanitizeShortString(req.params.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_");
     serverCatalog.storeItems = serverCatalog.storeItems.filter((i) => String(i.id) !== itemId);
+    if (itemId && !serverCatalog.deletedStoreIds.includes(itemId)) {
+      serverCatalog.deletedStoreIds = [itemId, ...serverCatalog.deletedStoreIds].slice(0, 500);
+    }
     persistAndBroadcastCatalog();
+    void mirrorDocToFirestoreWithBearer(
+      req.headers.authorization,
+      "auravoice_store_items",
+      itemId,
+      null
+    );
     res.json({ ok: true, deletedId: itemId, version: serverCatalog.version });
   });
 
@@ -1613,11 +2022,26 @@ async function startServer() {
       return;
     }
     const bgId = String(clean.id);
+    serverCatalog.deletedBackgroundIds = serverCatalog.deletedBackgroundIds.filter(
+      (id) => id !== bgId
+    );
     serverCatalog.roomBackgrounds = [
       clean,
       ...serverCatalog.roomBackgrounds.filter((b) => String(b.id) !== bgId),
     ];
     persistAndBroadcastCatalog();
+    void mirrorDocToFirestoreWithBearer(
+      req.headers.authorization,
+      "auravoice_room_backgrounds",
+      bgId,
+      {
+        id: clean.id,
+        nameAr: clean.nameAr,
+        imageUrl: clean.imageUrl,
+        createdAt: clean.createdAt,
+        updatedAt: clean.updatedAt,
+      }
+    );
     res.status(201).json({ ok: true, background: clean, version: serverCatalog.version });
   });
 
@@ -1631,7 +2055,19 @@ async function startServer() {
     serverCatalog.roomBackgrounds = serverCatalog.roomBackgrounds.filter(
       (b) => String(b.id) !== bgId
     );
+    if (bgId && !serverCatalog.deletedBackgroundIds.includes(bgId)) {
+      serverCatalog.deletedBackgroundIds = [bgId, ...serverCatalog.deletedBackgroundIds].slice(
+        0,
+        500
+      );
+    }
     persistAndBroadcastCatalog();
+    void mirrorDocToFirestoreWithBearer(
+      req.headers.authorization,
+      "auravoice_room_backgrounds",
+      bgId,
+      null
+    );
     res.json({ ok: true, deletedId: bgId, version: serverCatalog.version });
   });
 
@@ -1649,35 +2085,47 @@ async function startServer() {
     let changed = false;
 
     if (Array.isArray(body.gifts)) {
+      const deletedSet = new Set(serverCatalog.deletedGiftIds);
       const existingIds = new Set(serverCatalog.gifts.map((g) => String(g.id)));
       for (const raw of body.gifts) {
         const clean = sanitizeCatalogGift(raw);
-        if (clean && !existingIds.has(String(clean.id))) {
-          serverCatalog.gifts.push(clean);
-          existingIds.add(String(clean.id));
-          changed = true;
+        if (clean) {
+          const cid = String(clean.id);
+          if (!deletedSet.has(cid) && !existingIds.has(cid)) {
+            serverCatalog.gifts.push(clean);
+            existingIds.add(cid);
+            changed = true;
+          }
         }
       }
     }
     if (Array.isArray(body.storeItems)) {
+      const deletedSet = new Set(serverCatalog.deletedStoreIds);
       const existingIds = new Set(serverCatalog.storeItems.map((i) => String(i.id)));
       for (const raw of body.storeItems) {
         const clean = sanitizeCatalogStoreItem(raw);
-        if (clean && !existingIds.has(String(clean.id))) {
-          serverCatalog.storeItems.push(clean);
-          existingIds.add(String(clean.id));
-          changed = true;
+        if (clean) {
+          const cid = String(clean.id);
+          if (!deletedSet.has(cid) && !existingIds.has(cid)) {
+            serverCatalog.storeItems.push(clean);
+            existingIds.add(cid);
+            changed = true;
+          }
         }
       }
     }
     if (Array.isArray(body.roomBackgrounds)) {
+      const deletedSet = new Set(serverCatalog.deletedBackgroundIds);
       const existingIds = new Set(serverCatalog.roomBackgrounds.map((b) => String(b.id)));
       for (const raw of body.roomBackgrounds) {
         const clean = sanitizeCatalogBackground(raw);
-        if (clean && !existingIds.has(String(clean.id))) {
-          serverCatalog.roomBackgrounds.push(clean);
-          existingIds.add(String(clean.id));
-          changed = true;
+        if (clean) {
+          const cid = String(clean.id);
+          if (!deletedSet.has(cid) && !existingIds.has(cid)) {
+            serverCatalog.roomBackgrounds.push(clean);
+            existingIds.add(cid);
+            changed = true;
+          }
         }
       }
     }
@@ -1686,6 +2134,192 @@ async function startServer() {
       persistAndBroadcastCatalog();
     }
     res.json({ ok: true, changed, ...serverCatalog });
+  });
+
+  // Authoritative Admin Dashboard Command Dispatch (Updates State + Broadcasts Instantly to ALL Users)
+  app.post("/api/admin/commands", async (req, res) => {
+    const authCheck = await verifyAdminFirebaseToken(req.headers.authorization);
+    if (!authCheck.ok) {
+      res.status(403).json({ error: authCheck.error || "غير مصرح" });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      id?: unknown;
+      type?: unknown;
+      payload?: unknown;
+    };
+    const cmdType = sanitizeShortString(body.type, 48);
+    if (!cmdType) {
+      res.status(400).json({ error: "نوع الأمر الإداري مطلوب." });
+      return;
+    }
+    const payload =
+      body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
+        ? (body.payload as Record<string, unknown>)
+        : {};
+    const cmdId =
+      sanitizeShortString(body.id, 96).replace(/[^a-zA-Z0-9_-]/g, "_") ||
+      `cmd_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+    const nowIso = new Date().toISOString();
+
+    if (cmdType === "ADD_BALANCE") {
+      const userId = sanitizeShortString(payload.userId, 128);
+      if (userId) {
+        const prev = serverDashboardState.userOverrides[userId] || {};
+        serverDashboardState.userOverrides[userId] = {
+          ...prev,
+          ...(typeof payload.coins === "number" ? { coins: Math.max(0, payload.coins) } : {}),
+          ...(typeof payload.diamonds === "number"
+            ? { diamonds: Math.max(0, payload.diamonds) }
+            : {}),
+          updatedAt: nowIso,
+        };
+      }
+      if (payload.tx && typeof payload.tx === "object" && !Array.isArray(payload.tx)) {
+        serverDashboardState.adminTransactions = [
+          payload.tx as Record<string, unknown>,
+          ...serverDashboardState.adminTransactions,
+        ].slice(0, 100);
+      }
+    } else if (cmdType === "TOGGLE_BAN") {
+      const userId = sanitizeShortString(payload.userId, 128);
+      if (userId) {
+        const prev = serverDashboardState.userOverrides[userId] || {};
+        serverDashboardState.userOverrides[userId] = {
+          ...prev,
+          isBanned: Boolean(payload.isBanned),
+          updatedAt: nowIso,
+        };
+      }
+    } else if (cmdType === "TOGGLE_MUTE") {
+      const userId = sanitizeShortString(payload.userId, 128);
+      if (userId) {
+        const prev = serverDashboardState.userOverrides[userId] || {};
+        serverDashboardState.userOverrides[userId] = {
+          ...prev,
+          isMuted: Boolean(payload.isMuted),
+          updatedAt: nowIso,
+        };
+      }
+    } else if (cmdType === "SET_VIP_LEVEL") {
+      const userId = sanitizeShortString(payload.userId, 128);
+      if (userId) {
+        const prev = serverDashboardState.userOverrides[userId] || {};
+        serverDashboardState.userOverrides[userId] = {
+          ...prev,
+          vipLevel: Math.max(0, Math.min(20, Math.round(Number(payload.vipLevel) || 0))),
+          updatedAt: nowIso,
+        };
+      }
+    } else if (cmdType === "CLOSE_ROOM") {
+      const roomId = sanitizeShortString(payload.roomId, 128);
+      if (roomId) {
+        if (!serverDashboardState.closedRoomIds.includes(roomId)) {
+          serverDashboardState.closedRoomIds = [roomId, ...serverDashboardState.closedRoomIds].slice(
+            0,
+            300
+          );
+        }
+        serverDashboardState.customRooms = serverDashboardState.customRooms.filter(
+          (r) => String(r.id) !== roomId
+        );
+      }
+    } else if (cmdType === "CREATE_ROOM") {
+      const room =
+        payload.room && typeof payload.room === "object" && !Array.isArray(payload.room)
+          ? (payload.room as Record<string, unknown>)
+          : null;
+      if (room && typeof room.id === "string") {
+        const rid = room.id;
+        serverDashboardState.closedRoomIds = serverDashboardState.closedRoomIds.filter(
+          (id) => id !== rid
+        );
+        serverDashboardState.customRooms = [
+          room,
+          ...serverDashboardState.customRooms.filter((r) => String(r.id) !== rid),
+        ].slice(0, 200);
+      }
+    } else if (cmdType === "TOGGLE_ROOM_MODERATOR") {
+      const roomId = sanitizeShortString(payload.roomId, 128);
+      if (roomId) {
+        const moderators = Array.isArray(payload.moderators)
+          ? payload.moderators.map((id) => String(id)).slice(0, 100)
+          : [];
+        const bannedUserIds = Array.isArray(payload.bannedUserIds)
+          ? payload.bannedUserIds.map((id) => String(id)).slice(0, 200)
+          : undefined;
+        serverDashboardState.roomModOverrides[roomId] = {
+          moderators,
+          ...(bannedUserIds ? { bannedUserIds } : {}),
+          updatedAt: nowIso,
+        };
+      }
+    } else if (cmdType === "UPDATE_LUCKY_CONFIG") {
+      if (
+        payload.luckyConfig &&
+        typeof payload.luckyConfig === "object" &&
+        !Array.isArray(payload.luckyConfig)
+      ) {
+        serverDashboardState.luckyConfig = payload.luckyConfig as Record<string, unknown>;
+      }
+    } else if (cmdType === "UPDATE_AGORA_CONFIG") {
+      if (
+        payload.agoraConfig &&
+        typeof payload.agoraConfig === "object" &&
+        !Array.isArray(payload.agoraConfig)
+      ) {
+        serverDashboardState.agoraConfig = payload.agoraConfig as Record<string, unknown>;
+      }
+    } else if (cmdType === "CREATE_AGENT" || cmdType === "TOPUP_AGENT") {
+      const agent =
+        payload.agent && typeof payload.agent === "object" && !Array.isArray(payload.agent)
+          ? (payload.agent as Record<string, unknown>)
+          : null;
+      if (agent && typeof agent.id === "string") {
+        const aid = agent.id;
+        serverDashboardState.agents = [
+          agent,
+          ...serverDashboardState.agents.filter((a) => String(a.id) !== aid),
+        ].slice(0, 200);
+      }
+    } else if (cmdType === "UPDATE_AGENCY_STATUS") {
+      const agencyId = sanitizeShortString(payload.agencyId, 128);
+      const status = sanitizeShortString(payload.status, 32);
+      if (agencyId && status) {
+        serverDashboardState.agencyStatusOverrides[agencyId] = { status, updatedAt: nowIso };
+      }
+    } else if (cmdType === "PURGE_MOCK_CATALOGS") {
+      const legacyGifts = Array.isArray(payload.legacyGiftIds)
+        ? payload.legacyGiftIds.map(String)
+        : [];
+      const legacyStore = Array.isArray(payload.legacyStoreIds)
+        ? payload.legacyStoreIds.map(String)
+        : [];
+      const legacyGiftSet = new Set([...LEGACY_MOCK_GIFT_IDS, ...legacyGifts]);
+      const legacyStoreSet = new Set([...LEGACY_MOCK_STORE_IDS, ...legacyStore]);
+      serverCatalog.gifts = serverCatalog.gifts.filter((g) => !legacyGiftSet.has(String(g.id)));
+      serverCatalog.storeItems = serverCatalog.storeItems.filter(
+        (i) => !legacyStoreSet.has(String(i.id))
+      );
+      serverCatalog.deletedGiftIds = Array.from(
+        new Set([...serverCatalog.deletedGiftIds, ...legacyGiftSet])
+      ).slice(0, 500);
+      serverCatalog.deletedStoreIds = Array.from(
+        new Set([...serverCatalog.deletedStoreIds, ...legacyStoreSet])
+      ).slice(0, 500);
+      persistAndBroadcastCatalog();
+    }
+
+    const command: ServerDashboardCommand = {
+      id: cmdId,
+      type: cmdType,
+      payload,
+      issuedBy: authCheck.email || "admin",
+      createdAt: Date.now(),
+    };
+    persistDashboardState(command);
+    res.json({ ok: true, command, version: serverDashboardState.version });
   });
 
   app.get("/api/ip", (req, res) => {

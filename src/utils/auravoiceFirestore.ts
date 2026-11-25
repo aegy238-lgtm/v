@@ -357,6 +357,15 @@ export async function syncAllAuraVoiceToFirestore(data: {
   }
 }
 
+export interface DashboardSyncPulse {
+  commandId: string;
+  type: string;
+  payload: Record<string, unknown>;
+  issuedBy: string;
+  createdAt: number;
+  updatedAt: string;
+}
+
 /**
  * Public non-PII collection listeners (rooms, gifts, store, agencies, lucky config).
  */
@@ -369,6 +378,7 @@ export function subscribeToPublicAuraCollections(handlers: {
   onLuckyConfig: (cfg: LuckyGiftConfig) => void;
   onAgoraConfig?: (cfg: AgoraVoiceConfig) => void;
   onJackpotBanner?: (banner: GlobalJackpotBannerState) => void;
+  onDashboardSync?: (pulse: DashboardSyncPulse) => void;
 }): () => void {
   if (!db) return () => {};
   const unsubRooms = onSnapshot(
@@ -477,6 +487,21 @@ export function subscribeToPublicAuraCollections(handlers: {
     (error) => handleFirestoreError(error, OperationType.GET, `${COLLECTIONS.config}/jackpot`)
   );
 
+  const unsubDashboardSync = onSnapshot(
+    doc(db, COLLECTIONS.config, 'dashboard_sync'),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as DashboardSyncPulse;
+        if (data?.commandId && data?.type) {
+          handlers.onDashboardSync?.(data);
+        }
+      }
+    },
+    (error) => {
+      console.warn('subscribeDashboardSync notice:', error);
+    }
+  );
+
   return () => {
     unsubRooms();
     unsubRoomBgs();
@@ -486,6 +511,7 @@ export function subscribeToPublicAuraCollections(handlers: {
     unsubLucky();
     unsubAgora();
     unsubJackpot();
+    unsubDashboardSync();
   };
 }
 
@@ -943,6 +969,20 @@ export async function persistJackpotBanner(banner: GlobalJackpotBannerState): Pr
     );
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function persistDashboardSyncPulse(
+  pulse: Omit<DashboardSyncPulse, 'updatedAt'>
+): Promise<void> {
+  if (!db || !auth?.currentUser) return;
+  try {
+    await setDoc(
+      doc(db, COLLECTIONS.config, 'dashboard_sync'),
+      stripUndefinedForFirestore({ ...pulse, updatedAt: new Date().toISOString() })
+    );
+  } catch {
+    // Non-fatal best-effort pulse for serverless clients
   }
 }
 

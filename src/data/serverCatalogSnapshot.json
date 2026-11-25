@@ -1,0 +1,254 @@
+{
+  "version": 3,
+  "updatedAt": "2026-11-25T00:33:20.823Z",
+  "gifts": [
+    {
+      "id": "gift_custom_1795566806162",
+      "name": "ssss",
+      "nameAr": "ssss",
+      "category": "luxury",
+      "coinPrice": 100000000,
+      "diamondReward": 500,
+      "icon": "🌟",
+      "accentColor": "#f59e0b",
+      "animationType": "luxury_banner",
+      "soundEffect": "fanfare",
+      "descriptionAr": "هدية عرض كامل الغرفة بمؤثرات مخصصة من لوحة التحكم",
+      "isLucky": false,
+      "imageUrl": "https://cdn.dbimg.app/Fe0LyzOu.mp4",
+      "videoUrl": "https://cdn.dbimg.app/Fe0LyzOu.mp4"
+    },
+    {
+      "id": "gift_custom_1795320342997",
+      "name": "ا",
+      "nameAr": "ا",
+      "category": "luxury",
+      "coinPrice": 100000000,
+      "diamondReward": 500,
+      "icon": "🌟",
+      "accentColor": "#f59e0b",
+      "animationType": "luxury_banner",
+      "soundEffect": "fanfare",
+      "descriptionAr": "هدية عرض كامل الغرفة بمؤثرات مخصصة من لوحة التحكم",
+      "isLucky": false,
+      "imageUrl": "https://x02.me/i/iFHMe7.png",
+      "videoUrl": "https://cdn.dbimg.app/0wrqeqV5.mp4",
+      "effectDurationSec": 5
+    },
+    {
+      "id": "gift_custom_1795320494405",
+      "name": "ن",
+      "nameAr": "ن",
+      "category": "luxury",
+      "coinPrice": 10001,
+      "diamondReward": 500,
+      "icon": "🌟",
+      "accentColor": "#ec4899",
+      "animationType": "lollipop_matrix",
+      "soundEffect": "fanfare",
+      "descriptionAr": "هدية حصرية مضافة حديثاً عبر لوحة التحكم",
+      "isLucky": true
+    },
+    {
+      "id": "gift_custom_1795320617614",
+      "name": "ت",
+      "nameAr": "ت",
+      "category": "lucky",
+      "coinPrice": 100000000,
+      "diamondReward": 500,
+      "icon": "🫂",
+      "accentColor": "#ec4899",
+      "animationType": "lollipop_matrix",
+      "soundEffect": "fanfare",
+      "descriptionAr": "هدية حصرية مضافة حديثاً عبر لوحة التحكم",
+      "isLucky": true
+    },
+    {
+      "id": "gift_custom_1795346253875",
+      "name": "66",
+      "nameAr": "66",
+      "category": "luxury",
+      "coinPrice": 901,
+      "diamondReward": 500,
+      "icon": "🌟",
+      "accentColor": "#f59e0b",
+      "animationType": "luxury_banner",
+      "soundEffect": "fanfare",
+      "descriptionAr": "هدية عرض كامل الغرفة بمؤثرات مخصصة من لوحة التحكم",
+      "isLucky": false,
+      "imageUrl": "https://b.top4top.io/p_3978xi6fi1.png",
+      "videoUrl": "https://x02.me/i/4AgqV5.webp"
+    },
+    {
+      "id": "gift_custom_1795347136712",
+      "name": "66",
+      "nameAr": "66",
+      "category": "vip",
+      "coinPrice": 10151,
+      "diamondReward": 500,
+      "icon": "🌟",
+      "accentColor": "#f59e0b",
+      "animationType": "luxury_banner",
+      "soundEffect": "fanfare",
+      "descriptionAr": "هدية عرض كامل الغرفة بمؤثرات مخصصة من لوحة التحكم",
+      "isLucky": false,
+      "videoUrl": "https://cdn.dbimg.app/V7QdQVSs.mp4"
+    },
+    {
+      "id": "gift_custom_1795348210444",
+      "name": "1",
+      "nameAr": "1",
+      "category": "luxury",
+      "coinPrice": 100000000,
+      "diamondReward": 500,
+      "icon": "🌟",
+      "accentColor": "#f59e0b",
+      "animationType": "luxury_banner",
+      "soundEffect": "fanfare",
+      "descriptionAr": "هدية عرض كامل الغرفة بمؤثرات مخصصة من لوحة التحكم",
+      "isLucky": false,
+      "imageUrl": "https://x02.me/i/0wlNjN.png",
+      "videoUrl": "https://cdn.dbimg.app/DBzrXav8.mp4",
+      "effectDurationSec": 4
+    },
+    {
+      "id": "gift_custom_1795351427451",
+      "name": "s",
+      "nameAr": "s",
+      "category": "luxury",
+      "coinPrice": 1051,
+      "diamondReward": 500,
+      "icon": "🌟",
+      "accentColor": "#f59e0b",
+      "animationType": "luxury_banner",
+      "soundEffect": "fanfare",
+      "descriptionAr": "هدية عرض كامل الغرفة بمؤثرات مخصصة من لوحة التحكم",
+      "isLucky": false,
+      "imageUrl": "https://x02.me/i/a3NW9W.png",
+      "videoUrl": "https://cdn.dbimg.app/wGVxCAsE.mp4"
+    }
+  ],
+  "storeItems": [
+    {
+      "id": "entrance_custom_1795320048877",
+      "type": "entrance",
+      "name": "ت",
+      "nameAr": "ت",
+      "priceCoins": 50000,
+      "durationDays": 30,
+      "icon": "🚘",
+      "accentColor": "#f59e0b",
+      "descriptionAr": "تأثير دخولية فاخر يظهر عند دخولك إلى الغرف الصوتية",
+      "previewUrl": "https://a.top4top.io/m_3978zwcxm1.mp4",
+      "videoUrl": "https://b.top4top.io/m_3978xhca80.mp4"
+    },
+    {
+      "id": "entrance_custom_1795345668626",
+      "type": "entrance",
+      "name": "666",
+      "nameAr": "666",
+      "priceCoins": 50000,
+      "durationDays": 30,
+      "icon": "🚘",
+      "accentColor": "#f59e0b",
+      "descriptionAr": "تأثير دخولية فاخر يظهر عند دخولك إلى الغرف الصوتية",
+      "videoUrl": "https://cdn.dbimg.app/DBzrXav8.mp4",
+      "effectDurationSec": 4
+    },
+    {
+      "id": "frame_custom_1795317415858",
+      "type": "frame",
+      "name": "6",
+      "nameAr": "6",
+      "priceCoins": 50000,
+      "durationDays": 30,
+      "icon": "🪽",
+      "accentColor": "#f59e0b",
+      "descriptionAr": "إطار فاخر يحيط بصورتك على المايك وفي الملف الشخصي",
+      "previewUrl": "https://up6.cc/2026/11/179531732214271.png"
+    },
+    {
+      "id": "frame_custom_1795318400863",
+      "type": "frame",
+      "name": "36",
+      "nameAr": "36",
+      "priceCoins": 50000,
+      "durationDays": 30,
+      "icon": "🪽",
+      "accentColor": "#f59e0b",
+      "descriptionAr": "إطار فاخر يحيط بصورتك على المايك وفي الملف الشخصي",
+      "previewUrl": "https://up6.cc/2026/11/179531836896631.png"
+    },
+    {
+      "id": "frame_custom_1795348678242",
+      "type": "frame",
+      "name": "66",
+      "nameAr": "66",
+      "priceCoins": 50000,
+      "durationDays": 30,
+      "icon": "🪽",
+      "accentColor": "#f59e0b",
+      "descriptionAr": "إطار فاخر يحيط بصورتك على المايك وفي الملف الشخصي",
+      "previewUrl": "https://cdn.dbimg.app/tF9LTwrk.webp"
+    },
+    {
+      "id": "frame_custom_1795348754737",
+      "type": "frame",
+      "name": "66666",
+      "nameAr": "66666",
+      "priceCoins": 50000,
+      "durationDays": 30,
+      "icon": "🪽",
+      "accentColor": "#f59e0b",
+      "descriptionAr": "إطار فاخر يحيط بصورتك على المايك وفي الملف الشخصي",
+      "previewUrl": "https://cdn.dbimg.app/4UYbqIf7.webp"
+    }
+  ],
+  "roomBackgrounds": [
+    {
+      "id": "roombg_1795321267417",
+      "nameAr": "m",
+      "imageUrl": "https://h.top4top.io/p_3978heahy1.jpg",
+      "createdAt": "2026-11-22"
+    },
+    {
+      "id": "roombg_1795321410697",
+      "nameAr": "j",
+      "imageUrl": "https://l.top4top.io/p_3978q8v3n1.jpg",
+      "createdAt": "2026-11-22"
+    },
+    {
+      "id": "roombg_1795349214413",
+      "nameAr": "ss",
+      "imageUrl": "https://x02.me/i/ZWKImc.jpg",
+      "createdAt": "2026-11-22"
+    },
+    {
+      "id": "roombg_1795349296962",
+      "nameAr": "ss",
+      "imageUrl": "https://x02.me/i/7P78RQ.jpg",
+      "createdAt": "2026-11-22"
+    },
+    {
+      "id": "roombg_1795349419401",
+      "nameAr": "6",
+      "imageUrl": "https://x02.me/i/Dhgmwf.jpg",
+      "createdAt": "2026-11-22"
+    },
+    {
+      "id": "roombg_1795349493693",
+      "nameAr": "66",
+      "imageUrl": "https://x02.me/i/rTcvjv.jpg",
+      "createdAt": "2026-11-22"
+    },
+    {
+      "id": "roombg_1795353516944",
+      "nameAr": "s",
+      "imageUrl": "https://x02.me/i/QPl05U.jpg",
+      "createdAt": "2026-11-22"
+    }
+  ],
+  "deletedGiftIds": [],
+  "deletedStoreIds": [],
+  "deletedBackgroundIds": []
+}

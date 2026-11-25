@@ -82,6 +82,7 @@ export interface RoomBackground {
   nameAr: string;
   imageUrl: string;
   createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface VoiceRoom {
@@ -132,6 +133,7 @@ export interface GiftItem {
   isLucky?: boolean;
   isStarterDefault?: boolean;
   descriptionAr: string;
+  updatedAt?: string;
 }
 
 export interface LuckyGiftConfig {
@@ -183,6 +185,7 @@ export interface StoreItem {
   icon: string;
   vipLevelReq?: number;
   descriptionAr: string;
+  updatedAt?: string;
 }
 
 export interface UserInventoryItem {
