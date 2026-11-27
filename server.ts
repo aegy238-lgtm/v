@@ -711,19 +711,47 @@ function verifyAdminSessionToken(
   }
 }
 
-const PERMANENT_FIREBASE_PROJECT_ID = "shosho-chat-3e571";
-const PERMANENT_FIREBASE_WEB_API_KEY = "AIzaSyAAr9fCp9CsfGqTOpIMIx0EyVtechkLchQ";
-
-function readFirebaseAppletConfig(): { apiKey: string; projectId: string } {
-  return {
-    apiKey: PERMANENT_FIREBASE_WEB_API_KEY,
-    projectId: PERMANENT_FIREBASE_PROJECT_ID,
-  };
+function readFirebaseAppletConfig(): {
+  apiKey: string;
+  projectId: string;
+  firestoreDatabaseId: string;
+} {
+  const envApiKey = (process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY || "").trim();
+  const envProjectId = (process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || "").trim();
+  const envDatabaseId = (
+    process.env.FIREBASE_DATABASE_ID ||
+    process.env.VITE_FIREBASE_DATABASE_ID ||
+    ""
+  ).trim();
+  try {
+    const cfgPath = path.join(__dirname, "firebase-applet-config.json");
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      apiKey?: string;
+      projectId?: string;
+      firestoreDatabaseId?: string;
+    };
+    return {
+      apiKey: (typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "") || envApiKey,
+      projectId: (typeof parsed.projectId === "string" ? parsed.projectId.trim() : "") || envProjectId,
+      firestoreDatabaseId:
+        (typeof parsed.firestoreDatabaseId === "string" ? parsed.firestoreDatabaseId.trim() : "") ||
+        envDatabaseId ||
+        "(default)",
+    };
+  } catch {
+    return {
+      apiKey: envApiKey,
+      projectId: envProjectId,
+      firestoreDatabaseId: envDatabaseId || "(default)",
+    };
+  }
 }
 
 const FIREBASE_APPLET_CFG = readFirebaseAppletConfig();
 const FIREBASE_WEB_API_KEY = FIREBASE_APPLET_CFG.apiKey;
 const FIREBASE_PROJECT_ID = FIREBASE_APPLET_CFG.projectId;
+const FIREBASE_DATABASE_ID = FIREBASE_APPLET_CFG.firestoreDatabaseId || "(default)";
 
 function decodeFirestoreValue(val: Record<string, unknown> | undefined): unknown {
   if (!val || typeof val !== "object") return undefined;
@@ -753,15 +781,32 @@ async function fetchPublicFirestoreCollection(
 ): Promise<Record<string, unknown>[]> {
   if (!FIREBASE_PROJECT_ID) return [];
   try {
+    const keyQuery = FIREBASE_WEB_API_KEY
+      ? `?key=${encodeURIComponent(FIREBASE_WEB_API_KEY)}`
+      : "";
     const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
       FIREBASE_PROJECT_ID
-    )}/databases/(default)/documents/${encodeURIComponent(collectionName)}?pageSize=200`;
-    const resp = await fetch(url, { method: "GET" });
+    )}/databases/${encodeURIComponent(
+      FIREBASE_DATABASE_ID
+    )}/documents:runQuery${keyQuery}`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: collectionName }],
+          limit: 200,
+        },
+      }),
+    });
     if (!resp.ok) return [];
-    const data = (await resp.json()) as {
-      documents?: { name?: string; fields?: Record<string, Record<string, unknown>> }[];
-    };
-    const docs = Array.isArray(data.documents) ? data.documents : [];
+    const rows = (await resp.json()) as {
+      document?: { name?: string; fields?: Record<string, Record<string, unknown>> };
+    }[];
+    if (!Array.isArray(rows)) return [];
+    const docs = rows
+      .map((row) => row?.document)
+      .filter((d): d is { name?: string; fields?: Record<string, Record<string, unknown>> } => Boolean(d));
     return docs.map((d) => {
       const obj: Record<string, unknown> = {};
       if (d.fields) {
@@ -820,9 +865,9 @@ async function mirrorDocToFirestoreWithBearer(
 
   const docUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
     FIREBASE_PROJECT_ID
-  )}/databases/(default)/documents/${encodeURIComponent(collectionName)}/${encodeURIComponent(
-    docId
-  )}`;
+  )}/databases/${encodeURIComponent(FIREBASE_DATABASE_ID)}/documents/${encodeURIComponent(
+    collectionName
+  )}/${encodeURIComponent(docId)}`;
 
   try {
     if (docPayload === null) {
@@ -1600,6 +1645,7 @@ async function startServer() {
       status: "ok",
       mode: "express_ws",
       firebaseProjectId: FIREBASE_PROJECT_ID || null,
+      firebaseDatabaseId: FIREBASE_DATABASE_ID || null,
       catalogVersion: serverCatalog.version,
       dashboardVersion: serverDashboardState.version,
       catalogCounts: {

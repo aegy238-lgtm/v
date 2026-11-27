@@ -23,18 +23,29 @@ interface FirebaseAppletConfigShape {
   measurementId?: string;
 }
 
-export const PERMANENT_FIREBASE_CONFIG: FirebaseAppletConfigShape = {
-  apiKey: 'AIzaSyAAr9fCp9CsfGqTOpIMIx0EyVtechkLchQ',
-  authDomain: 'shosho-chat-3e571.firebaseapp.com',
-  projectId: 'shosho-chat-3e571',
-  storageBucket: 'shosho-chat-3e571.firebasestorage.app',
-  messagingSenderId: '633233573986',
-  appId: '1:633233573986:web:4bc3c29544f858b534a93b',
-  firestoreDatabaseId: '',
-};
+const localFirebaseConfigModules = import.meta.glob('../../firebase-applet-config.json', {
+  eager: true,
+}) as Record<string, { default?: Partial<FirebaseAppletConfigShape> }>;
+
+const localFirebaseConfig = Object.values(localFirebaseConfigModules)[0]?.default || {};
 
 export const firebaseConfig: FirebaseAppletConfigShape = {
-  ...PERMANENT_FIREBASE_CONFIG,
+  projectId: (import.meta.env.VITE_FIREBASE_PROJECT_ID || localFirebaseConfig.projectId || '').trim(),
+  appId: (import.meta.env.VITE_FIREBASE_APP_ID || localFirebaseConfig.appId || '').trim(),
+  apiKey: (import.meta.env.VITE_FIREBASE_API_KEY || localFirebaseConfig.apiKey || '').trim(),
+  authDomain: (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || localFirebaseConfig.authDomain || '').trim(),
+  firestoreDatabaseId: (
+    import.meta.env.VITE_FIREBASE_DATABASE_ID ||
+    localFirebaseConfig.firestoreDatabaseId ||
+    ''
+  ).trim(),
+  storageBucket: (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || localFirebaseConfig.storageBucket || '').trim(),
+  messagingSenderId: (
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ||
+    localFirebaseConfig.messagingSenderId ||
+    ''
+  ).trim(),
+  measurementId: (import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || localFirebaseConfig.measurementId || '').trim(),
 };
 
 export enum OperationType {
@@ -91,9 +102,11 @@ let currentStatus: FirebaseConnectionStatus = {
   isConfigured: isFirebaseConfigured,
   isConnected: false,
   isTesting: false,
-  projectId: firebaseConfig.projectId,
+  projectId: firebaseConfig.projectId || 'غير مضبوط',
   databaseId: firebaseConfig.firestoreDatabaseId || '(default)',
-  message: 'جاري تهيئة الاتصال السحابي بـ shosho-chat-3e571...',
+  message: isFirebaseConfigured
+    ? `جاري تهيئة الاتصال السحابي بـ ${firebaseConfig.projectId}...`
+    : 'أضف إعدادات Firebase لتفعيل المزامنة السحابية.',
 };
 
 const listeners = new Set<(status: FirebaseConnectionStatus) => void>();
@@ -420,8 +433,9 @@ export async function testFirebaseConnection(force = false): Promise<FirebaseCon
 
     // Fallback check via Firestore REST endpoint in case WebChannel transport was blocked by proxy/firewall
     try {
+      const targetDbId = firebaseConfig.firestoreDatabaseId || '(default)';
       const restRes = await fetch(
-        `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseConfig.projectId)}/databases/(default)/documents/auravoice_rooms?pageSize=1`
+        `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseConfig.projectId)}/databases/${encodeURIComponent(targetDbId)}/documents/auravoice_rooms?pageSize=1`
       );
       if (restRes.ok || restRes.status === 404 || restRes.status === 403) {
         const restLatency = Math.round(performance.now() - start);
